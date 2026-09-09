@@ -5,18 +5,9 @@ without breaking the multi-tenant guarantees.
 
 ## Before you start
 
-```bash
-pnpm install
-docker compose up -d                 # Postgres + MinIO
-# first run only, from apps/api:
-pnpm exec prisma migrate deploy
-pnpm run db:setup-role
-pnpm run prisma:rls
-pnpm run seed
-```
-
-Run the two apps with `pnpm --filter @oudhealth/api run start:dev` and
-`pnpm --filter @oudhealth/web run dev`. See `README.md` for the full sequence.
+Run `./scripts/setup.sh` (or `scripts/setup.ps1` on Windows), then start the two
+dev servers. See the [Local setup](README.md#local-setup) section of the README
+for the full walkthrough, prerequisites, and demo logins.
 
 ## Adding or changing a database table
 
