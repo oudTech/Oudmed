@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* House accent; AuthProvider overrides per tenant from tenant.primaryColor. */
+  --brand-primary: #3366e3;
+}
+
+@keyframes slidein {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media print {
+  body:has(#receipt-print) * {
+    visibility: hidden !important;
+  }
+  #receipt-print,
+  #receipt-print * {
+    visibility: visible !important;
+  }
+  #receipt-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 320px;
+    padding: 16px;
+  }
+  .receipt-actions {
+    display: none !important;
+  }
+}

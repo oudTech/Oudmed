@@ -1,0 +1,62 @@
+# Local development infrastructure.
+#
+# This file provides ONLY the backing services the app needs. The API and web
+# apps themselves run from source with pnpm during development:
+#
+#   docker compose up -d                 # start db + minio
+#   pnpm --filter @oudhealth/api start:dev
+#   pnpm --filter @oudhealth/web dev
+#
+# For a fully containerised stack (built images, prod-style), see docs/DEPLOY.md.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: oudhealth
+      POSTGRES_PASSWORD: oudhealth
+      POSTGRES_DB: oudhealth
+    ports:
+      - "5432:5432"
+    volumes:
+      - oud_pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oudhealth"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: oudhealth
+      MINIO_ROOT_PASSWORD: oudhealth-dev-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - oud_miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 oudhealth oudhealth-dev-secret &&
+      mc mb --ignore-existing local/oudhealth-dev &&
+      echo 'bucket ready';
+      "
+
+volumes:
+  oud_pgdata:
+  oud_miniodata:

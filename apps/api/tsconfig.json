@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2021",
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "paths": {
+      "@oudhealth/contracts": ["../../packages/contracts/src/index.ts"]
+    }
+  },
+  "exclude": ["node_modules", "dist", "testphase"]
+}

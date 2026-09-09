@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: oudhealth
+          POSTGRES_PASSWORD: oudhealth
+          POSTGRES_DB: oudhealth
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U oudhealth"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+
+    env:
+      # Owner connection: migrations, seed, prisma:rls, db:setup-role.
+      DATABASE_URL: postgresql://oudhealth:oudhealth@localhost:5432/oudhealth?schema=public
+      # App role: the API process connects here so RLS is exercised by the tests.
+      APP_DATABASE_URL: postgresql://oudhealth_app:oudhealth-app-ci@localhost:5432/oudhealth?schema=public
+      APP_DB_PASSWORD: oudhealth-app-ci
+      JWT_SECRET: ci-only-secret-not-used-in-production-0123456789
+      S3_ENDPOINT: http://localhost:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: oudhealth-dev
+      S3_ACCESS_KEY: oudhealth
+      S3_SECRET_KEY: oudhealth-dev-secret
+      S3_FORCE_PATH_STYLE: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Forbidden-dash scan
+        run: node scripts/check-dashes.mjs
+
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=oudhealth \
+            -e MINIO_ROOT_PASSWORD=oudhealth-dev-secret \
+            minio/minio:latest server /data
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:9000/minio/health/live && break || sleep 2
+          done
+          docker run --rm --network host --entrypoint sh minio/mc:latest -c "
+            mc alias set local http://localhost:9000 oudhealth oudhealth-dev-secret &&
+            mc mb --ignore-existing local/oudhealth-dev"
+
+      - name: Prisma generate
+        run: pnpm --filter @oudhealth/api exec prisma generate
+
+      - name: Typecheck (api + web)
+        run: |
+          pnpm --filter @oudhealth/api exec tsc --noEmit
+          pnpm --filter @oudhealth/web exec tsc --noEmit
+
+      - name: Build web
+        run: pnpm --filter @oudhealth/web build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3000/api
+          NEXT_PUBLIC_ROOT_DOMAIN: localhost
+          NEXT_PUBLIC_APP_PROTOCOL: http
+          NEXT_PUBLIC_STORAGE_ORIGIN: http://localhost:9000
+
+      - name: Migrate + role + RLS
+        working-directory: apps/api
+        run: |
+          pnpm exec prisma migrate deploy
+          pnpm run db:setup-role
+          pnpm run prisma:rls
+
+      - name: API test suite
+        working-directory: apps/api
+        run: pnpm test
