@@ -11,7 +11,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT_DIRS = ['apps', 'packages', 'docs', 'scripts']
-const ROOT_FILES = ['README.md', 'BUILD_GUIDE.md']
+const ROOT_FILES = ['README.md', 'BUILD_GUIDE.md', 'render.yaml']
 const SKIP_DIRS = new Set([
   'node_modules', '.next', 'dist', 'build', '.turbo', 'coverage', '.git',
 ])

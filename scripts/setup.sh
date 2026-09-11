@@ -5,7 +5,7 @@
 #   ./scripts/setup.sh              full setup (seeds only if the DB is empty)
 #   RESEED=1 ./scripts/setup.sh     force a re-seed (adds demo data)
 #
-# Prereqs: Node 20, pnpm (corepack enable), Docker Desktop running.
+# Prereqs: Node 22, pnpm (corepack enable), Docker Desktop running.
 # After it finishes, start the two dev servers (it prints the commands).
 
 set -euo pipefail
@@ -16,14 +16,14 @@ ok()   { printf '\033[1;32m  ok\033[0m %s\n' "$1"; }
 die()  { printf '\n\033[1;31mx %s\033[0m\n' "$1" >&2; exit 1; }
 
 # ---- prereqs ----------------------------------------------------------------
-command -v node   >/dev/null || die "Node.js 20 is required (https://nodejs.org)"
+command -v node   >/dev/null || die "Node.js 22 is required - pnpm 11 needs it (https://nodejs.org)"
 command -v docker >/dev/null || die "Docker is required and must be running"
 docker info >/dev/null 2>&1  || die "Docker is installed but not running - start Docker Desktop"
 corepack enable >/dev/null 2>&1 || true
 command -v pnpm >/dev/null || die "pnpm not found - run: corepack enable"
 
 node_major=$(node -p 'process.versions.node.split(".")[0]')
-[ "$node_major" -ge 20 ] || die "Node 20+ required (found $(node -v))"
+[ "$node_major" -ge 22 ] || die "Node 22+ required (found $(node -v))"
 
 # ---- install --------------------------------------------------------------
 say "pnpm install"

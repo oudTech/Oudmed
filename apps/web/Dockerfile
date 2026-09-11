@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1
 #
-# STATUS: not yet built in CI. Structurally complete for the pnpm monorepo +
-# Next.js standalone output; validate with a real `docker build` before relying
-# on it. See docs/DEPLOY.md.
+# STATUS: structurally complete for the pnpm monorepo + Next.js standalone
+# output, and fixed alongside apps/api/Dockerfile (Node 22, .npmrc copied into
+# the deps stage). A full `docker build` has not completed end-to-end in every
+# environment - registry throttling can time out `pnpm install` on a slow
+# connection (Next.js pulls platform-specific SWC binaries for every OS/arch).
+# Confirm with a real build before relying on it. See docs/DEPLOY.md.
 #
 # Build from the REPO ROOT:
 #   docker build -f apps/web/Dockerfile \
@@ -15,12 +18,12 @@
 # NEXT_PUBLIC_* values are baked in at build time, so an image is tied to one
 # environment. INTERNAL_API_URL and AUTH_SECRET are read at runtime.
 
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 RUN corepack enable
 WORKDIR /repo
 
 FROM base AS deps
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY apps/web/package.json apps/web/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/validation/package.json packages/validation/

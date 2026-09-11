@@ -27,8 +27,9 @@ packages/
   contracts/  @oudhealth/contracts  shared TypeScript interfaces (type-only)
   validation/ @oudhealth/validation  shared Zod schemas (web forms)
   config/     @oudhealth/config      shared tsconfig base
-docs/         architecture, stack, ERD, codebase map
+docs/         architecture, stack, ERD, codebase map, deploy runbook
 docker-compose.yml   dev infrastructure (Postgres + MinIO)
+render.yaml          Render Blueprint (prod: oudmed.com)
 ```
 
 ## Local setup
@@ -40,8 +41,8 @@ and web apps run from source.
 
 | Tool           | Version | Install                                                            |
 | -------------- | ------- | ------------------------------------------------------------------ |
-| Node.js        | 20.x    | <https://nodejs.org> (or `nvm install 20`)                         |
-| pnpm           | 11.7    | `corepack enable` (ships with Node 20) - the repo pins the version |
+| Node.js        | 22.x    | <https://nodejs.org> (or `nvm install 22`) - required by pnpm 11   |
+| pnpm           | 11.7    | `corepack enable` (ships with Node) - the repo pins the version    |
 | Docker Desktop | current | must be **running** before you start                               |
 
 Plus a Chromium browser (Chrome / Edge / Brave) or Firefox. Safari needs one extra
@@ -157,6 +158,9 @@ table without an RLS policy is a cross-tenant data leak.
 
 ## Deployment
 
-See [docs/DEPLOY.md](docs/DEPLOY.md). A hosting target has not been finalised; the
-Dockerfiles in `apps/*/Dockerfile` are structurally complete but not yet built in
-CI.
+Target: Render at **oudmed.com** (`render.yaml` is the blueprint; Neon for
+Postgres, Cloudflare R2 for object storage). See
+[docs/DEPLOY.md](docs/DEPLOY.md) for the full runbook - it has the account
+setup, DNS records, and the one-time database bootstrap the blueprint depends
+on. Going live still needs those external accounts created and the runbook run
+through by hand.

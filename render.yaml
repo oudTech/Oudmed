@@ -1,0 +1,117 @@
+# Render Blueprint for OudHealth (oudmed.com).
+#
+# This declares the two services; it does NOT create the database or object
+# storage (Neon and Cloudflare R2 are external - see docs/DEPLOY.md) and it does
+# NOT run the one-time database bootstrap (migrate + seed + RLS - also in
+# docs/DEPLOY.md). Read that file before applying this blueprint.
+#
+# Apply: Render dashboard -> New -> Blueprint -> point at this repo/branch.
+# Every `sync: false` var is a secret you paste into the Render dashboard after
+# the blueprint creates the services (never commit real secrets here).
+
+services:
+  - type: web
+    name: oudhealth-api
+    runtime: docker
+    dockerfilePath: apps/api/Dockerfile
+    dockerContext: .
+    plan: free
+    region: frankfurt # closest Render region to the initial market; change freely
+    branch: main
+    healthCheckPath: /api/health
+    domains:
+      - api.oudmed.com
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: ENABLE_SWAGGER
+        value: "false"
+
+      # Domain layout (see docs/DEPLOY.md for the DNS records this needs)
+      - key: APP_ROOT_DOMAIN
+        value: oudmed.com
+      - key: APP_PROTOCOL
+        value: https
+      - key: FRONTEND_URL
+        value: https://oudmed.com
+
+      # Auth
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Database - Neon (owner connection runs migrate/rls on every boot; the app
+      # itself connects through APP_DATABASE_URL, the non-superuser role). Both
+      # are produced by the one-time bootstrap in docs/DEPLOY.md.
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_DATABASE_URL
+        sync: false
+      - key: APP_DB_PASSWORD
+        sync: false
+
+      # Object storage - Cloudflare R2 (S3-compatible)
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_PUBLIC_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_FORCE_PATH_STYLE
+        value: "true"
+      - key: FILE_MAX_MB
+        value: "20"
+
+      # Transactional email (Resend). Leave RESEND_API_KEY unset in the dashboard
+      # to print verification / reset links to the service logs instead.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: "Oudmed <noreply@oudmed.com>"
+
+      # Malware scanning is opt-in and needs a clamd host reachable from Render -
+      # skip it for the pilot (uploads are recorded scanStatus=SKIPPED).
+      - key: CLAMAV_HOST
+        value: ""
+
+  - type: web
+    name: oudhealth-web
+    runtime: docker
+    dockerfilePath: apps/web/Dockerfile
+    dockerContext: .
+    plan: free
+    region: frankfurt
+    branch: main
+    healthCheckPath: /api/auth/providers
+    domains:
+      - oudmed.com
+      - "*.oudmed.com"
+    envVars:
+      - key: PORT
+        value: "3001"
+      - key: AUTH_SECRET
+        generateValue: true
+
+      # Server-to-server call to the API. Public URL keeps this correct
+      # regardless of whether the two services share a private network.
+      - key: INTERNAL_API_URL
+        value: https://api.oudmed.com/api
+
+      # NEXT_PUBLIC_* are read at Docker build time (Render passes service env
+      # vars to the build as --build-arg automatically) and baked into the
+      # bundle - changing one here requires a redeploy to take effect.
+      - key: NEXT_PUBLIC_API_URL
+        value: https://api.oudmed.com/api
+      - key: NEXT_PUBLIC_ROOT_DOMAIN
+        value: oudmed.com
+      - key: NEXT_PUBLIC_APP_PROTOCOL
+        value: https
+      - key: NEXT_PUBLIC_STORAGE_ORIGIN
+        sync: false # the R2 public origin - same host as S3_PUBLIC_ENDPOINT

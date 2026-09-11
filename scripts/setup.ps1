@@ -4,7 +4,7 @@
     ./scripts/setup.ps1              full setup (seeds only if the DB is empty)
     $env:RESEED=1; ./scripts/setup.ps1   force a re-seed (adds demo data)
 
-  Prereqs: Node 20, pnpm (corepack enable), Docker Desktop running.
+  Prereqs: Node 22, pnpm (corepack enable), Docker Desktop running.
   If scripts are blocked:  powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
 #>
 $ErrorActionPreference = 'Stop'
@@ -15,14 +15,14 @@ function OK   ($m) { Write-Host "  ok $m" -ForegroundColor Green }
 function Die  ($m) { Write-Host "`nx $m" -ForegroundColor Red; exit 1 }
 
 # ---- prereqs ----------------------------------------------------------------
-if (-not (Get-Command node -ErrorAction SilentlyContinue))   { Die "Node.js 20 is required (https://nodejs.org)" }
+if (-not (Get-Command node -ErrorAction SilentlyContinue))   { Die "Node.js 22 is required - pnpm 11 needs it (https://nodejs.org)" }
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Die "Docker is required and must be running" }
 try { docker info *> $null } catch { Die "Docker is installed but not running - start Docker Desktop" }
 try { corepack enable *> $null } catch {}
 if (-not (Get-Command pnpm -ErrorAction SilentlyContinue))   { Die "pnpm not found - run: corepack enable" }
 
 $nodeMajor = [int](node -p 'process.versions.node.split(".")[0]')
-if ($nodeMajor -lt 20) { Die "Node 20+ required (found $(node -v))" }
+if ($nodeMajor -lt 22) { Die "Node 22+ required (found $(node -v))" }
 
 # ---- install --------------------------------------------------------------
 Say "pnpm install"

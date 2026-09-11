@@ -3,7 +3,7 @@
 ## API (`apps/api`)
 | Layer | Choice | Notes |
 |---|---|---|
-| Runtime | Node.js 20 LTS | |
+| Runtime | Node.js 22 LTS | required by `pnpm@11.7.0` (pinned in `package.json`) |
 | Language | TypeScript 5 | |
 | Framework | NestJS 10 | module per HMS area |
 | ORM | Prisma 5 | type-safe queries, incremental migrations |
