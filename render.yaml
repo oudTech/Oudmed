@@ -89,7 +89,11 @@ services:
     plan: free
     region: frankfurt
     branch: main
-    healthCheckPath: /api/auth/providers
+    # No healthCheckPath: Render falls back to a plain "is the port open" check.
+    # /api/auth/providers was here originally but Render's health probe kept
+    # failing against it (2026-09-11), blocking all traffic at the edge with an
+    # empty 502 even though the container booted cleanly - narrow this back down
+    # to a real app route once that is root-caused.
     domains:
       - oudmed.com
       - "*.oudmed.com"
