@@ -1,0 +1,35 @@
+# Fly.io config for the web app only (oudhealth-api stays on Render).
+# Build context is the repo root (this file's directory); the Dockerfile lives
+# in apps/web/ because this is a pnpm monorepo. See docs/DEPLOY.md.
+
+app = 'oudhealth'
+primary_region = 'lhr'
+
+[build]
+  dockerfile = 'apps/web/Dockerfile'
+
+[build.args]
+  NEXT_PUBLIC_API_URL = 'https://api.oudmed.com/api'
+  NEXT_PUBLIC_ROOT_DOMAIN = 'oudmed.com'
+  NEXT_PUBLIC_APP_PROTOCOL = 'https'
+  NEXT_PUBLIC_STORAGE_ORIGIN = 'https://pub-c21420b04539410b904ead3e86dfa60f.r2.dev'
+
+# Non-secret runtime config. AUTH_SECRET is set separately via `fly secrets set`
+# (secrets never belong in this file, which gets committed to git).
+[env]
+  PORT = '3001'
+  INTERNAL_API_URL = 'https://api.oudmed.com/api'
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024

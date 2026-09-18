@@ -13,8 +13,17 @@ const TENANT_PUBLIC = ['/login', '/forgot-password', '/reset-password', '/auth/c
 const startsWithAny = (path: string, list: string[]) =>
   list.some((p) => path === p || path.startsWith(p + '/'))
 
+// Crawler-facing files Next generates from app/robots.ts and app/sitemap.ts.
+// These must be reachable on every hostname (apex and every tenant subdomain
+// alike - see app/robots.ts) without going through the auth/tenant gate below,
+// the same way _next/static and favicon.ico are already excluded by the
+// matcher itself.
+const CRAWLER_FILES = ['/robots.txt', '/sitemap.xml']
+
 export default auth((req) => {
   const { pathname } = req.nextUrl
+  if (CRAWLER_FILES.includes(pathname)) return NextResponse.next()
+
   const host = req.headers.get('host')
   const sub = subdomainFromHost(host)
 
