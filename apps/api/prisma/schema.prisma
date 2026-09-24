@@ -381,6 +381,20 @@ model PlatformWebhookEvent {
   createdAt   DateTime  @default(now())
 }
 
+/// OudHealth's own team, not a hospital's staff - deliberately has no tenant
+/// relation at all, so it can never be scoped to one hospital by construction.
+/// Not tenant data, so not in rls.sql (same category as PlatformPricing).
+/// Created via `pnpm create-platform-user`, not self-serve sign-up.
+model PlatformUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  fullName     String
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
+}
+
 /// A file in object storage (MinIO / S3). `key` is the object key within `bucket`.
 model StoredFile {
   id           String   @id @default(uuid())

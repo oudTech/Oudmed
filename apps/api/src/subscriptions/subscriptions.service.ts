@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, Role } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import type {
@@ -29,6 +29,8 @@ const money = (v: Prisma.Decimal | number | string) => new Prisma.Decimal(v).toF
 
 @Injectable()
 export class SubscriptionsService {
+  private readonly log = new Logger(SubscriptionsService.name);
+
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
@@ -73,19 +75,18 @@ export class SubscriptionsService {
   }
 
   /**
-   * SUPER_ADMIN only. Not a per-hospital action, so this bypasses the
-   * `assertCan` matrix (which is scoped to actions within one tenant) with a
-   * direct role check instead - the same reasoning `can()` already uses to let
-   * SUPER_ADMIN through everything.
+   * Gated by PlatformAuthGuard at the controller (a genuine platform operator,
+   * not a hospital's own SUPER_ADMIN - see platform-auth). No fine-grained
+   * platform permission matrix yet since there is only one operator today;
+   * being a valid, active PlatformUser is the whole check.
+   *
+   * Not logged to AuditLog: that table requires a tenantId and this action has
+   * none - forcing a sentinel value in would pollute tenant-scoped audit data
+   * with a platform event. A dedicated PlatformAuditLog is real future work;
+   * for now this is visible in the service logs, which is more than nothing
+   * but not the durable trail a money-affecting change like this deserves.
    */
-  async updatePricing(actor: Actor, dto: UpdatePlatformPricingDto): Promise<PlatformPricingDTO> {
-    if (actor.role !== Role.SUPER_ADMIN) {
-      throw new ForbiddenException({
-        statusCode: 403,
-        message: 'Only a platform operator can change pricing',
-        code: 'FORBIDDEN_ACTION',
-      });
-    }
+  async updatePricing(platformUserId: string, dto: UpdatePlatformPricingDto): Promise<PlatformPricingDTO> {
     const current = await this.pricingRow();
     const data: Prisma.PlatformPricingUpdateInput = {};
     if (dto.adminSeatPriceMonthly !== undefined) data.adminSeatPriceMonthly = new Prisma.Decimal(dto.adminSeatPriceMonthly);
@@ -95,20 +96,12 @@ export class SubscriptionsService {
     if (dto.platformTin !== undefined) data.platformTin = dto.platformTin;
     if (dto.trialDays !== undefined) data.trialDays = dto.trialDays;
     if (dto.currency !== undefined) data.currency = dto.currency;
-    data.updatedById = actor.userId;
+    data.updatedById = platformUserId;
 
     const updated = await this.prisma.platformPricing.update({ where: { id: current.id }, data });
-    await this.audit.record({
-      tenantId: actor.tenantId,
-      userId: actor.userId,
-      action: 'UPDATE',
-      entityType: 'PlatformPricing',
-      entityId: updated.id,
-      metadata: {
-        before: this.toPricingDto(current),
-        after: this.toPricingDto(updated),
-      },
-    });
+    this.log.log(
+      `PlatformPricing updated by platform user ${platformUserId}: ${JSON.stringify({ before: this.toPricingDto(current), after: this.toPricingDto(updated) })}`,
+    );
     return this.toPricingDto(updated);
   }
 
@@ -355,42 +348,34 @@ export class SubscriptionsService {
   }
 
   /**
-   * SUPER_ADMIN only, for bank-transfer invoices. NOTE: scoped to the caller's
-   * own tenant context, since SUPER_ADMIN is still a tenant-bound User today
-   * (see the Super Admin platform-identity decision) - this only works when
-   * the operator's own account belongs to the hospital whose invoice they are
-   * confirming. Once SUPER_ADMIN is a true platform-wide identity, this needs
-   * an explicit tenantId parameter instead of inferring it from actor.tenantId.
+   * Called only from PlatformSubscriptionsController, gated by PlatformAuthGuard.
+   * A genuine platform operator has no tenant of their own (that is the whole
+   * point of platform-auth), so which hospital's invoice to confirm is an
+   * explicit parameter here, never inferred from the caller's own identity -
+   * unlike a hospital-scoped action, there is no "their own tenant" to assume.
    */
-  async markInvoicePaid(actor: Actor, invoiceId: string): Promise<SubscriptionInvoiceDTO> {
-    if (actor.role !== Role.SUPER_ADMIN) {
-      throw new ForbiddenException({
-        statusCode: 403,
-        message: 'Only a platform operator can confirm a payment',
-        code: 'FORBIDDEN_ACTION',
-      });
-    }
-    const invoice = await this.prisma.forTenant(actor.tenantId, (tx) => tx.subscriptionInvoice.findFirst({ where: { id: invoiceId } }));
+  async markInvoicePaidAsPlatform(tenantId: string, invoiceId: string, platformUserId: string): Promise<SubscriptionInvoiceDTO> {
+    const invoice = await this.prisma.forTenant(tenantId, (tx) => tx.subscriptionInvoice.findFirst({ where: { id: invoiceId } }));
     if (!invoice) throw new NotFoundException('Invoice not found');
     if (invoice.paymentMethod !== 'BANK_TRANSFER') {
       throw new BadRequestException('Only bank-transfer invoices are confirmed manually');
     }
     if (invoice.status === 'PAID') return this.toInvoiceDto(invoice);
 
-    const updated = await this.prisma.forTenant(actor.tenantId, (tx) =>
+    const updated = await this.prisma.forTenant(tenantId, (tx) =>
       tx.subscriptionInvoice.update({
         where: { id: invoiceId },
-        data: { status: 'PAID', paidAt: new Date(), markedPaidById: actor.userId },
+        data: { status: 'PAID', paidAt: new Date(), markedPaidById: platformUserId },
       }),
     );
-    await this.activateSubscription(actor.tenantId, invoice.subscriptionId, invoice.billingCycle as Cycle);
+    await this.activateSubscription(tenantId, invoice.subscriptionId, invoice.billingCycle as Cycle);
     await this.audit.record({
-      tenantId: actor.tenantId,
-      userId: actor.userId,
+      tenantId,
+      userId: platformUserId, // a PlatformUser id, not a hospital User id - AuditLog.userId has no FK, so this is safe and traceable
       action: 'UPDATE',
       entityType: 'SubscriptionInvoice',
       entityId: invoiceId,
-      metadata: { status: 'PAID', via: 'manual' },
+      metadata: { status: 'PAID', via: 'manual', confirmedByPlatformUser: true },
     });
     return this.toInvoiceDto(updated);
   }

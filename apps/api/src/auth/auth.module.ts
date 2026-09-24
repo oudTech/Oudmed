@@ -6,12 +6,14 @@ import { AuthService } from './auth.service';
 import { TokensService } from './tokens.service';
 import { AuthController } from './auth.controller';
 import { PrismaModule } from '../prisma/prisma.module';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.register({ secret: process.env.JWT_SECRET }),
     PrismaModule,
+    SubscriptionsModule,
   ],
   controllers: [AuthController],
   providers: [JwtStrategy, AuthService, TokensService],

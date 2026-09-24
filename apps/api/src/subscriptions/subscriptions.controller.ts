@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
 import { assertCan } from '../common/permissions';
+import { PlatformAuthGuard } from '../platform-auth/platform-auth.guard';
+import { CurrentPlatformUser, PlatformAuthUser } from '../platform-auth/current-platform-user.decorator';
 import { SubscriptionsService } from './subscriptions.service';
 import { UpdatePlatformPricingDto } from './dto/update-pricing.dto';
 import { CheckoutDto } from './dto/checkout.dto';
@@ -21,11 +23,17 @@ export class SubscriptionsController {
     return this.subscriptions.getPricing();
   }
 
+  /**
+   * Pricing applies to every hospital, so this is a platform action, not a
+   * hospital one - gated to a genuine platform operator (see platform-auth),
+   * not a hospital's own SUPER_ADMIN. No hospital has a legitimate reason to
+   * set what OudHealth charges every other hospital.
+   */
   @Patch('pricing')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(PlatformAuthGuard)
   @ApiBearerAuth()
-  updatePricing(@CurrentUser() u: AuthUser, @Body() dto: UpdatePlatformPricingDto) {
-    return this.subscriptions.updatePricing(actor(u), dto);
+  updatePricing(@CurrentPlatformUser() u: PlatformAuthUser, @Body() dto: UpdatePlatformPricingDto) {
+    return this.subscriptions.updatePricing(u.platformUserId, dto);
   }
 
   @Get('me')
@@ -63,13 +71,6 @@ export class SubscriptionsController {
   @ApiBearerAuth()
   checkoutBankTransfer(@CurrentUser() u: AuthUser, @Body() dto: CheckoutDto) {
     return this.subscriptions.initiateBankTransfer(actor(u), dto);
-  }
-
-  @Patch('invoices/:id/mark-paid')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  markInvoicePaid(@CurrentUser() u: AuthUser, @Param('id') id: string) {
-    return this.subscriptions.markInvoicePaid(actor(u), id);
   }
 
   /**

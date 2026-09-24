@@ -23,6 +23,7 @@ import { SettingsModule } from './settings/settings.module';
 import { HomeModule } from './home/home.module';
 import { MeModule } from './me/me.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { PlatformAuthModule } from './platform-auth/platform-auth.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -50,6 +51,7 @@ import { HealthController } from './health/health.controller';
     HomeModule,
     MeModule,
     SubscriptionsModule,
+    PlatformAuthModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
