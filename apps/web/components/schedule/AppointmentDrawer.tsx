@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { VisitDTO, VisitStatus } from '@oudhealth/contracts'
 import { Drawer, Button, Badge, Field, Input, Select } from '@/components/ui/kit'
+import { useConfirm } from '@/components/ui/feedback'
 import {
   setVisitStatus,
   rescheduleVisit,
@@ -26,6 +27,7 @@ export function AppointmentDrawer({
 }) {
   const qc = useQueryClient()
   const router = useRouter()
+  const confirm = useConfirm()
   const { data: session } = useSession()
   const role = session?.role
   const [rescheduling, setRescheduling] = useState(false)
@@ -112,17 +114,31 @@ export function AppointmentDrawer({
             )}
             {nextActions(visit.status)
               .filter((a) => can(role, STATUS_ACTION[a.status]))
-              .map((a) => (
-                <Button
-                  key={a.status}
-                  variant={a.status === 'CANCELLED' || a.status === 'NO_SHOW' ? 'secondary' : 'primary'}
-                  className="w-full"
-                  loading={status.isPending}
-                  onClick={() => status.mutate(a.status)}
-                >
-                  {a.label}
-                </Button>
-              ))}
+              .map((a) => {
+                const halts = a.status === 'CANCELLED' || a.status === 'NO_SHOW'
+                return (
+                  <Button
+                    key={a.status}
+                    variant={halts ? 'secondary' : 'primary'}
+                    className="w-full"
+                    loading={status.isPending}
+                    onClick={async () => {
+                      if (halts) {
+                        const ok = await confirm({
+                          title: `${a.label}?`,
+                          body: `${visit.patient.firstName} ${visit.patient.lastName}'s appointment will be marked ${a.label.toLowerCase()}. This can be undone from here later if needed.`,
+                          confirmLabel: a.label,
+                          danger: true,
+                        })
+                        if (!ok) return
+                      }
+                      status.mutate(a.status)
+                    }}
+                  >
+                    {a.label}
+                  </Button>
+                )
+              })}
             {visit.status !== 'COMPLETED' &&
               visit.status !== 'CANCELLED' &&
               can(role, 'appointment:reschedule') && (
