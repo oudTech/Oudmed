@@ -19,6 +19,13 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 export class StorageService implements OnModuleInit {
   private readonly log = new Logger(StorageService.name);
   readonly bucket = process.env.S3_BUCKET ?? 'oudhealth-dev';
+  private readonly publicIsBucketEndpoint = process.env.S3_PUBLIC_BUCKET_ENDPOINT === 'true';
+  // In bucketEndpoint mode the SDK requires the `Bucket` param on each command
+  // to BE the full endpoint URL, not a bucket name - the endpoint is already
+  // scoped to one bucket, so there is nothing else to identify it by.
+  private readonly publicBucketParam = this.publicIsBucketEndpoint
+    ? (process.env.S3_PUBLIC_ENDPOINT ?? process.env.S3_ENDPOINT ?? '')
+    : (process.env.S3_BUCKET ?? 'oudhealth-dev');
 
   private readonly client = new S3Client({
     region: process.env.S3_REGION ?? 'us-east-1',
@@ -33,13 +40,19 @@ export class StorageService implements OnModuleInit {
   private readonly publicClient = new S3Client({
     region: process.env.S3_REGION ?? 'us-east-1',
     endpoint: process.env.S3_PUBLIC_ENDPOINT ?? process.env.S3_ENDPOINT,
-    // The public endpoint is not always the same shape as the private one: a
+    // The public endpoint is not always the same shape as the private one. A
     // provider like Cloudflare R2 has a per-bucket public host (pub-xxx.r2.dev)
-    // that must NOT have the bucket name in the path, unlike its own private
-    // API endpoint (or MinIO), which does. S3_PUBLIC_FORCE_PATH_STYLE lets the
-    // two be configured independently; it falls back to S3_FORCE_PATH_STYLE so
-    // existing single-style setups (MinIO in dev) are unaffected.
-    forcePathStyle: (process.env.S3_PUBLIC_FORCE_PATH_STYLE ?? process.env.S3_FORCE_PATH_STYLE ?? 'true') === 'true',
+    // that already points directly at the bucket - the bucket name must not be
+    // added to the URL at all, neither as a path segment (forcePathStyle) nor
+    // as a subdomain (the SDK's default "virtual-hosted" addressing). The SDK's
+    // `bucketEndpoint` option is exactly for this: it leaves the configured
+    // endpoint untouched. S3_PUBLIC_BUCKET_ENDPOINT opts into that for such a
+    // host; left unset, this falls back to ordinary path-style addressing
+    // (correct for MinIO, where the public endpoint is a normal multi-bucket
+    // S3 server, not a bucket-scoped one).
+    ...(this.publicIsBucketEndpoint
+      ? { bucketEndpoint: true }
+      : { forcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? 'true') === 'true' }),
     credentials: {
       accessKeyId: process.env.S3_ACCESS_KEY ?? '',
       secretAccessKey: process.env.S3_SECRET_KEY ?? '',
@@ -92,7 +105,7 @@ export class StorageService implements OnModuleInit {
     return getSignedUrl(
       this.publicClient,
       new GetObjectCommand({
-        Bucket: this.bucket,
+        Bucket: this.publicBucketParam,
         Key: key,
         ResponseContentDisposition: `${inline ? 'inline' : 'attachment'}${filename}`,
         ...(mimeType ? { ResponseContentType: mimeType } : {}),

@@ -71,11 +71,12 @@ services:
         sync: false
       - key: S3_FORCE_PATH_STYLE
         value: "true"
-      # R2's public pub-xxx.r2.dev host is already scoped to one bucket, unlike
-      # its own private API endpoint above - path-style there would put the
-      # bucket name in the URL a second time and 404. See storage.service.ts.
-      - key: S3_PUBLIC_FORCE_PATH_STYLE
-        value: "false"
+      # R2's public pub-xxx.r2.dev host already points directly at one bucket -
+      # forcing regular path-style there puts the bucket name in the URL a
+      # second time (404); this tells the SDK to leave the endpoint untouched
+      # instead. See storage.service.ts.
+      - key: S3_PUBLIC_BUCKET_ENDPOINT
+        value: "true"
       - key: FILE_MAX_MB
         value: "20"
 
