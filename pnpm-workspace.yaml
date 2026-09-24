@@ -8,3 +8,4 @@ allowBuilds:
   'prisma': true
   '@swc/core': true
   'esbuild': true
+  '@sentry/cli': true

@@ -43,6 +43,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Anonymous Docker Hub pulls from GitHub's shared runner IPs get rate-
+      # limited/denied - postgres:16 above (a "services:" container, pulled by
+      # GitHub before any step runs) tends to survive because it's one of the
+      # handful of images GitHub pre-caches; minio/minio below is not, and a
+      # bare `docker run` has hit "pull access denied" for it. Authenticating
+      # raises the pull quota well past what one CI run needs. No-ops (does
+      # nothing, does not fail the job) if the secrets are not set, so this is
+      # safe to merge before they exist - just re-run the job once they're added.
+      - name: Log in to Docker Hub (raises the anonymous-pull rate limit)
+        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -57,6 +72,14 @@ jobs:
 
       - name: Start MinIO
         run: |
+          # A transient Docker Hub pull failure (rate limit, registry hiccup)
+          # shouldn't fail the whole run by itself - retry the pull a few times
+          # with a short backoff before giving up.
+          for attempt in 1 2 3; do
+            docker pull minio/minio:latest && break
+            echo "minio/minio pull failed (attempt $attempt/3), retrying in 10s..."
+            sleep 10
+          done
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=oudhealth \
             -e MINIO_ROOT_PASSWORD=oudhealth-dev-secret \

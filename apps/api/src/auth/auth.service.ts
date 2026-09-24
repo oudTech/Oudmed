@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TokensService } from './tokens.service';
 import { EmailService } from '../email/email.service';
 import { FilesService } from '../storage/files.service';
+import { AuditService } from '../common/audit/audit.service';
 import { tenantUrl } from '../common/urls';
 import type {
   ForgotPasswordDto,
@@ -37,6 +38,7 @@ export class AuthService {
     private readonly tokens: TokensService,
     private readonly email: EmailService,
     private readonly files: FilesService,
+    private readonly audit: AuditService,
   ) {}
 
   // ───────────────────────── new-clinic sign-up (apex) ─────────────────────────
@@ -140,6 +142,10 @@ export class AuthService {
     }
     await this.prisma.authTicket.update({ where: { id: ticket.id }, data: { usedAt: new Date() } });
     await this.prisma.user.update({ where: { id: ticket.userId }, data: { lastLoginAt: new Date() } });
+    await this.audit.record({
+      tenantId: ticket.tenantId, userId: ticket.userId,
+      action: 'TICKET_REDEEMED', entityType: 'User', entityId: ticket.userId,
+    });
     return this.sessionFor(ticket.userId);
   }
 
@@ -157,10 +163,24 @@ export class AuthService {
     });
     const valid =
       user?.passwordHash && user.isActive && (await bcrypt.compare(dto.password, user.passwordHash));
-    if (!user || !valid) throw invalid();
+    if (!user || !valid) {
+      // tenantId is known even on a failed attempt (the tenant itself resolved
+      // above); userId is omitted when the email doesn't match any account, so
+      // this never confirms or denies account existence to anyone reading logs.
+      await this.audit.record({
+        tenantId: tenant.id, userId: user?.id,
+        action: 'LOGIN_FAILED', entityType: 'User', entityId: user?.id,
+        metadata: { email: dto.email },
+      });
+      throw invalid();
+    }
 
     if (!user.emailVerifiedAt) {
       await this.issueUserCode(user).catch(() => undefined);
+      await this.audit.record({
+        tenantId: tenant.id, userId: user.id,
+        action: 'LOGIN_BLOCKED_UNVERIFIED', entityType: 'User', entityId: user.id,
+      });
       throw new ForbiddenException({
         message: 'Please confirm your email address to continue',
         code: 'EMAIL_NOT_VERIFIED',
@@ -168,6 +188,10 @@ export class AuthService {
     }
 
     await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    await this.audit.record({
+      tenantId: tenant.id, userId: user.id,
+      action: 'LOGIN_SUCCESS', entityType: 'User', entityId: user.id,
+    });
     return this.sessionFor(user.id);
   }
 
@@ -230,6 +254,10 @@ export class AuthService {
         });
         const link = `${tenantUrl(tenant.slug)}/reset-password?token=${encodeURIComponent(raw)}`;
         await this.email.sendPasswordReset(user.email, user.fullName, link).catch(() => undefined);
+        await this.audit.record({
+          tenantId: tenant.id, userId: user.id,
+          action: 'PASSWORD_RESET_REQUESTED', entityType: 'User', entityId: user.id,
+        });
       }
     }
     return { ok: true };
@@ -257,6 +285,10 @@ export class AuthService {
         data: { usedAt: new Date() },
       }),
     ]);
+    await this.audit.record({
+      tenantId: pr.user.tenantId, userId: pr.userId,
+      action: 'PASSWORD_RESET_COMPLETED', entityType: 'User', entityId: pr.userId,
+    });
     return this.sessionFor(pr.userId);
   }
 

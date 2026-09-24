@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
+import { Sentry } from '../sentry';
 
 /**
  * Global catch-all filter.
@@ -42,6 +43,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const body = exception.getResponse();
       if (status >= 500) {
         this.logger.error(`[${requestId}] ${where} -> ${status}`, exception.stack);
+        Sentry.captureException(exception, { extra: { requestId, where, status } });
       }
       res
         .status(status)
@@ -54,6 +56,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       `[${requestId}] ${where} -> ${status} ${(exception as Error)?.message ?? exception}`,
       (exception as Error)?.stack,
     );
+    Sentry.captureException(exception, { extra: { requestId, where, status } });
     res.status(status).json({
       statusCode: status,
       message: 'Internal server error',

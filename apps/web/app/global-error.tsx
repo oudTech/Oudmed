@@ -1,8 +1,16 @@
 'use client'
+import { useEffect } from 'react'
+import { initSentryClient, Sentry } from '@/lib/sentry-client'
 
-// The last-resort boundary: it replaces the root layout, so it must render its
-// own <html>/<body>.
+// The last-resort boundary: it replaces the root layout (so Providers.tsx,
+// which normally does this init, never mounts) and must render its own
+// <html>/<body>.
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  useEffect(() => {
+    initSentryClient()
+    Sentry.captureException(error)
+  }, [error])
+
   return (
     <html lang="en">
       <body style={{ fontFamily: 'system-ui, sans-serif', margin: 0 }}>

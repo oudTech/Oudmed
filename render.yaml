@@ -29,6 +29,11 @@ services:
       - key: ENABLE_SWAGGER
         value: "false"
 
+      # Error tracking (Sentry). Optional - leave blank in the dashboard to
+      # keep it disabled (errors still go to Render's own logs either way).
+      - key: SENTRY_DSN
+        sync: false
+
       # Domain layout (see docs/DEPLOY.md for the DNS records this needs)
       - key: APP_ROOT_DOMAIN
         value: oudmed.com
@@ -119,3 +124,12 @@ services:
         value: https
       - key: NEXT_PUBLIC_STORAGE_ORIGIN
         sync: false # the R2 public origin - same host as S3_PUBLIC_ENDPOINT
+
+      # Error tracking (Sentry). Optional - leave both blank to disable.
+      # SENTRY_DSN (server, runtime) and NEXT_PUBLIC_SENTRY_DSN (browser, baked
+      # at build time) can be the same DSN value - two vars only because of when
+      # each is read.
+      - key: SENTRY_DSN
+        sync: false
+      - key: NEXT_PUBLIC_SENTRY_DSN
+        sync: false

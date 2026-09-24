@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { StaffDetailDTO } from '@oudhealth/contracts'
 import { Button, Drawer, Field, Input, Select, Textarea } from '@/components/ui/kit'
+import { useConfirm } from '@/components/ui/feedback'
 import { getDepartments } from '@/lib/hospital'
 import { staffApi, HR_ROLES, ROLE_LABEL } from '@/lib/hr'
 import { DoctorHoursModal } from '@/components/schedule/DoctorHoursModal'
@@ -49,6 +50,7 @@ export function StaffDetailDrawer({
 
 function EditForm({ s, isSelf, onClose }: { s: StaffDetailDTO; isSelf: boolean; onClose: () => void }) {
   const qc = useQueryClient()
+  const confirm = useConfirm()
   const [first, ...rest] = s.fullName.split(' ')
   const [f, setF] = useState({
     firstName: first ?? '',
@@ -163,7 +165,24 @@ function EditForm({ s, isSelf, onClose }: { s: StaffDetailDTO; isSelf: boolean; 
           loading={toggleActive.isPending}
           disabled={isSelf && s.isActive}
           title={isSelf && s.isActive ? 'You cannot deactivate your own account' : undefined}
-          onClick={() => toggleActive.mutate()}
+          onClick={async () => {
+            if (!s.isActive) {
+              toggleActive.mutate()
+              return
+            }
+            // Deactivating signs them out within minutes (the session is
+            // re-checked against the API on a short interval) - worth a pause.
+            if (
+              await confirm({
+                title: 'Deactivate this account?',
+                body: `${s.fullName} will be signed out and unable to log back in until reactivated.`,
+                confirmLabel: 'Deactivate',
+                danger: true,
+              })
+            ) {
+              toggleActive.mutate()
+            }
+          }}
         >
           {s.isActive ? 'Deactivate' : 'Activate'}
         </Button>
@@ -181,7 +200,24 @@ function EditForm({ s, isSelf, onClose }: { s: StaffDetailDTO; isSelf: boolean; 
         <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Set a new password</p>
         <div className="flex items-end gap-3">
           <Field label="New password"><Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="At least 8 characters" /></Field>
-          <Button variant="secondary" loading={setPassword.isPending} disabled={pw.length < 8} onClick={() => setPassword.mutate()}>Set password</Button>
+          <Button
+            variant="secondary"
+            loading={setPassword.isPending}
+            disabled={pw.length < 8}
+            onClick={async () => {
+              if (
+                await confirm({
+                  title: 'Set a new password?',
+                  body: `This replaces ${s.fullName}'s current password immediately - they will need the new one to log in.`,
+                  confirmLabel: 'Set password',
+                })
+              ) {
+                setPassword.mutate()
+              }
+            }}
+          >
+            Set password
+          </Button>
         </div>
         {setPassword.isSuccess && !pw && <p className="text-xs text-green-600 mt-2">Password updated.</p>}
       </div>

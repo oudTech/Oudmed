@@ -5,6 +5,9 @@ import type { Session } from 'next-auth'
 import { useEffect, useState } from 'react'
 import { setAuthToken } from '@/lib/api'
 import { FeedbackProvider } from '@/components/ui/feedback'
+import { initSentryClient } from '@/lib/sentry-client'
+
+initSentryClient() // no-op unless NEXT_PUBLIC_SENTRY_DSN is set; runs once on module load
 
 function TokenSync() {
   const { data: session } = useSession()

@@ -13,6 +13,7 @@
 #     --build-arg NEXT_PUBLIC_ROOT_DOMAIN=example.com \
 #     --build-arg NEXT_PUBLIC_APP_PROTOCOL=https \
 #     --build-arg NEXT_PUBLIC_STORAGE_ORIGIN=https://files.example.com \
+#     --build-arg NEXT_PUBLIC_SENTRY_DSN=https://xxx@oNNNN.ingest.sentry.io/NNNN \
 #     -t oudhealth-web .
 #
 # NEXT_PUBLIC_* values are baked in at build time, so an image is tied to one
@@ -35,6 +36,7 @@ ARG NEXT_PUBLIC_API_URL
 ARG NEXT_PUBLIC_ROOT_DOMAIN
 ARG NEXT_PUBLIC_APP_PROTOCOL
 ARG NEXT_PUBLIC_STORAGE_ORIGIN
+ARG NEXT_PUBLIC_SENTRY_DSN
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY . .
 RUN pnpm --filter @oudhealth/web run build

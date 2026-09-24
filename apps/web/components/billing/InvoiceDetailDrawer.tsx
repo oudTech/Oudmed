@@ -33,6 +33,8 @@ export function InvoiceDetailDrawer({
   const [receiptId, setReceiptId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
+  const [reversingId, setReversingId] = useState<string | null>(null)
+  const [reverseReason, setReverseReason] = useState('')
   const [err, setErr] = useState('')
 
   const q = useQuery({
@@ -49,7 +51,7 @@ export function InvoiceDetailDrawer({
 
   const reverse = useMutation({
     mutationFn: (p: { id: string; reason: string }) => billingApi.reversePayment(p.id, p.reason),
-    onSuccess: invalidate,
+    onSuccess: () => { setReversingId(null); setReverseReason(''); invalidate() },
     onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not reverse.'),
   })
   const cancel = useMutation({
@@ -182,30 +184,49 @@ export function InvoiceDetailDrawer({
               ) : (
                 <ul className="border border-gray-100 rounded-xl divide-y text-sm">
                   {inv.payments.map((p) => (
-                    <li key={p.id} className={`px-3 py-2 flex items-center justify-between ${p.reversedAt ? 'opacity-50' : ''}`}>
-                      <div>
-                        <span className="font-medium">{naira(p.amount)}</span>
-                        <span className="text-gray-400"> · {p.method} · {payerLabel(p.payerType)}{p.payerName ? ` (${p.payerName})` : ''}</span>
-                        {p.reference && <span className="text-gray-400"> · {p.reference}</span>}
-                        <span className="block text-xs text-gray-400">
-                          {p.receiptNumber} · {dt(p.paidAt)}{p.receivedByName ? ` · ${p.receivedByName}` : ''}
-                          {p.reversedAt && ` · reversed: ${p.reversalReason}`}
-                        </span>
+                    <li key={p.id} className={p.reversedAt ? 'opacity-50' : ''}>
+                      <div className="px-3 py-2 flex items-center justify-between">
+                        <div>
+                          <span className="font-medium">{naira(p.amount)}</span>
+                          <span className="text-gray-400"> · {p.method} · {payerLabel(p.payerType)}{p.payerName ? ` (${p.payerName})` : ''}</span>
+                          {p.reference && <span className="text-gray-400"> · {p.reference}</span>}
+                          <span className="block text-xs text-gray-400">
+                            {p.receiptNumber} · {dt(p.paidAt)}{p.receivedByName ? ` · ${p.receivedByName}` : ''}
+                            {p.reversedAt && ` · reversed: ${p.reversalReason}`}
+                          </span>
+                        </div>
+                        {!p.reversedAt && (
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <button className="text-xs text-primary hover:underline" onClick={() => setReceiptId(p.id)}>Receipt</button>
+                            {canManage && (
+                              <button
+                                className="text-xs text-gray-400 hover:text-red-500"
+                                onClick={() => { setReversingId(p.id); setReverseReason('') }}
+                              >
+                                Reverse
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {!p.reversedAt && (
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <button className="text-xs text-primary hover:underline" onClick={() => setReceiptId(p.id)}>Receipt</button>
-                          {canManage && (
-                            <button
-                              className="text-xs text-gray-400 hover:text-red-500"
-                              onClick={() => {
-                                const reason = prompt('Reason for reversing this payment?')
-                                if (reason) reverse.mutate({ id: p.id, reason })
-                              }}
+                      {reversingId === p.id && (
+                        <div className="mx-3 mb-3 rounded-xl border border-gray-100 p-3">
+                          <Field label="Reason for reversing this payment">
+                            <Textarea rows={2} value={reverseReason} onChange={(e) => setReverseReason(e.target.value)} />
+                          </Field>
+                          <div className="flex justify-end gap-2 mt-2">
+                            <Button variant="secondary" onClick={() => { setReversingId(null); setReverseReason('') }}>
+                              Cancel
+                            </Button>
+                            <Button
+                              variant="danger"
+                              loading={reverse.isPending}
+                              disabled={reverseReason.trim().length < 3}
+                              onClick={() => reverse.mutate({ id: p.id, reason: reverseReason.trim() })}
                             >
-                              Reverse
-                            </button>
-                          )}
+                              Confirm reverse
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </li>

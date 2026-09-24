@@ -5,9 +5,11 @@ import { AppModule } from './app.module';
 import { rootDomain } from './common/urls';
 import { validateEnv } from './common/env.validation';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { initSentry } from './common/sentry';
 
 async function bootstrap() {
   validateEnv();
+  initSentry(); // no-op unless SENTRY_DSN is set
 
   const app = await NestFactory.create(AppModule);
 

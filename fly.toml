@@ -13,6 +13,10 @@ primary_region = 'lhr'
   NEXT_PUBLIC_ROOT_DOMAIN = 'oudmed.com'
   NEXT_PUBLIC_APP_PROTOCOL = 'https'
   NEXT_PUBLIC_STORAGE_ORIGIN = 'https://pub-c21420b04539410b904ead3e86dfa60f.r2.dev'
+  # Error tracking (Sentry), off by default. To enable: add
+  # NEXT_PUBLIC_SENTRY_DSN = '...' here (a client DSN is meant to be public, so
+  # committing it is fine) and run `fly secrets set SENTRY_DSN=...` for the
+  # server-side one (same DSN value works for both).
 
 # Non-secret runtime config. AUTH_SECRET is set separately via `fly secrets set`
 # (secrets never belong in this file, which gets committed to git).
