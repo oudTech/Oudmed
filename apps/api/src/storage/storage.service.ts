@@ -33,7 +33,13 @@ export class StorageService implements OnModuleInit {
   private readonly publicClient = new S3Client({
     region: process.env.S3_REGION ?? 'us-east-1',
     endpoint: process.env.S3_PUBLIC_ENDPOINT ?? process.env.S3_ENDPOINT,
-    forcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? 'true') === 'true',
+    // The public endpoint is not always the same shape as the private one: a
+    // provider like Cloudflare R2 has a per-bucket public host (pub-xxx.r2.dev)
+    // that must NOT have the bucket name in the path, unlike its own private
+    // API endpoint (or MinIO), which does. S3_PUBLIC_FORCE_PATH_STYLE lets the
+    // two be configured independently; it falls back to S3_FORCE_PATH_STYLE so
+    // existing single-style setups (MinIO in dev) are unaffected.
+    forcePathStyle: (process.env.S3_PUBLIC_FORCE_PATH_STYLE ?? process.env.S3_FORCE_PATH_STYLE ?? 'true') === 'true',
     credentials: {
       accessKeyId: process.env.S3_ACCESS_KEY ?? '',
       secretAccessKey: process.env.S3_SECRET_KEY ?? '',
