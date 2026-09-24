@@ -218,14 +218,14 @@ describe('Files (integration - storage, authorization, disposition)', () => {
   // ─────────────────────────── magic bytes ───────────────────────────
 
   describe('content validation', () => {
-    it('rejects a file whose bytes do not match its declared type', async () => {
+    it('rejects a file whose bytes do not match any allowed type, regardless of its declared type', async () => {
       await expect(
         files.upload(
           uploaderA,
           { buffer: Buffer.from('<html><body>not a png</body></html>'), originalname: 'x.png', mimetype: 'image/png', size: 40 },
           'DOCUMENT',
         ),
-      ).rejects.toThrow(/does not match its declared type/);
+      ).rejects.toThrow(/Unsupported file type/);
       // nothing was stored
       const orphans = await storage.list(`t/${tenantA}/`);
       const rows = await ownerPrisma.storedFile.findMany({ where: { tenantId: tenantA }, select: { key: true } });
@@ -237,6 +237,17 @@ describe('Files (integration - storage, authorization, disposition)', () => {
       const row = await ownerPrisma.storedFile.findUnique({ where: { id: dto.id } });
       expect(row?.scanStatus).toBe('SKIPPED');
       expect(row?.scannedAt).toBeNull();
+      await files.remove(uploaderA, dto.id);
+    });
+
+    it('accepts a genuine PNG even when the browser declares a wrong/generic content-type', async () => {
+      const dto = await files.upload(
+        uploaderA,
+        { buffer: PNG, originalname: 'photo.png', mimetype: 'application/octet-stream', size: PNG.length },
+        'DOCUMENT',
+      );
+      const row = await ownerPrisma.storedFile.findUnique({ where: { id: dto.id } });
+      expect(row?.mimeType).toBe('image/png');
       await files.remove(uploaderA, dto.id);
     });
   });

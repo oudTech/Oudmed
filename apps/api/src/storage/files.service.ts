@@ -14,7 +14,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { assertCan, can } from '../common/permissions';
 import { StorageService } from './storage.service';
 import { ScanService } from './scan.service';
-import { contentMatchesDeclared } from './file-type';
+import { sniffMime } from './file-type';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_MB } from './upload.util';
 
 interface Actor {
@@ -24,13 +24,6 @@ interface Actor {
 }
 
 export type FileCategory = 'PHOTO' | 'DOCUMENT' | 'LOGO' | 'RESULT' | 'OTHER';
-
-const ALLOWED_MIME = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'application/pdf',
-]);
 
 const slug = (s: string) =>
   s.normalize('NFKD').replace(/[^\w.\- ]/g, '').trim().replace(/\s+/g, '-').slice(0, 80) || 'file';
@@ -75,13 +68,14 @@ export class FilesService {
     if (file.size > this.maxBytes) {
       throw new PayloadTooLargeException(`File exceeds the ${MAX_UPLOAD_MB} MB limit`);
     }
-    if (!ALLOWED_MIME.has(file.mimetype)) {
-      throw new BadRequestException(`Unsupported file type: ${file.mimetype}. Allowed: PNG, JPEG, WebP, PDF.`);
-    }
-    // The declared multipart type is not enough - verify the leading bytes so an
-    // HTML file cannot be uploaded as image/png.
-    if (!contentMatchesDeclared(file.buffer, file.mimetype)) {
-      throw new BadRequestException('The file content does not match its declared type.');
+    // The declared multipart content-type is untrusted client input - some
+    // browsers/OSes report it blank or as a generic application/octet-stream
+    // even for a genuinely valid file. The real bytes decide what this is; an
+    // HTML file cannot pass this by declaring itself image/png, and a real PNG
+    // is never rejected just because the browser mislabelled it.
+    const mimeType = sniffMime(file.buffer);
+    if (!mimeType) {
+      throw new BadRequestException('Unsupported file type. Allowed: PNG, JPEG, WebP, PDF.');
     }
 
     // Malware scan (no-op unless CLAMAV_HOST is set). INFECTED is rejected here;
@@ -97,7 +91,7 @@ export class FilesService {
 
     const sha256 = createHash('sha256').update(file.buffer).digest('hex');
     const key = `t/${actor.tenantId}/${category.toLowerCase()}/${randomUUID()}-${slug(file.originalname)}`;
-    await this.storage.put(key, file.buffer, file.mimetype);
+    await this.storage.put(key, file.buffer, mimeType);
 
     let row: StoredFile;
     try {
@@ -107,7 +101,7 @@ export class FilesService {
             tenantId: actor.tenantId,
             key,
             bucket: this.storage.bucket,
-            mimeType: file.mimetype,
+            mimeType,
             size: file.size,
             sha256,
             originalName: file.originalname,

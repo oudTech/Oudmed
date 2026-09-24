@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { TokensService } from '../auth/tokens.service';
+import { FilesService } from '../storage/files.service';
 import { tenantUrl } from '../common/urls';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 
@@ -22,6 +23,7 @@ export class TenantsService {
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
     private readonly tokens: TokensService,
+    private readonly files: FilesService,
   ) {}
 
   /**
@@ -99,7 +101,11 @@ export class TenantsService {
       select: { id: true, name: true, slug: true, logoUrl: true, primaryColor: true },
     });
     if (!tenant) throw new NotFoundException('Workspace not found');
-    return tenant;
+    // This is called from the (unauthenticated) login page, so the stored
+    // `/api/files/<id>` reference - which requires a session to load - must be
+    // resolved to a real presigned URL here, the same way SettingsService does
+    // for the authenticated app.
+    return { ...tenant, logoUrl: await this.files.presignRef(tenant.id, tenant.logoUrl, 600) };
   }
 
   private async generateSlug(name: string): Promise<string> {

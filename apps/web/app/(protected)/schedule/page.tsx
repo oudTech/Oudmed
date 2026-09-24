@@ -20,16 +20,32 @@ const DAY_START_HOUR = 7
 const DAY_END_HOUR = 19
 const SLOT_MIN = 30
 const ROW_H = 56
-const SLOTS = ((DAY_END_HOUR - DAY_START_HOUR) * 60) / SLOT_MIN
 
-function slotIndex(d: Date) {
-  return (d.getHours() - DAY_START_HOUR) * (60 / SLOT_MIN) + (d.getMinutes() >= 30 ? 1 : 0)
+/**
+ * The grid defaults to 7am-7pm but widens to include any appointment outside
+ * that window - a visit is never silently dropped from the calendar just
+ * because it falls before/after typical hours (emergencies, night shifts).
+ */
+function hourBounds(visits: VisitDTO[]) {
+  let startHour = DAY_START_HOUR
+  let endHour = DAY_END_HOUR
+  for (const v of visits) {
+    const s = new Date(v.startsAt)
+    const e = new Date(v.endsAt)
+    startHour = Math.min(startHour, s.getHours())
+    endHour = Math.max(endHour, e.getHours() + (e.getMinutes() > 0 ? 1 : 0))
+  }
+  return { startHour: Math.max(0, startHour), endHour: Math.min(24, endHour) }
+}
+
+function slotIndex(d: Date, startHour: number) {
+  return (d.getHours() - startHour) * (60 / SLOT_MIN) + (d.getMinutes() >= 30 ? 1 : 0)
 }
 function spanSlots(a: Date, b: Date) {
   return Math.max(1, Math.round((b.getTime() - a.getTime()) / 60000 / SLOT_MIN))
 }
-function slotLabel(i: number) {
-  const total = DAY_START_HOUR * 60 + i * SLOT_MIN
+function slotLabel(i: number, startHour: number) {
+  const total = startHour * 60 + i * SLOT_MIN
   const h = Math.floor(total / 60)
   const m = total % 60
   const ampm = h < 12 ? 'am' : 'pm'
@@ -80,6 +96,7 @@ export default function SchedulePage() {
   })
 
   const list = visits.data ?? []
+  const bounds = useMemo(() => hourBounds(list), [list])
   const move = (n: number) =>
     setAnchor((d) => addDays(d, view === 'week' ? n * 7 : view === 'month' ? 0 : n))
   const moveMonth = (n: number) =>
@@ -179,6 +196,8 @@ export default function SchedulePage() {
         ) : view === 'today' ? (
           <DayGrid
             day={anchor}
+            startHour={bounds.startHour}
+            endHour={bounds.endHour}
             columns={(doctors.data ?? []).map((d) => ({
               id: d.id,
               title: d.fullName,
@@ -194,6 +213,8 @@ export default function SchedulePage() {
         ) : view === 'week' ? (
           <WeekGrid
             from={range.from}
+            startHour={bounds.startHour}
+            endHour={bounds.endHour}
             visits={list}
             canBook={canBook}
             onEmpty={(start) => setApptModal({ startsAt: start })}
@@ -240,6 +261,8 @@ type DayColumn = { id: string; title: string; subtitle?: string | null; shifts?:
 
 function DayGrid({
   day,
+  startHour,
+  endHour,
   columns,
   visits,
   canBook,
@@ -248,6 +271,8 @@ function DayGrid({
   onDoctor,
 }: {
   day: Date
+  startHour: number
+  endHour: number
   columns: DayColumn[]
   visits: VisitDTO[]
   canBook: boolean
@@ -259,6 +284,7 @@ function DayGrid({
     ? columns
     : [{ id: '', title: 'Unassigned', subtitle: null }]
   const dow = day.getDay()
+  const slots = ((endHour - startHour) * 60) / SLOT_MIN
 
   return (
     <div className="flex-1 overflow-auto">
@@ -291,13 +317,13 @@ function DayGrid({
 
         <div className="flex">
           <div className="w-24 flex-shrink-0 border-r border-[#D6DEE8]">
-            {Array.from({ length: SLOTS }).map((_, i) => (
+            {Array.from({ length: slots }).map((_, i) => (
               <div
                 key={i}
                 className="px-3 text-xs font-medium text-gray-500 flex items-start pt-1"
                 style={{ height: ROW_H, borderBottom: '1px solid #EEF1F5' }}
               >
-                {i % 2 === 0 ? slotLabel(i) : ''}
+                {i % 2 === 0 ? slotLabel(i, startHour) : ''}
               </div>
             ))}
           </div>
@@ -312,10 +338,10 @@ function DayGrid({
                 className="flex-1 relative min-w-[160px]"
                 style={{ borderRight: ci < cols.length - 1 ? '1px solid #D6DEE8' : undefined }}
               >
-                {Array.from({ length: SLOTS }).map((_, i) => {
+                {Array.from({ length: slots }).map((_, i) => {
                   const cell = new Date(day)
-                  cell.setHours(DAY_START_HOUR + Math.floor(i / 2), i % 2 ? 30 : 0, 0, 0)
-                  const startMin = DAY_START_HOUR * 60 + i * SLOT_MIN
+                  cell.setHours(startHour + Math.floor(i / 2), i % 2 ? 30 : 0, 0, 0)
+                  const startMin = startHour * 60 + i * SLOT_MIN
                   const off =
                     c.id !== '' && !isWorking(c.shifts ?? [], dow, startMin, startMin + SLOT_MIN)
                   return (
@@ -352,9 +378,9 @@ function DayGrid({
                 })}
                 {colVisits.map((v) => {
                   const s = new Date(v.startsAt)
-                  const idx = slotIndex(s)
-                  if (idx < 0 || idx >= SLOTS) return null
-                  const span = Math.min(spanSlots(s, new Date(v.endsAt)), SLOTS - idx)
+                  const idx = slotIndex(s, startHour)
+                  if (idx < 0 || idx >= slots) return null
+                  const span = Math.min(spanSlots(s, new Date(v.endsAt)), slots - idx)
                   return (
                     <div
                       key={v.id}
@@ -377,12 +403,16 @@ function DayGrid({
 /* ── Week grid: columns = 7 days ── */
 function WeekGrid({
   from,
+  startHour,
+  endHour,
   visits,
   canBook,
   onEmpty,
   onCard,
 }: {
   from: Date
+  startHour: number
+  endHour: number
   visits: VisitDTO[]
   canBook: boolean
   onEmpty: (start: Date) => void
@@ -390,6 +420,7 @@ function WeekGrid({
 }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i))
   const today = new Date().toDateString()
+  const slots = ((endHour - startHour) * 60) / SLOT_MIN
   return (
     <div className="flex-1 overflow-auto">
       <div className="min-w-[820px]">
@@ -416,13 +447,13 @@ function WeekGrid({
         </div>
         <div className="flex">
           <div className="w-24 flex-shrink-0 border-r border-[#D6DEE8]">
-            {Array.from({ length: SLOTS }).map((_, i) => (
+            {Array.from({ length: slots }).map((_, i) => (
               <div
                 key={i}
                 className="px-3 text-xs font-medium text-gray-500 pt-1"
                 style={{ height: ROW_H, borderBottom: '1px solid #EEF1F5' }}
               >
-                {i % 2 === 0 ? slotLabel(i) : ''}
+                {i % 2 === 0 ? slotLabel(i, startHour) : ''}
               </div>
             ))}
           </div>
@@ -436,9 +467,9 @@ function WeekGrid({
                 className="flex-1 relative"
                 style={{ borderRight: di < 6 ? '1px solid #D6DEE8' : undefined }}
               >
-                {Array.from({ length: SLOTS }).map((_, i) => {
+                {Array.from({ length: slots }).map((_, i) => {
                   const cell = new Date(d)
-                  cell.setHours(DAY_START_HOUR + Math.floor(i / 2), i % 2 ? 30 : 0, 0, 0)
+                  cell.setHours(startHour + Math.floor(i / 2), i % 2 ? 30 : 0, 0, 0)
                   return (
                     <button
                       key={i}
@@ -459,9 +490,9 @@ function WeekGrid({
                 })}
                 {dayVisits.map((v) => {
                   const s = new Date(v.startsAt)
-                  const idx = slotIndex(s)
-                  if (idx < 0 || idx >= SLOTS) return null
-                  const span = Math.min(spanSlots(s, new Date(v.endsAt)), SLOTS - idx)
+                  const idx = slotIndex(s, startHour)
+                  if (idx < 0 || idx >= slots) return null
+                  const span = Math.min(spanSlots(s, new Date(v.endsAt)), slots - idx)
                   return (
                     <div
                       key={v.id}

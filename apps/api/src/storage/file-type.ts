@@ -22,8 +22,3 @@ export function sniffMime(buf: Buffer): AllowedMime | null {
   if (startsWith(buf, [0x25, 0x50, 0x44, 0x46, 0x2d])) return 'application/pdf'; // %PDF-
   return null;
 }
-
-/** True when the bytes match the declared type. */
-export function contentMatchesDeclared(buf: Buffer, declared: string): boolean {
-  return sniffMime(buf) === declared;
-}
