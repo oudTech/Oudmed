@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { configurePaystackRawBody } from '../common/raw-body';
+import { EmailModule } from '../email/email.module';
 import { SubscriptionsModule } from './subscriptions.module';
 import { SubscriptionsService } from './subscriptions.service';
 import { destroyTenant, makeTenant, makeUser, ownerPrisma } from '../../test/int-helpers';
@@ -50,7 +51,7 @@ describe('Subscriptions (integration - HTTP)', () => {
 
   beforeAll(async () => {
     const mod = await Test.createTestingModule({
-      imports: [PrismaModule, SubscriptionsModule],
+      imports: [PrismaModule, EmailModule, SubscriptionsModule],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue(testAuthGuard)
@@ -182,7 +183,7 @@ describe('Subscription payment collection (integration - HTTP)', () => {
     process.env.PAYSTACK_WEBHOOK_SECRET = 'whsec_fake';
 
     const mod = await Test.createTestingModule({
-      imports: [PrismaModule, SubscriptionsModule],
+      imports: [PrismaModule, EmailModule, SubscriptionsModule],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue(testAuthGuard)

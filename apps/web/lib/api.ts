@@ -13,6 +13,9 @@ export function setAuthToken(token: string | undefined) {
   }
 }
 
+/** Fired whenever a write is blocked because the hospital's subscription needs attention (see SUBSCRIPTION_READ_ONLY). */
+export const SUBSCRIPTION_READ_ONLY_EVENT = 'subscription-read-only'
+
 /**
  * A 401 from the API means the session was revoked (deactivated user / tenant,
  * expired token) - the per-request JWT re-check failed. It is not transient
@@ -24,6 +27,7 @@ api.interceptors.response.use(
   (res) => res,
   (error) => {
     const status = error?.response?.status
+    const code = error?.response?.data?.code
     if (status === 401 && typeof window !== 'undefined' && !signingOut) {
       signingOut = true
       setAuthToken(undefined)
@@ -32,6 +36,12 @@ api.interceptors.response.use(
           window.location.href = '/login?reason=expired'
         }
       })
+    }
+    // A write blocked by the grace-period enforcement - surfaced globally
+    // (rather than only wherever the specific form's own error handling shows
+    // it) since it applies to every role, not just the admin who can act on it.
+    if (status === 402 && code === 'SUBSCRIPTION_READ_ONLY' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(SUBSCRIPTION_READ_ONLY_EVENT))
     }
     return Promise.reject(error)
   },

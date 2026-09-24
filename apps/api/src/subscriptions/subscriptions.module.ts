@@ -7,11 +7,12 @@ import { PlatformSubscriptionsController } from './platform-subscriptions.contro
 import { SubscriptionsService } from './subscriptions.service';
 import { PaystackClient } from './paystack.client';
 import { EntitlementsService } from './entitlements.service';
+import { RenewalService } from './renewal.service';
 
 @Module({
   imports: [PrismaModule, AuditModule, PlatformAuthModule],
   controllers: [SubscriptionsController, PlatformSubscriptionsController],
-  providers: [SubscriptionsService, PaystackClient, EntitlementsService],
+  providers: [SubscriptionsService, PaystackClient, EntitlementsService, RenewalService],
   exports: [SubscriptionsService, EntitlementsService],
 })
 export class SubscriptionsModule {}

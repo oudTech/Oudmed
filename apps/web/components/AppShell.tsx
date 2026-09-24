@@ -1,11 +1,13 @@
 'use client'
 import { useState } from 'react'
 import { useSession } from 'next-auth/react'
+import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import Image from 'next/image'
 import { can, type Action } from '@/lib/permissions'
 import { OnboardingProvider } from '@/components/onboarding'
+import { subscriptionsApi } from '@/lib/subscriptions'
 
 /* ─────────────────────────── icons ─────────────────────────── */
 const INACTIVE = '#69768F'
@@ -141,6 +143,38 @@ const BOTTOM_NAV = [
   { href: '/settings', label: 'Settings', Icon: SettingsIcon },
 ]
 
+/**
+ * Proactive - only shown to the one role that can actually act on it
+ * (/subscriptions/me itself is gated to admin:settings). Everyone else only
+ * learns about a subscription problem reactively, if they hit a blocked
+ * write - see SubscriptionReadOnlyListener in Providers.tsx.
+ */
+function SubscriptionBanner({ canSeeIt }: { canSeeIt: boolean }) {
+  const q = useQuery({ queryKey: ['subscription-me'], queryFn: subscriptionsApi.getMine, enabled: canSeeIt })
+  if (!q.data) return null
+  const { accessLevel, status, trialDaysRemaining } = q.data
+
+  if (accessLevel === 'READ_ONLY') {
+    return (
+      <div className="bg-red-50 border-b border-red-100 px-6 py-2 text-sm text-red-700 flex items-center justify-between flex-shrink-0">
+        <span>This hospital&apos;s subscription needs attention - new records cannot be created until billing is updated.</span>
+        <Link href="/settings" className="font-semibold underline flex-shrink-0 ml-3">Update billing</Link>
+      </div>
+    )
+  }
+  if (status === 'TRIALING' && trialDaysRemaining !== null && trialDaysRemaining <= 3) {
+    return (
+      <div className="bg-blue-50 border-b border-blue-100 px-6 py-2 text-sm text-blue-700 flex items-center justify-between flex-shrink-0">
+        <span>
+          {trialDaysRemaining === 0 ? 'Your trial ends today.' : `${trialDaysRemaining} day${trialDaysRemaining === 1 ? '' : 's'} left in your trial.`}
+        </span>
+        <Link href="/settings" className="font-semibold underline flex-shrink-0 ml-3">Set up billing</Link>
+      </div>
+    )
+  }
+  return null
+}
+
 /* ─────────────────────────── component ─────────────────────── */
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession()
@@ -149,6 +183,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const tenant = (session as any)?.tenant
   const primary = tenant?.primaryColor ?? '#3366E3'
   const [collapsed, setCollapsed] = useState(false)
+  const canSeeBilling = can(session?.role, 'admin:settings')
 
   return (
     <OnboardingProvider>
@@ -242,6 +277,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* ── Main content ── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <SubscriptionBanner canSeeIt={canSeeBilling} />
         {children}
       </div>
       </div>

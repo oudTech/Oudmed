@@ -9,6 +9,13 @@ interface InitializeResult {
   reference: string;
 }
 
+interface ChargeResult {
+  status: string;
+  reference: string;
+  authorizationCode: string | null;
+  reusable: boolean;
+}
+
 /**
  * Thin wrapper over Paystack's REST API - no SDK dependency, Paystack's HTTP
  * surface is small and well documented. PAYSTACK_SECRET_KEY /
@@ -75,12 +82,55 @@ export class PaystackClient {
     return { authorizationUrl: data.authorization_url, accessCode: data.access_code, reference: data.reference };
   }
 
-  async verifyTransaction(reference: string): Promise<{ status: string; amountNaira: number; reference: string }> {
-    const data = await this.request<{ status: string; amount: number; reference: string }>(
-      `/transaction/verify/${encodeURIComponent(reference)}`,
-      { method: 'GET' },
-    );
-    return { status: data.status, amountNaira: data.amount / 100, reference: data.reference };
+  async verifyTransaction(reference: string): Promise<ChargeResult & { amountNaira: number }> {
+    const data = await this.request<{
+      status: string;
+      amount: number;
+      reference: string;
+      authorization?: { authorization_code: string; reusable: boolean };
+    }>(`/transaction/verify/${encodeURIComponent(reference)}`, { method: 'GET' });
+    return {
+      status: data.status,
+      amountNaira: data.amount / 100,
+      reference: data.reference,
+      authorizationCode: data.authorization?.reusable ? data.authorization.authorization_code : null,
+      reusable: !!data.authorization?.reusable,
+    };
+  }
+
+  /**
+   * Re-charges a previously-authorized card - this is how a renewal happens
+   * without the hospital re-entering card details, and deliberately does not
+   * use Paystack's own Subscriptions/Plan API: our price is recomputed per
+   * seat count at charge time, not a fixed plan amount.
+   */
+  async chargeAuthorization(opts: {
+    email: string;
+    amountNaira: number;
+    authorizationCode: string;
+    reference: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<ChargeResult> {
+    const data = await this.request<{
+      status: string;
+      reference: string;
+      authorization?: { authorization_code: string; reusable: boolean };
+    }>('/transaction/charge_authorization', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: opts.email,
+        amount: Math.round(opts.amountNaira * 100),
+        authorization_code: opts.authorizationCode,
+        reference: opts.reference,
+        metadata: opts.metadata,
+      }),
+    });
+    return {
+      status: data.status,
+      reference: data.reference,
+      authorizationCode: data.authorization?.reusable ? data.authorization.authorization_code : null,
+      reusable: !!data.authorization?.reusable,
+    };
   }
 
   /**

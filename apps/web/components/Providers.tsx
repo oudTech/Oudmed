@@ -3,8 +3,8 @@ import { QueryClient, QueryClientProvider, useIsFetching, useIsMutating } from '
 import { SessionProvider, useSession } from 'next-auth/react'
 import type { Session } from 'next-auth'
 import { useEffect, useState } from 'react'
-import { setAuthToken } from '@/lib/api'
-import { FeedbackProvider } from '@/components/ui/feedback'
+import { setAuthToken, SUBSCRIPTION_READ_ONLY_EVENT } from '@/lib/api'
+import { FeedbackProvider, useToast } from '@/components/ui/feedback'
 import { initSentryClient } from '@/lib/sentry-client'
 
 initSentryClient() // no-op unless NEXT_PUBLIC_SENTRY_DSN is set; runs once on module load
@@ -14,6 +14,31 @@ function TokenSync() {
   useEffect(() => {
     setAuthToken(session?.apiToken)
   }, [session?.apiToken])
+  return null
+}
+
+/**
+ * A blocked write reaches every role, not just the hospital admin who can fix
+ * it - so this fires everywhere, not only on the Settings/Billing screen where
+ * the admin would notice a more specific banner. One toast at a time (a burst
+ * of blocked writes shouldn't stack a wall of identical toasts).
+ */
+function SubscriptionReadOnlyListener() {
+  const toast = useToast()
+  useEffect(() => {
+    let last = 0
+    const handler = () => {
+      const now = Date.now()
+      if (now - last < 5000) return
+      last = now
+      toast(
+        "This hospital's subscription needs attention. Existing records remain visible; ask your admin to update billing to resume creating or editing records.",
+        'error',
+      )
+    }
+    window.addEventListener(SUBSCRIPTION_READ_ONLY_EVENT, handler)
+    return () => window.removeEventListener(SUBSCRIPTION_READ_ONLY_EVENT, handler)
+  }, [toast])
   return null
 }
 
@@ -43,7 +68,10 @@ export default function Providers({
       <QueryClientProvider client={qc}>
         <TokenSync />
         <NetworkIndicator />
-        <FeedbackProvider>{children}</FeedbackProvider>
+        <FeedbackProvider>
+          <SubscriptionReadOnlyListener />
+          {children}
+        </FeedbackProvider>
       </QueryClientProvider>
     </SessionProvider>
   )

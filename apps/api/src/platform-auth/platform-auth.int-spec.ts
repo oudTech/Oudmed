@@ -4,6 +4,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditModule } from '../common/audit/audit.module';
+import { EmailModule } from '../email/email.module';
 import { PlatformAuthModule } from './platform-auth.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -37,7 +38,7 @@ describe('Platform auth (integration - HTTP)', () => {
 
   beforeAll(async () => {
     const mod = await Test.createTestingModule({
-      imports: [PrismaModule, AuditModule, PlatformAuthModule, SubscriptionsModule],
+      imports: [PrismaModule, AuditModule, EmailModule, PlatformAuthModule, SubscriptionsModule],
     }).compile();
 
     app = mod.createNestApplication();
@@ -94,6 +95,13 @@ describe('Platform auth (integration - HTTP)', () => {
     expect(body.adminSeatPriceMonthly).toBe('25000.00');
     expect(body.otherSeatPriceMonthly).toBe('5000.00'); // untouched
 
+    const logRow = await ownerPrisma.platformAuditLog.findFirst({
+      where: { entityType: 'PlatformPricing' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(logRow).not.toBeNull();
+    expect(logRow?.action).toBe('UPDATE');
+
     // revert so other suites reading the same singleton row see the original price
     await req('PATCH', '/subscriptions/pricing', platformToken, { adminSeatPriceMonthly: 20000 });
   });
@@ -125,6 +133,12 @@ describe('Platform auth (integration - HTTP)', () => {
       where: { tenantId, entityType: 'SubscriptionInvoice', entityId: invoice.id },
     });
     expect(auditRow).not.toBeNull(); // the platform action is still traceable in the hospital's own audit log
+
+    const platformLogRow = await ownerPrisma.platformAuditLog.findFirst({
+      where: { entityType: 'SubscriptionInvoice', entityId: invoice.id },
+    });
+    expect(platformLogRow).not.toBeNull(); // and in the platform's own cross-tenant log
+    expect(platformLogRow?.tenantId).toBe(tenantId);
 
     // idempotent: confirming an already-PAID invoice again just returns it unchanged
     const again = await req('PATCH', `/platform/subscriptions/${tenantId}/invoices/${invoice.id}/mark-paid`, platformToken);

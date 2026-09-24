@@ -37,6 +37,8 @@ export interface SeatBreakdownDTO {
   annualGross: string
 }
 
+export type SubscriptionAccessLevel = 'FULL' | 'READ_ONLY'
+
 export interface SubscriptionSummaryDTO {
   status: SubscriptionStatus
   billingCycle: BillingCycle
@@ -46,6 +48,10 @@ export interface SubscriptionSummaryDTO {
   currentPeriodEnd: string | null
   pricing: PlatformPricingDTO
   seats: SeatBreakdownDTO
+  /** What the hospital can currently do - see EntitlementsService for the grace-period rules. */
+  accessLevel: SubscriptionAccessLevel
+  /** True once a card has ever succeeded - renewals will attempt to auto-charge it. */
+  hasSavedCard: boolean
 }
 
 export interface SubscriptionInvoiceDTO {

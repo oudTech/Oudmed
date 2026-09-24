@@ -10,10 +10,12 @@ import type {
 } from '@oudhealth/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
+import { EmailService } from '../email/email.service';
 import { assertCan } from '../common/permissions';
 import { nextPlatformSequence } from '../common/sequence';
 import { tenantUrl } from '../common/urls';
 import { PaystackClient } from './paystack.client';
+import { EntitlementsService } from './entitlements.service';
 import { UpdatePlatformPricingDto } from './dto/update-pricing.dto';
 import { CheckoutDto } from './dto/checkout.dto';
 
@@ -25,6 +27,9 @@ interface Actor {
 
 type Cycle = 'MONTHLY' | 'ANNUAL';
 
+/** Retry gaps for a failed auto-renewal charge, in days - 3 attempts then give up (the read-only grace period is the real backstop either way). */
+const DUNNING_BACKOFF_DAYS = [2, 4, 7];
+
 const money = (v: Prisma.Decimal | number | string) => new Prisma.Decimal(v).toFixed(2);
 
 @Injectable()
@@ -35,7 +40,30 @@ export class SubscriptionsService {
     private prisma: PrismaService,
     private audit: AuditService,
     private paystack: PaystackClient,
+    private entitlements: EntitlementsService,
+    private email: EmailService,
   ) {}
+
+  /** Durable platform-level audit trail - see PlatformAuditLog schema comment. */
+  private async platformAudit(entry: {
+    platformUserId?: string;
+    tenantId?: string;
+    action: string;
+    entityType: string;
+    entityId?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.prisma.platformAuditLog.create({
+      data: {
+        platformUserId: entry.platformUserId,
+        tenantId: entry.tenantId,
+        action: entry.action,
+        entityType: entry.entityType,
+        entityId: entry.entityId,
+        metadata: entry.metadata as Prisma.InputJsonValue,
+      },
+    });
+  }
 
   // ── pricing ──
 
@@ -80,11 +108,8 @@ export class SubscriptionsService {
    * platform permission matrix yet since there is only one operator today;
    * being a valid, active PlatformUser is the whole check.
    *
-   * Not logged to AuditLog: that table requires a tenantId and this action has
-   * none - forcing a sentinel value in would pollute tenant-scoped audit data
-   * with a platform event. A dedicated PlatformAuditLog is real future work;
-   * for now this is visible in the service logs, which is more than nothing
-   * but not the durable trail a money-affecting change like this deserves.
+   * Logged to the durable PlatformAuditLog (not the tenant-scoped AuditLog,
+   * which requires a tenantId this action has none of).
    */
   async updatePricing(platformUserId: string, dto: UpdatePlatformPricingDto): Promise<PlatformPricingDTO> {
     const current = await this.pricingRow();
@@ -99,9 +124,13 @@ export class SubscriptionsService {
     data.updatedById = platformUserId;
 
     const updated = await this.prisma.platformPricing.update({ where: { id: current.id }, data });
-    this.log.log(
-      `PlatformPricing updated by platform user ${platformUserId}: ${JSON.stringify({ before: this.toPricingDto(current), after: this.toPricingDto(updated) })}`,
-    );
+    await this.platformAudit({
+      platformUserId,
+      action: 'UPDATE',
+      entityType: 'PlatformPricing',
+      entityId: updated.id,
+      metadata: { before: this.toPricingDto(current), after: this.toPricingDto(updated) },
+    });
     return this.toPricingDto(updated);
   }
 
@@ -159,9 +188,10 @@ export class SubscriptionsService {
   }
 
   async getMySubscription(tenantId: string): Promise<SubscriptionSummaryDTO> {
-    const [sub, pricing] = await Promise.all([
+    const [sub, pricing, accessLevel] = await Promise.all([
       this.prisma.forTenant(tenantId, (tx) => tx.subscription.findUnique({ where: { tenantId } })),
       this.getPricing(),
+      this.entitlements.getAccessLevel(tenantId),
     ]);
     if (!sub) throw new NotFoundException('No subscription found for this hospital');
     const seats = await this.seatBreakdown(tenantId, pricing);
@@ -180,6 +210,8 @@ export class SubscriptionsService {
       currentPeriodEnd: sub.currentPeriodEnd?.toISOString() ?? null,
       pricing,
       seats,
+      accessLevel,
+      hasSavedCard: !!sub.paystackAuthorizationCode,
     };
   }
 
@@ -253,7 +285,12 @@ export class SubscriptionsService {
     );
   }
 
-  private async activateSubscription(tenantId: string, subscriptionId: string, billingCycle: Cycle): Promise<void> {
+  private async activateSubscription(
+    tenantId: string,
+    subscriptionId: string,
+    billingCycle: Cycle,
+    opts: { authorizationCode?: string | null; amountNaira?: string } = {},
+  ): Promise<void> {
     const now = new Date();
     const periodEnd = new Date(now);
     if (billingCycle === 'MONTHLY') periodEnd.setMonth(periodEnd.getMonth() + 1);
@@ -262,9 +299,35 @@ export class SubscriptionsService {
     await this.prisma.forTenant(tenantId, (tx) =>
       tx.subscription.update({
         where: { id: subscriptionId },
-        data: { status: 'ACTIVE', billingCycle, currentPeriodStart: now, currentPeriodEnd: periodEnd },
+        data: {
+          status: 'ACTIVE',
+          billingCycle,
+          currentPeriodStart: now,
+          currentPeriodEnd: periodEnd,
+          // a successful payment clears any dunning/read-only history - this
+          // may be the start of a fresh READ_ONLY episode later, which should
+          // get its own notice, not be silently skipped by a stale flag.
+          dunningAttempts: 0,
+          nextRenewalAttemptAt: null,
+          readOnlyNoticeSentAt: null,
+          ...(opts.authorizationCode ? { paystackAuthorizationCode: opts.authorizationCode } : {}),
+        },
       }),
     );
+
+    // Best-effort: a notification failure must never undo or block a real payment.
+    this.notifyPaymentReceived(tenantId, opts.amountNaira).catch((err) =>
+      this.log.warn(`payment-received email failed for tenant ${tenantId}: ${(err as Error)?.message}`),
+    );
+  }
+
+  private async notifyPaymentReceived(tenantId: string, amountNaira?: string): Promise<void> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, slug: true, contactEmail: true },
+    });
+    if (!tenant?.contactEmail) return;
+    await this.email.sendPaymentReceived(tenant.contactEmail, tenant.name, amountNaira ?? '', `${tenantUrl(tenant.slug)}/settings`);
   }
 
   async listMyInvoices(tenantId: string): Promise<SubscriptionInvoiceDTO[]> {
@@ -341,7 +404,10 @@ export class SubscriptionsService {
       const updated = await this.prisma.forTenant(actor.tenantId, (tx) =>
         tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: new Date() } }),
       );
-      await this.activateSubscription(actor.tenantId, invoice.subscriptionId, invoice.billingCycle as Cycle);
+      await this.activateSubscription(actor.tenantId, invoice.subscriptionId, invoice.billingCycle as Cycle, {
+        authorizationCode: result.authorizationCode,
+        amountNaira: money(invoice.totalAmount),
+      });
       return this.toInvoiceDto(updated);
     }
     return this.toInvoiceDto(invoice);
@@ -368,7 +434,9 @@ export class SubscriptionsService {
         data: { status: 'PAID', paidAt: new Date(), markedPaidById: platformUserId },
       }),
     );
-    await this.activateSubscription(tenantId, invoice.subscriptionId, invoice.billingCycle as Cycle);
+    await this.activateSubscription(tenantId, invoice.subscriptionId, invoice.billingCycle as Cycle, {
+      amountNaira: money(invoice.totalAmount),
+    });
     await this.audit.record({
       tenantId,
       userId: platformUserId, // a PlatformUser id, not a hospital User id - AuditLog.userId has no FK, so this is safe and traceable
@@ -376,6 +444,17 @@ export class SubscriptionsService {
       entityType: 'SubscriptionInvoice',
       entityId: invoiceId,
       metadata: { status: 'PAID', via: 'manual', confirmedByPlatformUser: true },
+    });
+    // also recorded in the platform's own cross-tenant log - a hospital admin
+    // sees the invoice-level event above; an operator sees "I confirmed this"
+    // in their own log without needing tenant context to find it.
+    await this.platformAudit({
+      platformUserId,
+      tenantId,
+      action: 'CONFIRM_PAYMENT',
+      entityType: 'SubscriptionInvoice',
+      entityId: invoiceId,
+      metadata: { status: 'PAID', via: 'manual' },
     });
     return this.toInvoiceDto(updated);
   }
@@ -408,6 +487,7 @@ export class SubscriptionsService {
       const metadata = event.data?.metadata as { tenantId?: string } | undefined;
       const tenantId = metadata?.tenantId;
       const reference = event.data?.reference as string | undefined;
+      const authorization = event.data?.authorization as { authorization_code?: string; reusable?: boolean } | undefined;
       if (tenantId && reference) {
         const invoice = await this.prisma.forTenant(tenantId, (tx) =>
           tx.subscriptionInvoice.findFirst({ where: { paystackReference: reference } }),
@@ -416,7 +496,10 @@ export class SubscriptionsService {
           await this.prisma.forTenant(tenantId, (tx) =>
             tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: new Date() } }),
           );
-          await this.activateSubscription(tenantId, invoice.subscriptionId, invoice.billingCycle as Cycle);
+          await this.activateSubscription(tenantId, invoice.subscriptionId, invoice.billingCycle as Cycle, {
+            authorizationCode: authorization?.reusable ? authorization.authorization_code : null,
+            amountNaira: money(invoice.totalAmount),
+          });
           await this.audit.record({
             tenantId,
             action: 'UPDATE',
@@ -429,5 +512,95 @@ export class SubscriptionsService {
     }
 
     await this.prisma.platformWebhookEvent.update({ where: { id: eventId }, data: { processedAt: new Date() } });
+  }
+
+  // ── auto-renewal / dunning (called by RenewalService's daily job) ──
+
+  /**
+   * Charges the saved card for one tenant's overdue subscription, if it is
+   * actually due. Idempotent no-op if nothing is due, so RenewalService can
+   * call this for every tenant daily without checking eligibility itself.
+   */
+  async attemptAutoRenewal(tenantId: string): Promise<void> {
+    const sub = await this.prisma.forTenant(tenantId, (tx) => tx.subscription.findUnique({ where: { tenantId } }));
+    if (!sub || !sub.autoRenew || !sub.paystackAuthorizationCode) return;
+    if (!['ACTIVE', 'PAST_DUE'].includes(sub.status)) return;
+    if (!sub.currentPeriodEnd || sub.currentPeriodEnd > new Date()) return;
+    if (sub.nextRenewalAttemptAt && sub.nextRenewalAttemptAt > new Date()) return;
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, slug: true, contactEmail: true },
+    });
+    if (!tenant) return;
+
+    const invoice = await this.createPendingInvoice(tenantId, sub.id, sub.billingCycle as Cycle, 'CARD');
+    const email = tenant.contactEmail ?? '';
+
+    let result: { status: string; authorizationCode: string | null };
+    try {
+      result = await this.paystack.chargeAuthorization({
+        email,
+        amountNaira: Number(invoice.totalAmount),
+        authorizationCode: sub.paystackAuthorizationCode,
+        reference: invoice.invoiceNumber,
+        metadata: { tenantId, subscriptionInvoiceId: invoice.id },
+      });
+    } catch (err) {
+      this.log.warn(`renewal charge_authorization call failed for tenant ${tenantId}: ${(err as Error)?.message}`);
+      result = { status: 'failed', authorizationCode: null };
+    }
+
+    await this.prisma.forTenant(tenantId, (tx) =>
+      tx.subscription.update({ where: { id: sub.id }, data: { lastRenewalAttemptAt: new Date() } }),
+    );
+
+    if (result.status === 'success') {
+      await this.prisma.forTenant(tenantId, (tx) =>
+        tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: new Date() } }),
+      );
+      await this.activateSubscription(tenantId, sub.id, sub.billingCycle as Cycle, {
+        authorizationCode: result.authorizationCode ?? sub.paystackAuthorizationCode,
+        amountNaira: money(invoice.totalAmount),
+      });
+      await this.audit.record({
+        tenantId,
+        action: 'UPDATE',
+        entityType: 'SubscriptionInvoice',
+        entityId: invoice.id,
+        metadata: { status: 'PAID', via: 'auto-renewal' },
+      });
+      return;
+    }
+
+    const attempts = sub.dunningAttempts + 1;
+    const exhausted = attempts > DUNNING_BACKOFF_DAYS.length;
+    const nextAttempt = exhausted ? null : new Date(Date.now() + DUNNING_BACKOFF_DAYS[attempts - 1] * 24 * 60 * 60 * 1000);
+
+    await this.prisma.forTenant(tenantId, (tx) =>
+      tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'FAILED' } }),
+    );
+    await this.prisma.forTenant(tenantId, (tx) =>
+      tx.subscription.update({
+        where: { id: sub.id },
+        data: { status: 'PAST_DUE', dunningAttempts: attempts, nextRenewalAttemptAt: nextAttempt },
+      }),
+    );
+    await this.audit.record({
+      tenantId,
+      action: 'UPDATE',
+      entityType: 'SubscriptionInvoice',
+      entityId: invoice.id,
+      metadata: { status: 'FAILED', via: 'auto-renewal', attempt: attempts },
+    });
+
+    if (email) {
+      const nextRetryText = nextAttempt
+        ? nextAttempt.toLocaleDateString('en-GB')
+        : 'we will not retry automatically - please update your payment method or pay by bank transfer';
+      await this.email
+        .sendPaymentFailed(email, tenant.name, attempts, nextRetryText, `${tenantUrl(tenant.slug)}/settings`)
+        .catch((err) => this.log.warn(`payment-failed email failed for tenant ${tenantId}: ${(err as Error)?.message}`));
+    }
   }
 }

@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+// Aliased: this app already has an (unrelated) outpatient-appointment module
+// also named ScheduleModule, imported a few lines below.
+import { ScheduleModule as CronModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
 import { EmailModule } from './email/email.module';
 import { AuditModule } from './common/audit/audit.module';
@@ -29,6 +32,7 @@ import { HealthController } from './health/health.controller';
 @Module({
   imports: [
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
+    CronModule.forRoot(),
     PrismaModule,
     EmailModule,
     AuditModule,

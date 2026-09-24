@@ -302,6 +302,22 @@ model Subscription {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   invoices           SubscriptionInvoice[]
+
+  // ── auto-renewal / dunning ──
+  /// Paystack's reusable card token from the first successful charge - lets a
+  /// scheduled job charge the same card again at renewal without the hospital
+  /// re-entering card details. Null until a card payment has ever succeeded.
+  paystackAuthorizationCode String?
+  autoRenew                 Boolean   @default(true)
+  dunningAttempts           Int       @default(0)
+  lastRenewalAttemptAt      DateTime?
+  /// Backoff gate for the next retry - the renewal job skips a PAST_DUE
+  /// subscription until this passes, instead of hammering a failing card daily.
+  nextRenewalAttemptAt      DateTime?
+
+  // ── one-shot notification flags (never re-sent once set) ──
+  trialEndingReminderSentAt DateTime?
+  readOnlyNoticeSentAt      DateTime?
 }
 
 /// Platform-wide pricing config - one row, editable by SUPER_ADMIN (today via
@@ -393,6 +409,23 @@ model PlatformUser {
   isActive     Boolean   @default(true)
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
+}
+
+/// Durable audit trail for platform-level actions (pricing changes, manual
+/// payment confirmations) - these have no tenantId, so they cannot live in the
+/// tenant-scoped AuditLog. Replaces the interim console-log-only approach.
+/// Not tenant-scoped, so not in rls.sql (same category as PlatformPricing).
+model PlatformAuditLog {
+  id             String   @id @default(uuid())
+  platformUserId String?
+  /// The hospital this action affected, if any (e.g. confirming one hospital's
+  /// invoice) - null for a genuinely global action (e.g. changing pricing).
+  tenantId       String?
+  action         String
+  entityType     String
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
 }
 
 /// A file in object storage (MinIO / S3). `key` is the object key within `bucket`.

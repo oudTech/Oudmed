@@ -70,6 +70,67 @@ export class EmailService {
       `),
     });
   }
+
+  async sendPaymentReceived(to: string, hospitalName: string, amountNaira: string, billingUrl: string): Promise<void> {
+    await this.send({
+      to,
+      subject: `Payment received - ${hospitalName}`,
+      text: `Hi,\n\nWe've received your payment of NGN ${amountNaira}. Your Oudmed subscription is active.\n\nView your billing details: ${billingUrl}`,
+      html: layout(`
+        <p>Hi,</p>
+        <p>We've received your payment of <strong>NGN ${escapeHtml(amountNaira)}</strong> for ${escapeHtml(hospitalName)}. Your Oudmed subscription is active.</p>
+        <p style="margin:24px 0">
+          <a href="${billingUrl}" style="background:#3366E3;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">View billing</a>
+        </p>
+      `),
+    });
+  }
+
+  async sendPaymentFailed(to: string, hospitalName: string, attempt: number, nextRetryDate: string, billingUrl: string): Promise<void> {
+    await this.send({
+      to,
+      subject: `Payment failed - ${hospitalName}`,
+      text: `Hi,\n\nWe couldn't renew your Oudmed subscription - the card on file was declined (attempt ${attempt}). We'll try again on ${nextRetryDate}. Update your payment method to avoid interruption: ${billingUrl}`,
+      html: layout(`
+        <p>Hi,</p>
+        <p>We couldn't renew ${escapeHtml(hospitalName)}'s Oudmed subscription - the card on file was declined (attempt ${attempt}).</p>
+        <p>We'll try again on <strong>${escapeHtml(nextRetryDate)}</strong>, or you can update your payment method now.</p>
+        <p style="margin:24px 0">
+          <a href="${billingUrl}" style="background:#3366E3;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">Update payment method</a>
+        </p>
+      `),
+    });
+  }
+
+  async sendTrialEndingSoon(to: string, hospitalName: string, daysLeft: number, billingUrl: string): Promise<void> {
+    await this.send({
+      to,
+      subject: `Your Oudmed trial ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`,
+      text: `Hi,\n\n${hospitalName}'s Oudmed trial ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}. Add a payment method to keep working without interruption: ${billingUrl}`,
+      html: layout(`
+        <p>Hi,</p>
+        <p>${escapeHtml(hospitalName)}'s Oudmed trial ends in <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong>. Add a payment method to keep working without interruption.</p>
+        <p style="margin:24px 0">
+          <a href="${billingUrl}" style="background:#3366E3;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">Set up billing</a>
+        </p>
+      `),
+    });
+  }
+
+  async sendReadOnlyNotice(to: string, hospitalName: string, billingUrl: string): Promise<void> {
+    await this.send({
+      to,
+      subject: `Action needed - ${hospitalName}'s Oudmed subscription`,
+      text: `Hi,\n\n${hospitalName}'s Oudmed subscription needs attention. Existing records remain visible, but new patients, appointments and other records cannot be created until billing is updated: ${billingUrl}`,
+      html: layout(`
+        <p>Hi,</p>
+        <p>${escapeHtml(hospitalName)}'s Oudmed subscription needs attention. Existing records remain visible, but new patients, appointments and other records cannot be created until billing is updated.</p>
+        <p style="margin:24px 0">
+          <a href="${billingUrl}" style="background:#3366E3;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">Update billing</a>
+        </p>
+      `),
+    });
+  }
 }
 
 function layout(inner: string): string {
