@@ -32,6 +32,7 @@ async function apiBootstrap(token: string): Promise<SessionResult | 'revoked' | 
 const RECHECK_MS = 5 * 60 * 1000
 
 function applyResult(token: JWT, r: SessionResult): JWT {
+  token.type = 'hospital'
   token.apiToken = r.accessToken
   token.role = r.user.role
   token.emailVerified = r.user.emailVerified
@@ -78,11 +79,50 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         } as never
       },
     }),
+    Credentials({
+      // The Super Admin (platform-operator) identity - see apps/api/src/platform-auth.
+      // Completely separate from the hospital session above: no tenant, no role,
+      // its own JWT (`platformToken`), reused via the same NextAuth session/cookie
+      // plumbing rather than a bespoke mechanism.
+      id: 'platform',
+      credentials: { email: {}, password: {} },
+      async authorize(credentials) {
+        const email = credentials?.email
+        const password = credentials?.password
+        if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) return null
+        try {
+          const res = await fetch(`${API}/platform/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          })
+          if (!res.ok) return null
+          const { accessToken } = (await res.json()) as { accessToken: string }
+          return { id: email, email, name: email, platformAccessToken: accessToken } as never
+        } catch {
+          return null
+        }
+      },
+    }),
   ],
   callbacks: {
     async jwt({ token, user, trigger, session }) {
+      const platformAccessToken = (user as unknown as { platformAccessToken?: string })?.platformAccessToken
+      if (platformAccessToken) {
+        token.type = 'platform'
+        token.platformToken = platformAccessToken
+        token.email = (user as unknown as { email?: string })?.email ?? token.email
+        return token
+      }
+
       const fresh = (user as unknown as { sessionResult?: SessionResult })?.sessionResult
       if (fresh) return applyResult(token, fresh)
+
+      // A platform session has no equivalent re-validation endpoint - the API's
+      // PlatformJwtStrategy already re-checks PlatformUser.isActive live on every
+      // request, so a deactivated operator is rejected there regardless; this
+      // hospital-only recheck must not run against a platform token.
+      if (token.type === 'platform') return token
 
       if (trigger === 'update' && session?.apiToken) {
         const result = await apiBootstrap(session.apiToken)
@@ -102,6 +142,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return token
     },
     async session({ session, token }) {
+      if (token.type === 'platform') {
+        session.isPlatform = true
+        session.platformToken = token.platformToken
+        session.user = { name: token.email ?? null, email: token.email ?? '', image: null } as typeof session.user
+        return session
+      }
+      session.isPlatform = false
       session.apiToken = token.apiToken
       session.role = token.role
       session.emailVerified = token.emailVerified

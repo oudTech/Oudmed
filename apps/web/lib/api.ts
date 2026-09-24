@@ -43,6 +43,14 @@ api.interceptors.response.use(
     if (status === 402 && code === 'SUBSCRIPTION_READ_ONLY' && typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(SUBSCRIPTION_READ_ONLY_EVENT))
     }
+    // Platform-wide maintenance mode (Super Admin > Settings) - every hospital
+    // request is rejected while it's on. A standalone page, not under
+    // (protected), so it never itself triggers another blocked request.
+    if (status === 503 && code === 'MAINTENANCE_MODE' && typeof window !== 'undefined') {
+      if (!window.location.pathname.startsWith('/maintenance')) {
+        window.location.href = '/maintenance'
+      }
+    }
     return Promise.reject(error)
   },
 )

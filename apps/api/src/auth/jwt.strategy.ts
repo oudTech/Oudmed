@@ -66,6 +66,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Session is no longer valid');
     }
 
+    // Platform-wide maintenance mode (Super Admin > Settings). Platform
+    // operators use a separate strategy entirely and are never affected.
+    const config = await this.prisma.platformConfig.findFirst({ select: { maintenanceMode: true } });
+    if (config?.maintenanceMode) {
+      throw new HttpException(
+        {
+          statusCode: 503,
+          message: 'The platform is temporarily down for maintenance. Please try again shortly.',
+          code: 'MAINTENANCE_MODE',
+        },
+        503,
+      );
+    }
+
     if (
       READ_ONLY_WRITE_METHODS.has(req.method) &&
       !ALWAYS_ALLOWED_PREFIXES.some((p) => req.path?.startsWith(p))

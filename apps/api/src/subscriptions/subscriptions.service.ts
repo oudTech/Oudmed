@@ -13,6 +13,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { EmailService } from '../email/email.service';
 import { assertCan } from '../common/permissions';
 import { nextPlatformSequence } from '../common/sequence';
+import { toCsv } from '../common/csv';
 import { tenantUrl } from '../common/urls';
 import { PaystackClient } from './paystack.client';
 import { EntitlementsService } from './entitlements.service';
@@ -213,6 +214,99 @@ export class SubscriptionsService {
       accessLevel,
       hasSavedCard: !!sub.paystackAuthorizationCode,
     };
+  }
+
+  // ── platform: cross-tenant subscription list (Super Admin Subscriptions screen) ──
+
+  /**
+   * One row per hospital's current subscription. Subscription is RLS-protected
+   * so this iterates tenants one at a time, same pattern as RenewalService and
+   * the platform module's PlatformTenantsService - tenant volume is low enough
+   * today that this is a plain loop, not a batched/cached aggregate.
+   */
+  /** Shared by the paginated list and the CSV export - both must agree on what "matches the current filter" means. */
+  private async filteredSubscriptionRows(status?: string) {
+    const pricing = await this.getPricing();
+    const tenants = await this.prisma.tenant.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, name: true, slug: true },
+    });
+
+    const rows = await Promise.all(
+      tenants.map(async (t) => {
+        const [sub, seats] = await Promise.all([
+          this.prisma.forTenant(t.id, (tx) => tx.subscription.findUnique({ where: { tenantId: t.id } })),
+          this.seatBreakdown(t.id, pricing),
+        ]);
+        return {
+          tenantId: t.id,
+          hospitalName: t.name,
+          slug: t.slug,
+          status: sub?.status ?? 'TRIALING',
+          billingCycle: sub?.billingCycle ?? 'MONTHLY',
+          monthlyGross: seats.monthlyGross,
+          annualGross: seats.annualGross,
+          currentPeriodEnd: sub?.currentPeriodEnd?.toISOString() ?? null,
+          trialEndsAt: sub?.trialEndsAt?.toISOString() ?? null,
+        };
+      }),
+    );
+
+    return status && status !== 'all' ? rows.filter((r) => r.status.toLowerCase() === status) : rows;
+  }
+
+  async listAllSubscriptions(query: { page?: number; status?: string }) {
+    const PAGE_SIZE = 25;
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const filtered = await this.filteredSubscriptionRows(query.status);
+
+    return {
+      page,
+      pageSize: PAGE_SIZE,
+      total: filtered.length,
+      rows: filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    };
+  }
+
+  /**
+   * Every hospital's current subscription matching the status filter, as CSV -
+   * the exact same fields already shown in the Subscriptions table.
+   */
+  async subscriptionsExportCsv(status?: string): Promise<string> {
+    const filtered = await this.filteredSubscriptionRows(status);
+    const header = ['Hospital', 'Status', 'Billing cycle', 'Monthly price (NGN)', 'Annual price (NGN)', 'Renews / trial ends'];
+    const rows = filtered.map((r) => [
+      r.hospitalName,
+      r.status,
+      r.billingCycle,
+      r.monthlyGross,
+      r.annualGross,
+      r.currentPeriodEnd ?? r.trialEndsAt ?? '',
+    ]);
+    return toCsv([header, ...rows]);
+  }
+
+  /**
+   * Invoice-level counts for the Subscriptions screen's stat cards. There is
+   * no refund flow anywhere in the app, so "refunded" is always reported as 0
+   * rather than inventing one.
+   */
+  async subscriptionInvoiceStats() {
+    const tenants = await this.prisma.tenant.findMany({ select: { id: true } });
+    let successful = 0;
+    let failed = 0;
+    let pending = 0;
+    for (const t of tenants) {
+      const counts = await this.prisma.forTenant(t.id, (tx) =>
+        tx.subscriptionInvoice.groupBy({ by: ['status'], where: { tenantId: t.id }, _count: true }),
+      );
+      for (const c of counts) {
+        if (c.status === 'PAID') successful += c._count;
+        else if (c.status === 'FAILED') failed += c._count;
+        else if (c.status === 'PENDING') pending += c._count;
+      }
+    }
+    return { successful, failed, pending, refunded: 0 };
   }
 
   // ── invoices / payment ──

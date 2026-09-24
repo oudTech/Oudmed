@@ -16,6 +16,8 @@ export const subscriptionsApi = {
     api.post<SubscriptionInvoiceDTO>('/subscriptions/checkout/bank-transfer', { billingCycle }).then((r) => r.data),
   verifyCheckout: (reference: string) =>
     api.get<SubscriptionInvoiceDTO>('/subscriptions/checkout/verify', { params: { reference } }).then((r) => r.data),
-  markInvoicePaid: (id: string) =>
-    api.patch<SubscriptionInvoiceDTO>(`/subscriptions/invoices/${id}/mark-paid`).then((r) => r.data),
+  // Confirming a bank-transfer invoice is a platform-operator action, not
+  // something a hospital does to itself - see lib/platform.ts's
+  // `platformApiClient.subscriptions.markInvoicePaid` (different URL, different
+  // guard, a platform bearer token, not this hospital-scoped `api` instance).
 }

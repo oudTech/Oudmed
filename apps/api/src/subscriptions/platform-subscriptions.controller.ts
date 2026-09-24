@@ -1,8 +1,15 @@
-import { Controller, Param, Patch, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { Transform } from 'class-transformer';
+import { IsIn, IsInt, IsOptional, Min } from 'class-validator';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PlatformAuthGuard } from '../platform-auth/platform-auth.guard';
 import { CurrentPlatformUser, PlatformAuthUser } from '../platform-auth/current-platform-user.decorator';
 import { SubscriptionsService } from './subscriptions.service';
+
+class ListSubscriptionsQueryDto {
+  @IsOptional() @IsIn(['all', 'trialing', 'active', 'past_due', 'suspended', 'cancelled']) status?: string;
+  @IsOptional() @Transform(({ value }) => Number(value)) @IsInt() @Min(1) page?: number;
+}
 
 /**
  * The platform-operator side of subscriptions - actions a hospital cannot
@@ -17,6 +24,23 @@ import { SubscriptionsService } from './subscriptions.service';
 @ApiBearerAuth()
 export class PlatformSubscriptionsController {
   constructor(private subscriptions: SubscriptionsService) {}
+
+  @Get()
+  list(@Query() q: ListSubscriptionsQueryDto) {
+    return this.subscriptions.listAllSubscriptions(q);
+  }
+
+  @Get('stats')
+  stats() {
+    return this.subscriptions.subscriptionInvoiceStats();
+  }
+
+  @Get('export.csv')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="subscriptions.csv"')
+  exportCsv(@Query() q: ListSubscriptionsQueryDto) {
+    return this.subscriptions.subscriptionsExportCsv(q.status);
+  }
 
   @Patch(':tenantId/invoices/:invoiceId/mark-paid')
   markInvoicePaid(

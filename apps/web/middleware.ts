@@ -4,8 +4,8 @@ import { subdomainFromHost } from '@/lib/tenant'
 
 const HOME = '/dashboard'
 
-/** Apex domain: only new-clinic sign-up + marketing live here. */
-const APEX_ALLOWED = ['/', '/signup', '/verify-email', '/onboarding', '/legal']
+/** Apex domain: only new-clinic sign-up + marketing + the Super Admin dashboard live here. */
+const APEX_ALLOWED = ['/', '/signup', '/verify-email', '/onboarding', '/legal', '/platform']
 
 /** Tenant subdomain: reachable without a session. */
 const TENANT_PUBLIC = ['/login', '/forgot-password', '/reset-password', '/auth/callback', '/legal']

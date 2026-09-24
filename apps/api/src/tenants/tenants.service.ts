@@ -12,7 +12,10 @@ import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { tenantUrl } from '../common/urls';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 
-const RESERVED_SLUGS = new Set([
+// Exported for reuse by the platform module's direct-hospital-creation path
+// (apps/api/src/platform/platform-tenants.service.ts), which needs the same
+// slug rules a self-serve sign-up gets.
+export const RESERVED_SLUGS = new Set([
   'www', 'app', 'api', 'admin', 'dashboard', 'auth', 'login', 'signup',
   'account', 'billing', 'support', 'help', 'status', 'mail', 'static', 'assets',
   'oudmed', 'onboarding', 'verify-email',
@@ -123,7 +126,7 @@ export class TenantsService {
   }
 }
 
-function slugify(input: string): string {
+export function slugify(input: string): string {
   return input
     .toLowerCase()
     .normalize('NFKD')

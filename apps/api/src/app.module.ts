@@ -27,6 +27,7 @@ import { HomeModule } from './home/home.module';
 import { MeModule } from './me/me.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { PlatformAuthModule } from './platform-auth/platform-auth.module';
+import { PlatformModule } from './platform/platform.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -56,6 +57,7 @@ import { HealthController } from './health/health.controller';
     MeModule,
     SubscriptionsModule,
     PlatformAuthModule,
+    PlatformModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

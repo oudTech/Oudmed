@@ -339,6 +339,29 @@ model PlatformPricing {
   updatedAt             DateTime @updatedAt
 }
 
+/// Platform-wide operational settings (branding, support contact, regional
+/// defaults, maintenance mode) - one row, editable by a platform operator via
+/// Settings > General. Not tenant-scoped, so deliberately absent from rls.sql,
+/// same category as PlatformPricing.
+model PlatformConfig {
+  id              String   @id @default(uuid())
+  platformName    String   @default("OudHealth")
+  supportEmail    String?
+  supportPhone    String?
+  supportHours    String?
+  logoUrl         String?
+  defaultCountry  String   @default("NG")
+  defaultCurrency String   @default("NGN")
+  timeFormat      String   @default("12h")
+  /// When true, every hospital request is rejected (503) - enforced in
+  /// JwtStrategy. Platform-operator routes use a separate strategy and are
+  /// never affected.
+  maintenanceMode Boolean  @default(false)
+  updatedById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
 enum SubscriptionInvoiceStatus {
   PENDING
   PAID

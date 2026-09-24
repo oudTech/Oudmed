@@ -230,14 +230,12 @@ const INVOICE_STATUS_LABEL: Record<string, string> = {
 }
 
 function BillingSection() {
-  const { data: session } = useSession()
   const router = useRouter()
   const params = useSearchParams()
   const toast = useToast()
   const qc = useQueryClient()
   const [cycle, setCycle] = useState<'MONTHLY' | 'ANNUAL'>('MONTHLY')
   const [transferInvoice, setTransferInvoice] = useState<SubscriptionInvoiceDTO | null>(null)
-  const isSuperAdmin = session?.role === 'SUPER_ADMIN'
 
   const q = useQuery({ queryKey: ['subscription-me'], queryFn: subscriptionsApi.getMine })
   const invoices = useQuery({ queryKey: ['subscription-invoices'], queryFn: subscriptionsApi.listInvoices })
@@ -256,11 +254,6 @@ function BillingSection() {
     mutationFn: () => subscriptionsApi.checkoutBankTransfer(cycle),
     onSuccess: (inv) => { setTransferInvoice(inv); invalidate() },
     onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not create the invoice.', 'error'),
-  })
-  const markPaid = useMutation({
-    mutationFn: (id: string) => subscriptionsApi.markInvoicePaid(id),
-    onSuccess: () => { toast('Invoice marked paid.', 'success'); invalidate() },
-    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not confirm payment.', 'error'),
   })
 
   // Returning from Paystack's checkout page: verify now rather than wait for
@@ -396,15 +389,6 @@ function BillingSection() {
                   >
                     {INVOICE_STATUS_LABEL[inv.status] ?? inv.status}
                   </span>
-                  {isSuperAdmin && inv.status === 'PENDING' && inv.paymentMethod === 'BANK_TRANSFER' && (
-                    <button
-                      className="text-xs text-primary hover:underline"
-                      disabled={markPaid.isPending}
-                      onClick={() => markPaid.mutate(inv.id)}
-                    >
-                      Mark paid
-                    </button>
-                  )}
                 </div>
               </li>
             ))}
