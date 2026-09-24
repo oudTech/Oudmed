@@ -22,6 +22,7 @@ import { StorageModule } from './storage/storage.module';
 import { SettingsModule } from './settings/settings.module';
 import { HomeModule } from './home/home.module';
 import { MeModule } from './me/me.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -48,6 +49,7 @@ import { HealthController } from './health/health.controller';
     SettingsModule,
     HomeModule,
     MeModule,
+    SubscriptionsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

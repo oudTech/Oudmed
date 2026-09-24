@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { TokensService } from '../auth/tokens.service';
 import { FilesService } from '../storage/files.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { tenantUrl } from '../common/urls';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 
@@ -24,6 +25,7 @@ export class TenantsService {
     private readonly auth: AuthService,
     private readonly tokens: TokensService,
     private readonly files: FilesService,
+    private readonly subscriptions: SubscriptionsService,
   ) {}
 
   /**
@@ -70,6 +72,7 @@ export class TenantsService {
         },
       });
       await tx.pendingRegistration.delete({ where: { id: pending.id } });
+      await this.subscriptions.startTrial(tx, tenant.id);
       return { tenant, user };
     });
 

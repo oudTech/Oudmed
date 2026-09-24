@@ -12,6 +12,10 @@
 -- the tenant from the subdomain, then looks up the user). Tenant-scoped reads
 -- of User (the HR module) filter by `tenantId` explicitly in the query.
 --
+--   Tenant, PlatformPricing, PlatformSequence, PlatformWebhookEvent
+-- None has a tenantId column - Tenant IS the tenant boundary, and the other
+-- three are global platform state shared across every tenant.
+--
 -- Kept as a single DO block: apply-rls.ts sends the file as one statement.
 
 DO $$
@@ -24,7 +28,7 @@ BEGIN
     'InsuranceClaim','InsuranceClaimLine','ClaimBatch','ClaimRemittance','ClaimRemittanceAllocation',
     'StoredFile','TenantSequence',
     'Visit','Admission','ServiceItem','Invoice','InvoiceLine','Payment',
-    'PrescriptionItem'
+    'PrescriptionItem','Subscription','SubscriptionInvoice'
   ]
   LOOP
     EXECUTE format('ALTER TABLE "%s" ENABLE ROW LEVEL SECURITY;', t);

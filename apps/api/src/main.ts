@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
@@ -6,12 +7,17 @@ import { rootDomain } from './common/urls';
 import { validateEnv } from './common/env.validation';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { initSentry } from './common/sentry';
+import { configurePaystackRawBody } from './common/raw-body';
 
 async function bootstrap() {
   validateEnv();
   initSentry(); // no-op unless SENTRY_DSN is set
 
-  const app = await NestFactory.create(AppModule);
+  // bodyParser: false + configurePaystackRawBody together capture the raw
+  // bytes Paystack's webhook signature is computed over, which Nest's default
+  // body-parser would otherwise discard. See that function's own comment.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false });
+  configurePaystackRawBody(app);
 
   app.setGlobalPrefix('api');
   app.enableShutdownHooks();

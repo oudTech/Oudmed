@@ -51,3 +51,32 @@ export async function nextSequence(
   `;
   return created[0].value;
 }
+
+export type PlatformSequenceKind = 'subscriptionInvoice';
+
+/**
+ * Same race-safe gapless-counter approach as `nextSequence`, for documents
+ * that belong to the platform (e.g. subscription invoice numbers) rather than
+ * to one tenant - there is no `tenantId` dimension to key on.
+ */
+export async function nextPlatformSequence(
+  tx: Prisma.TransactionClient,
+  kind: PlatformSequenceKind,
+): Promise<number> {
+  const bumped = await tx.$queryRaw<{ value: number }[]>`
+    UPDATE "PlatformSequence"
+       SET "value" = "value" + 1, "updatedAt" = now()
+     WHERE "kind" = ${kind}
+    RETURNING "value"
+  `;
+  if (bumped.length) return bumped[0].value;
+
+  const created = await tx.$queryRaw<{ value: number }[]>`
+    INSERT INTO "PlatformSequence" ("kind", "value", "updatedAt")
+    VALUES (${kind}, 1, now())
+    ON CONFLICT ("kind")
+    DO UPDATE SET "value" = "PlatformSequence"."value" + 1, "updatedAt" = now()
+    RETURNING "value"
+  `;
+  return created[0].value;
+}

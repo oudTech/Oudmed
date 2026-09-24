@@ -269,6 +269,116 @@ model Tenant {
   sequences          TenantSequence[]
   invoiceLines       InvoiceLine[]
   prescriptionItems  PrescriptionItem[]
+  subscription       Subscription?
+  subscriptionInvoices SubscriptionInvoice[]
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  SUSPENDED
+  CANCELLED
+}
+
+enum BillingCycle {
+  MONTHLY
+  ANNUAL
+}
+
+/// One row per tenant: trial/billing state. Seat pricing itself is not stored
+/// here - it is computed live from PlatformPricing + the tenant's current
+/// active User count, so a price change applies to every tenant immediately
+/// without touching this table.
+model Subscription {
+  id                 String             @id @default(uuid())
+  tenantId           String             @unique
+  tenant             Tenant             @relation(fields: [tenantId], references: [id])
+  status             SubscriptionStatus @default(TRIALING)
+  billingCycle       BillingCycle       @default(MONTHLY)
+  trialEndsAt        DateTime
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  invoices           SubscriptionInvoice[]
+}
+
+/// Platform-wide pricing config - one row, editable by SUPER_ADMIN (today via
+/// API directly; a Super Admin dashboard screen can later be a plain CRUD form
+/// over this same row, no schema change needed). Not tenant-scoped, so it is
+/// deliberately absent from rls.sql, same as Tenant itself.
+model PlatformPricing {
+  id                    String   @id @default(uuid())
+  currency              String   @default("NGN")
+  adminSeatPriceMonthly Decimal  @db.Decimal(12, 2)
+  otherSeatPriceMonthly Decimal  @db.Decimal(12, 2)
+  annualDiscountPct     Decimal  @db.Decimal(5, 2)
+  vatPct                Decimal  @db.Decimal(5, 2) @default(7.5)
+  /// Printed on subscription invoices once set - empty until OudHealth's TIN is entered.
+  platformTin           String?
+  trialDays             Int
+  updatedById           String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+enum SubscriptionInvoiceStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+enum SubscriptionPaymentMethod {
+  CARD
+  BANK_TRANSFER
+}
+
+/// One bill OudHealth raises against a hospital for one billing period.
+/// Distinct from the hospital's own patient-facing Invoice model - this is
+/// platform revenue, not clinical billing.
+model SubscriptionInvoice {
+  id                String                    @id @default(uuid())
+  tenantId          String
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id])
+  subscriptionId    String
+  subscription      Subscription              @relation(fields: [subscriptionId], references: [id])
+  invoiceNumber     String                    @unique
+  billingCycle      BillingCycle
+  netAmount         Decimal                   @db.Decimal(12, 2)
+  vatAmount         Decimal                   @db.Decimal(12, 2)
+  totalAmount       Decimal                   @db.Decimal(12, 2)
+  currency          String                    @default("NGN")
+  status            SubscriptionInvoiceStatus @default(PENDING)
+  paymentMethod     SubscriptionPaymentMethod
+  paystackReference String?                   @unique
+  paidAt            DateTime?
+  markedPaidById    String?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+}
+
+/// Platform-level, race-safe counters (e.g. subscription invoice numbers) -
+/// the same gapless-counter approach as TenantSequence, but for documents that
+/// belong to the platform rather than to one tenant.
+model PlatformSequence {
+  kind      String   @id
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+/// Raw provider webhook events, kept for idempotency (a webhook delivered
+/// twice must not double-activate a subscription) and auditability. Not
+/// tenant-scoped - a webhook arrives before we necessarily know which tenant
+/// it belongs to.
+model PlatformWebhookEvent {
+  id          String    @id
+  provider    String
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
 }
 
 /// A file in object storage (MinIO / S3). `key` is the object key within `bucket`.

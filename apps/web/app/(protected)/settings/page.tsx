@@ -1,15 +1,27 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import Image from 'next/image'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
-import type { HospitalSettingsDTO } from '@oudhealth/contracts'
+import type { HospitalSettingsDTO, SubscriptionInvoiceDTO } from '@oudhealth/contracts'
 import { Button, Field, Input, Textarea } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
 import { can } from '@/lib/permissions'
 import { settingsApi } from '@/lib/settings'
 import { uploadError } from '@/lib/storage'
+import { subscriptionsApi } from '@/lib/subscriptions'
+import { naira } from '@/lib/billing'
 
 export default function SettingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SettingsPageInner />
+    </Suspense>
+  )
+}
+
+function SettingsPageInner() {
   const { data: session, update } = useSession()
   const allowed = can(session?.role, 'admin:settings')
   const qc = useQueryClient()
@@ -48,6 +60,7 @@ export default function SettingsPage() {
             <ProfileSection s={q.data} onSaved={refresh} />
             <BrandingSection s={q.data} onSaved={refresh} />
             <DocumentsSection s={q.data} onSaved={refresh} />
+            <BillingSection />
           </>
         )}
       </div>
@@ -198,5 +211,206 @@ function DocumentsSection({ s, onSaved }: { s: HospitalSettingsDTO; onSaved: (s:
         </Button>
       </div>
     </Card>
+  )
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  TRIALING: 'Trial',
+  ACTIVE: 'Active',
+  PAST_DUE: 'Payment overdue',
+  SUSPENDED: 'Suspended',
+  CANCELLED: 'Cancelled',
+}
+
+const INVOICE_STATUS_LABEL: Record<string, string> = {
+  PENDING: 'Pending',
+  PAID: 'Paid',
+  FAILED: 'Failed',
+  CANCELLED: 'Cancelled',
+}
+
+function BillingSection() {
+  const { data: session } = useSession()
+  const router = useRouter()
+  const params = useSearchParams()
+  const toast = useToast()
+  const qc = useQueryClient()
+  const [cycle, setCycle] = useState<'MONTHLY' | 'ANNUAL'>('MONTHLY')
+  const [transferInvoice, setTransferInvoice] = useState<SubscriptionInvoiceDTO | null>(null)
+  const isSuperAdmin = session?.role === 'SUPER_ADMIN'
+
+  const q = useQuery({ queryKey: ['subscription-me'], queryFn: subscriptionsApi.getMine })
+  const invoices = useQuery({ queryKey: ['subscription-invoices'], queryFn: subscriptionsApi.listInvoices })
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['subscription-me'] })
+    qc.invalidateQueries({ queryKey: ['subscription-invoices'] })
+  }
+
+  const card = useMutation({
+    mutationFn: () => subscriptionsApi.checkoutCard(cycle),
+    onSuccess: (r) => { window.location.href = r.authorizationUrl },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not start checkout.', 'error'),
+  })
+  const bankTransfer = useMutation({
+    mutationFn: () => subscriptionsApi.checkoutBankTransfer(cycle),
+    onSuccess: (inv) => { setTransferInvoice(inv); invalidate() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not create the invoice.', 'error'),
+  })
+  const markPaid = useMutation({
+    mutationFn: (id: string) => subscriptionsApi.markInvoicePaid(id),
+    onSuccess: () => { toast('Invoice marked paid.', 'success'); invalidate() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not confirm payment.', 'error'),
+  })
+
+  // Returning from Paystack's checkout page: verify now rather than wait for
+  // the webhook, so the customer isn't stuck looking at "pending".
+  useEffect(() => {
+    const reference = params.get('reference')
+    if (params.get('checkout') === 'return' && reference) {
+      subscriptionsApi
+        .verifyCheckout(reference)
+        .then((inv) => {
+          toast(inv.status === 'PAID' ? 'Payment received - thank you!' : 'Payment is still processing.', inv.status === 'PAID' ? 'success' : 'info')
+          invalidate()
+        })
+        .catch(() => toast('Could not confirm payment status yet.', 'error'))
+        .finally(() => router.replace('/settings'))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (!q.data) {
+    return (
+      <Card title="Plan & billing" subtitle="Your seats and what they cost.">
+        <p className="text-sm text-gray-400">Loading…</p>
+      </Card>
+    )
+  }
+  const s = q.data
+  const net = cycle === 'MONTHLY' ? s.seats.monthlyNet : s.seats.annualNet
+  const vat = cycle === 'MONTHLY' ? s.seats.monthlyVat : s.seats.annualVat
+  const gross = cycle === 'MONTHLY' ? s.seats.monthlyGross : s.seats.annualGross
+  const totalSeats = s.seats.adminSeats + s.seats.otherSeats
+
+  return (
+    <>
+      <Card title="Plan & billing" subtitle="Your seats and what they cost.">
+        {s.status === 'TRIALING' && s.trialDaysRemaining !== null && (
+          <div className="rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-sm text-blue-700 mb-4">
+            {s.trialDaysRemaining === 0
+              ? 'Your trial ends today.'
+              : `${s.trialDaysRemaining} day${s.trialDaysRemaining === 1 ? '' : 's'} left in your trial.`}
+          </div>
+        )}
+        {s.status !== 'TRIALING' && (
+          <div className="mb-4">
+            <span className="text-xs font-medium rounded-full px-2 py-0.5 bg-gray-100 text-gray-600">
+              {STATUS_LABEL[s.status] ?? s.status}
+            </span>
+          </div>
+        )}
+
+        <div className="inline-flex items-center rounded-lg border border-gray-200 p-0.5 mb-4">
+          {(['MONTHLY', 'ANNUAL'] as const).map((c) => (
+            <button
+              key={c}
+              onClick={() => setCycle(c)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                cycle === c ? 'bg-primary text-white' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {c === 'MONTHLY' ? 'Monthly' : `Annually (save ${Number(s.pricing.annualDiscountPct)}%)`}
+            </button>
+          ))}
+        </div>
+
+        <div className="border border-gray-100 rounded-xl divide-y divide-gray-100 text-sm">
+          <div className="flex items-center justify-between px-3 py-2">
+            <span className="text-gray-500">Admin seats ({s.seats.adminSeats})</span>
+            <span>{naira(s.pricing.adminSeatPriceMonthly)} / mo each</span>
+          </div>
+          <div className="flex items-center justify-between px-3 py-2">
+            <span className="text-gray-500">Other staff seats ({s.seats.otherSeats})</span>
+            <span>{naira(s.pricing.otherSeatPriceMonthly)} / mo each</span>
+          </div>
+          <div className="flex items-center justify-between px-3 py-2">
+            <span>{totalSeats} seat{totalSeats === 1 ? '' : 's'} - subtotal</span>
+            <span>{naira(net)}</span>
+          </div>
+          <div className="flex items-center justify-between px-3 py-2 text-gray-500">
+            <span>VAT ({Number(s.pricing.vatPct)}%)</span>
+            <span>{naira(vat)}</span>
+          </div>
+          <div className="flex items-center justify-between px-3 py-2 font-semibold text-gray-900">
+            <span>Total</span>
+            <span>{naira(gross)}{cycle === 'MONTHLY' ? ' / month' : ' / year'}</span>
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 mt-2">
+          Priced by active staff account, not role - deactivating a staff member frees that seat.
+        </p>
+
+        <div className="flex items-center gap-2 mt-4">
+          <Button loading={card.isPending} onClick={() => card.mutate()}>Pay with card</Button>
+          <Button variant="secondary" loading={bankTransfer.isPending} onClick={() => bankTransfer.mutate()}>
+            Pay by bank transfer
+          </Button>
+        </div>
+      </Card>
+
+      {transferInvoice && (
+        <Card title="Bank transfer details">
+          <p className="text-sm text-gray-600">
+            Transfer <span className="font-semibold">{naira(transferInvoice.totalAmount)}</span> and reference{' '}
+            <span className="font-mono font-semibold">{transferInvoice.invoiceNumber}</span> so we can match it to
+            this invoice. Our account details will be sent to you separately - once we receive it, an admin marks
+            this invoice paid and your plan activates.
+          </p>
+          <div className="mt-3 flex justify-end">
+            <Button variant="secondary" onClick={() => setTransferInvoice(null)}>Close</Button>
+          </div>
+        </Card>
+      )}
+
+      <Card title="Invoices">
+        {!invoices.data?.length ? (
+          <p className="text-sm text-gray-400">No invoices yet.</p>
+        ) : (
+          <ul className="border border-gray-100 rounded-xl divide-y divide-gray-100 text-sm">
+            {invoices.data.map((inv) => (
+              <li key={inv.id} className="flex items-center justify-between px-3 py-2">
+                <div>
+                  <p className="font-medium text-gray-900">{inv.invoiceNumber}</p>
+                  <p className="text-xs text-gray-400">
+                    {new Date(inv.createdAt).toLocaleDateString('en-GB')} · {inv.billingCycle === 'MONTHLY' ? 'Monthly' : 'Annual'} ·{' '}
+                    {inv.paymentMethod === 'CARD' ? 'Card' : 'Bank transfer'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-gray-700">{naira(inv.totalAmount)}</span>
+                  <span
+                    className={`text-xs font-medium rounded-full px-2 py-0.5 ${
+                      inv.status === 'PAID' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    {INVOICE_STATUS_LABEL[inv.status] ?? inv.status}
+                  </span>
+                  {isSuperAdmin && inv.status === 'PENDING' && inv.paymentMethod === 'BANK_TRANSFER' && (
+                    <button
+                      className="text-xs text-primary hover:underline"
+                      disabled={markPaid.isPending}
+                      onClick={() => markPaid.mutate(inv.id)}
+                    >
+                      Mark paid
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </>
   )
 }

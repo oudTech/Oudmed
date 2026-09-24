@@ -77,6 +77,8 @@ export function actorFor(tenantId: string, userId: string, role = 'HOSPITAL_ADMI
 /** Delete every row a fixture might have created for one tenant, children first. */
 export async function destroyTenant(tenantId: string) {
   const p = ownerPrisma;
+  await p.subscriptionInvoice.deleteMany({ where: { tenantId } });
+  await p.subscription.deleteMany({ where: { tenantId } });
   await p.claimRemittanceAllocation.deleteMany({ where: { tenantId } });
   await p.claimRemittance.deleteMany({ where: { tenantId } });
   await p.insuranceClaimLine.deleteMany({ where: { tenantId } });
