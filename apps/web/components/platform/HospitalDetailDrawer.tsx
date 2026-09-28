@@ -82,7 +82,7 @@ export function HospitalDetailDrawer({
             )}
           </div>
 
-          <dl className="grid grid-cols-2 gap-4 text-sm">
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             <div><dt className="text-gray-400">Contact email</dt><dd className="text-gray-900">{t.contactEmail ?? '-'}</dd></div>
             <div><dt className="text-gray-400">Location</dt><dd className="text-gray-900">{t.address ?? '-'}</dd></div>
             <div><dt className="text-gray-400">Users</dt><dd className="text-gray-900 tabular-nums">{t.users}</dd></div>

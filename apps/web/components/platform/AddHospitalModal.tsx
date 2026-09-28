@@ -75,7 +75,7 @@ export function AddHospitalModal({
         <Field label="Location">
           <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="City, state" />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Admin full name" required>
             <Input value={adminFullName} onChange={(e) => setAdminFullName(e.target.value)} placeholder="Full name" />
           </Field>

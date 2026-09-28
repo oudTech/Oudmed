@@ -135,11 +135,11 @@ export function PatientPicker({
         </>
       ) : (
         <div className="border border-gray-100 rounded-lg p-3 space-y-3 bg-gray-50/50">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Input placeholder="First name" value={form.firstName} onChange={set('firstName')} autoFocus />
             <Input placeholder="Last name" value={form.lastName} onChange={set('lastName')} />
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Input placeholder="Phone" value={form.phone} onChange={set('phone')} />
             <Select value={form.gender} onChange={set('gender')}>
               <option value="">Gender</option>
@@ -156,7 +156,7 @@ export function PatientPicker({
             ))}
           </Select>
           {form.payerType === 'HMO' && (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <Input placeholder="HMO name" value={form.hmoName} onChange={set('hmoName')} />
               <Input placeholder="HMO / policy number" value={form.hmoNumber} onChange={set('hmoNumber')} />
             </div>

@@ -126,7 +126,7 @@ function EditForm({ s, isSelf, onClose }: { s: StaffDetailDTO; isSelf: boolean; 
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="First name"><Input value={f.firstName} onChange={(e) => set('firstName', e.target.value)} /></Field>
         <Field label="Last name"><Input value={f.lastName} onChange={(e) => set('lastName', e.target.value)} /></Field>
         <Field label="Email"><Input value={s.email} disabled /></Field>

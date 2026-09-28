@@ -77,7 +77,7 @@ export function ClaimDetailDrawer({
             <span className="text-sm text-gray-500">{claim.providerName}</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
             <Info label="Patient" value={claim.patient?.name ?? claim.memberName} />
             <Info label="Member number" value={claim.memberNumber || '-'} />
             <Info label="Authorisation" value={claim.authCode || '-'} />

@@ -80,7 +80,7 @@ function Widget({ w }: { w: HomeWidgetDTO }) {
       </div>
 
       {(w.kind === 'stat' || w.kind === 'split') && (
-        <div className={`grid gap-4 ${w.kind === 'split' ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
+        <div className={`grid gap-4 ${w.kind === 'split' ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
           {(w.stats ?? []).map((s, i) => {
             const t = TONE[s.tone ?? 'default']
             return (

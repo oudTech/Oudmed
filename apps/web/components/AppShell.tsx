@@ -8,6 +8,7 @@ import Image from 'next/image'
 import { can, type Action } from '@/lib/permissions'
 import { OnboardingProvider } from '@/components/onboarding'
 import { subscriptionsApi } from '@/lib/subscriptions'
+import { useMediaQuery } from '@/lib/useMediaQuery'
 
 /* ─────────────────────────── icons ─────────────────────────── */
 const INACTIVE = '#69768F'
@@ -183,16 +184,33 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const tenant = (session as any)?.tenant
   const primary = tenant?.primaryColor ?? '#3366E3'
   const [collapsed, setCollapsed] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const isLgUp = useMediaQuery('(min-width: 1024px)')
+  // The desktop icon-only collapse is a separate feature from the mobile
+  // drawer - a mobile visitor who opens the drawer should always see full
+  // labels, regardless of whatever `collapsed` was left at on desktop.
+  const showLabels = isLgUp ? !collapsed : true
   const canSeeBilling = can(session?.role, 'admin:settings')
 
   return (
     <OnboardingProvider>
       <div className="h-screen flex overflow-hidden font-hanken bg-gray-50">
 
+      {/* ── Mobile backdrop ── */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/30 z-30 lg:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* ── Sidebar ── */}
       <aside
         data-tour="sidebar"
-        className={`${collapsed ? 'w-[64px]' : 'w-[208px]'} flex flex-col flex-shrink-0 transition-all duration-200`}
+        className={`${collapsed ? 'lg:w-[64px]' : 'lg:w-[208px]'} w-[208px] flex flex-col flex-shrink-0 transition-all duration-200
+          fixed inset-y-0 left-0 z-40 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
+          lg:static lg:z-auto lg:translate-x-0`}
         style={{ backgroundColor: '#F5F7FB', borderRight: '1px solid #D6DEE8' }}
       >
 
@@ -215,7 +233,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 {(tenant?.name ?? 'O').charAt(0).toUpperCase()}
               </div>
             )}
-            {!collapsed && (
+            {showLabels && (
               <span className="text-sm font-bold truncate" style={{ color: primary }}>
                 {tenant?.name ?? 'Oudmed'}
               </span>
@@ -223,12 +241,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <button
             className="flex-shrink-0 hover:opacity-70 transition"
-            title="Toggle sidebar"
-            onClick={() => setCollapsed((c) => !c)}
+            title={isLgUp ? 'Toggle sidebar' : 'Close menu'}
+            onClick={() => (isLgUp ? setCollapsed((c) => !c) : setMobileOpen(false))}
           >
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <path d="M10.2611 14.1714C10.5616 14.532 11.0976 14.5807 11.4582 14.2802C11.8188 13.9797 11.8676 13.4437 11.567 13.083L10.914 13.6272L10.2611 14.1714ZM7.59946 9.64969L6.94647 9.10554C6.68379 9.42076 6.68379 9.87863 6.94647 10.1939L7.59946 9.64969ZM11.567 6.21635C11.8676 5.85571 11.8188 5.31973 11.4582 5.0192C11.0976 4.71867 10.5616 4.7674 10.2611 5.12803L10.914 5.67219L11.567 6.21635ZM10.914 13.6272L11.567 13.083L8.25244 9.10554L7.59946 9.64969L6.94647 10.1939L10.2611 14.1714L10.914 13.6272ZM7.59946 9.64969L8.25244 10.1939L11.567 6.21635L10.914 5.67219L10.2611 5.12803L6.94647 9.10554L7.59946 9.64969ZM9.85001 0.850098V1.7001C14.3511 1.7001 18 5.34898 18 9.8501H18.85H19.7C19.7 4.41009 15.29 9.7394e-05 9.85001 9.76324e-05V0.850098ZM18.85 9.8501H18C18 14.3512 14.3511 18.0001 9.85001 18.0001V18.8501V19.7001C15.29 19.7001 19.7 15.2901 19.7 9.8501H18.85ZM9.85001 18.8501V18.0001C5.34889 18.0001 1.70001 14.3512 1.70001 9.8501H0.850006H6.07967e-06C6.31809e-06 15.2901 4.41 19.7001 9.85001 19.7001V18.8501ZM0.850006 9.8501H1.70001C1.70001 5.34898 5.34888 1.7001 9.85001 1.7001V0.850098V9.76324e-05C4.41 9.78708e-05 5.84126e-06 4.41009 6.07967e-06 9.8501H0.850006Z" fill="#69768F"/>
-            </svg>
+            {isLgUp ? (
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M10.2611 14.1714C10.5616 14.532 11.0976 14.5807 11.4582 14.2802C11.8188 13.9797 11.8676 13.4437 11.567 13.083L10.914 13.6272L10.2611 14.1714ZM7.59946 9.64969L6.94647 9.10554C6.68379 9.42076 6.68379 9.87863 6.94647 10.1939L7.59946 9.64969ZM11.567 6.21635C11.8676 5.85571 11.8188 5.31973 11.4582 5.0192C11.0976 4.71867 10.5616 4.7674 10.2611 5.12803L10.914 5.67219L11.567 6.21635ZM10.914 13.6272L11.567 13.083L8.25244 9.10554L7.59946 9.64969L6.94647 10.1939L10.2611 14.1714L10.914 13.6272ZM7.59946 9.64969L8.25244 10.1939L11.567 6.21635L10.914 5.67219L10.2611 5.12803L6.94647 9.10554L7.59946 9.64969ZM9.85001 0.850098V1.7001C14.3511 1.7001 18 5.34898 18 9.8501H18.85H19.7C19.7 4.41009 15.29 9.7394e-05 9.85001 9.76324e-05V0.850098ZM18.85 9.8501H18C18 14.3512 14.3511 18.0001 9.85001 18.0001V18.8501V19.7001C15.29 19.7001 19.7 15.2901 19.7 9.8501H18.85ZM9.85001 18.8501V18.0001C5.34889 18.0001 1.70001 14.3512 1.70001 9.8501H0.850006H6.07967e-06C6.31809e-06 15.2901 4.41 19.7001 9.85001 19.7001V18.8501ZM0.850006 9.8501H1.70001C1.70001 5.34898 5.34888 1.7001 9.85001 1.7001V0.850098V9.76324e-05C4.41 9.78708e-05 5.84126e-06 4.41009 6.07967e-06 9.8501H0.850006Z" fill="#69768F"/>
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#69768F" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            )}
           </button>
         </div>
 
@@ -240,12 +264,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <Link
                 key={href}
                 href={href}
+                onClick={() => setMobileOpen(false)}
                 data-tour={`nav-${href.slice(1).replace(/\//g, '-')}`}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${active ? 'bg-white shadow-sm' : 'hover:bg-black/5'}`}
                 style={{ color: active ? '#111827' : INACTIVE }}
               >
                 <Icon color={active ? primary : INACTIVE} />
-                {!collapsed && (
+                {showLabels && (
                   <span className={active ? 'font-semibold' : 'font-medium'}>{label}</span>
                 )}
               </Link>
@@ -261,12 +286,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <Link
                 key={href}
                 href={href}
+                onClick={() => setMobileOpen(false)}
                 data-tour={`nav-${href.slice(1).replace(/\//g, '-')}`}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${active ? 'bg-white shadow-sm' : 'hover:bg-black/5'}`}
                 style={{ color: active ? '#111827' : INACTIVE }}
               >
                 <Icon color={active ? primary : INACTIVE} />
-                {!collapsed && (
+                {showLabels && (
                   <span className={active ? 'font-semibold' : 'font-medium'}>{label}</span>
                 )}
               </Link>
@@ -277,6 +303,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* ── Main content ── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Mobile-only top bar - the sidebar is off-canvas below lg, so this is the only way to open it. */}
+        <div className="lg:hidden flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+          <button
+            className="p-1 -ml-1 flex-shrink-0"
+            title="Open menu"
+            aria-label="Open menu"
+            onClick={() => setMobileOpen(true)}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#111827" strokeWidth="2" strokeLinecap="round">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <span className="text-sm font-bold truncate" style={{ color: primary }}>
+            {tenant?.name ?? 'Oudmed'}
+          </span>
+        </div>
         <SubscriptionBanner canSeeIt={canSeeBilling} />
         {children}
       </div>

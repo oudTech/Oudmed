@@ -105,7 +105,7 @@ function NewBatchModal({ onClose, onCreated }: { onClose: () => void; onCreated:
     <Modal open onClose={onClose} title="New batch" width={520} align="center">
       <div className="space-y-3">
         <Field label="Provider" required><ProviderSelect value={providerId} onChange={setProviderId} /></Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Period from"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
           <Field label="Period to"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
         </div>

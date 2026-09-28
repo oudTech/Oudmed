@@ -52,7 +52,7 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
   return (
     <Modal open={open} onClose={onClose} title="Add user" width={620} align="center">
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="First name" required><Input value={f.firstName} onChange={(e) => set('firstName', e.target.value)} placeholder="Joe" /></Field>
           <Field label="Last name" required><Input value={f.lastName} onChange={(e) => set('lastName', e.target.value)} placeholder="Doe" /></Field>
           <Field label="Email" required><Input type="email" value={f.email} onChange={(e) => set('email', e.target.value)} placeholder="joe@example.com" /></Field>
@@ -85,7 +85,7 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
 
         <Field label="Comments"><Textarea rows={2} value={f.notes} onChange={(e) => set('notes', e.target.value)} /></Field>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Password" required><Input type="password" value={f.password} onChange={(e) => set('password', e.target.value)} placeholder="At least 8 characters" /></Field>
           <Field label="Confirm password" required><Input type="password" value={f.confirm} onChange={(e) => set('confirm', e.target.value)} /></Field>
         </div>

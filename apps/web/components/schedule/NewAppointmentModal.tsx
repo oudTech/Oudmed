@@ -97,7 +97,7 @@ export function NewAppointmentModal({
       <div className="space-y-4">
         <PatientPicker value={patient} onChange={setPatient} />
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Doctor">
             <Select value={doctorId} onChange={(e) => setDoctorId(e.target.value)}>
               <option value="">Any / unassigned</option>
@@ -121,7 +121,7 @@ export function NewAppointmentModal({
           </Field>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Starts" required>
             <Input
               type="datetime-local"

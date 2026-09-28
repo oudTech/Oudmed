@@ -49,7 +49,7 @@ export function AdminAccountTab() {
     <div className="max-w-2xl space-y-6">
       <div className="bg-white border border-gray-100 rounded-xl p-5 space-y-4">
         <h2 className="text-sm font-semibold text-gray-900">Your profile</h2>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Full name">
             <Input value={fullName} onChange={(e) => setFullName(e.target.value)} />
           </Field>
@@ -70,7 +70,7 @@ export function AdminAccountTab() {
 
       <div className="bg-white border border-gray-100 rounded-xl p-5 space-y-4">
         <h2 className="text-sm font-semibold text-gray-900">Change password</h2>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Current password" required>
             <Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
           </Field>

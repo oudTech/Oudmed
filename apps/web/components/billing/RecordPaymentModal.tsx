@@ -112,7 +112,7 @@ export function RecordPaymentModal({
             )}
 
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-1">Payment method</p>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {METHODS.map((mm) => (
                 <button
                   key={mm.value}

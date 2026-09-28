@@ -65,7 +65,7 @@ export function RecordRemittanceModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal open onClose={onClose} title="Record remittance" width={820} align="center">
       <div className="space-y-4">
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Field label="Provider" required><ProviderSelect value={providerId} onChange={setProviderId} /></Field>
           <Field label="Amount received" required>
             <Input type="number" value={receivedAmount} onChange={(e) => setReceivedAmount(e.target.value)} placeholder="0" />

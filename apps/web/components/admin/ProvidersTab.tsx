@@ -163,7 +163,7 @@ function ProviderModal({
   return (
     <Modal open onClose={onClose} title={row ? 'Edit provider' : 'Add provider'} width={560} align="center">
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Name" required>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Avon HMO" />
           </Field>

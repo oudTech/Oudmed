@@ -63,7 +63,7 @@ export function AddDrugModal({ open, onClose }: { open: boolean; onClose: () => 
   return (
     <Modal open={open} onClose={onClose} title="Add drug" width={620} align="center">
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="SKU">
             <Input value={d.sku} onChange={(e) => set('sku', e.target.value)} placeholder="Auto-generated if blank" />
           </Field>
@@ -74,7 +74,7 @@ export function AddDrugModal({ open, onClose }: { open: boolean; onClose: () => 
         <Field label="Item name" required>
           <Input value={d.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Paracetamol" />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Generic name">
             <Input value={d.genericName} onChange={(e) => set('genericName', e.target.value)} placeholder="INN" />
           </Field>
@@ -105,7 +105,7 @@ export function AddDrugModal({ open, onClose }: { open: boolean; onClose: () => 
 
         <div className="rounded-xl border border-gray-100 p-4">
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Opening stock (optional)</p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Field label="Quantity">
               <Input type="number" value={d.openingQty} onChange={(e) => set('openingQty', e.target.value)} />
             </Field>

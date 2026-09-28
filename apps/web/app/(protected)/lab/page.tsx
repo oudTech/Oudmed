@@ -184,7 +184,7 @@ function ResultModal({ order, open, onClose }: { order: Order | null; open: bool
             <span className="font-medium text-gray-700">Clinical details: </span>{order.clinicalNote}
           </p>
         )}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Result value" required>
             <Input value={f.resultValue} onChange={(e) => setF({ ...f, resultValue: e.target.value })} placeholder="e.g. 10.4 or Positive" />
           </Field>

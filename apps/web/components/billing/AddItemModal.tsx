@@ -106,7 +106,7 @@ export function AddItemModal({
           </Field>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Price (₦)" required>
             <Input type="number" value={price} onChange={(e) => setPrice(e.target.value)} />
           </Field>

@@ -14,7 +14,7 @@ export function ChooseActionModal({
 }) {
   return (
     <Modal open={open} onClose={onClose} title="Choose an action" width={620} align="center">
-      <div className="grid grid-cols-2 gap-4 pt-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
         <ActionCard
           onClick={onAppointment}
           title="Outpatient visit"

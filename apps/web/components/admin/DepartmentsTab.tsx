@@ -141,7 +141,7 @@ function DepartmentModal({
         <Field label="Name" required>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Physiotherapy" />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Code"><Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. PHYSIO" /></Field>
           <Field label="Phone"><Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0803..." /></Field>
         </div>

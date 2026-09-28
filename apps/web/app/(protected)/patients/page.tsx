@@ -134,7 +134,7 @@ export default function PatientsPage() {
         </div>
 
         {/* table */}
-        <div className="border border-gray-100 rounded-xl overflow-hidden">
+        <div className="border border-gray-100 rounded-xl overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500">
               <tr>

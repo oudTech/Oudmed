@@ -51,7 +51,7 @@ export function GenerateClaimsModal({ open, onClose }: { open: boolean; onClose:
   return (
     <Modal open={open} onClose={onClose} title="Generate claims" width={720} align="center">
       <div className="space-y-4">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Provider"><ProviderSelect value={providerId} onChange={setProviderId} includeAll /></Field>
           <Field label="From"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
           <Field label="To"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>

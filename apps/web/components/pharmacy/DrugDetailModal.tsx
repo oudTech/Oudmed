@@ -114,7 +114,7 @@ function EditForm({ drug, canManage, onClose }: { drug: DrugDTO; canManage: bool
 
   return (
     <div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="SKU"><Input value={f.sku} onChange={(e) => set('sku', e.target.value)} disabled={!canManage} /></Field>
         <Field label="Reorder level"><Input type="number" value={f.reorderLevel} onChange={(e) => set('reorderLevel', e.target.value)} disabled={!canManage} /></Field>
         <Field label="Item name"><Input value={f.name} onChange={(e) => set('name', e.target.value)} disabled={!canManage} /></Field>
@@ -212,7 +212,7 @@ function StockActions({ drug }: { drug: DrugDTO }) {
       </div>
 
       {mode === 'receive' && (
-        <div className="rounded-xl border border-gray-100 p-4 mt-3 grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-gray-100 p-4 mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Quantity"><Input type="number" value={rec.quantity} onChange={(e) => setRec({ ...rec, quantity: e.target.value })} /></Field>
           <Field label="Expiry date"><Input type="date" value={rec.expiryDate} onChange={(e) => setRec({ ...rec, expiryDate: e.target.value })} /></Field>
           <Field label="Batch no."><Input value={rec.batchNumber} onChange={(e) => setRec({ ...rec, batchNumber: e.target.value })} /></Field>
@@ -226,7 +226,7 @@ function StockActions({ drug }: { drug: DrugDTO }) {
       )}
 
       {mode === 'adjust' && (
-        <div className="rounded-xl border border-gray-100 p-4 mt-3 grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-gray-100 p-4 mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Change (+ / -)"><Input type="number" value={adj.delta} onChange={(e) => setAdj({ ...adj, delta: e.target.value })} placeholder="e.g. -5" /></Field>
           <div className="col-span-2">
             <Field label="Reason"><Input value={adj.reason} onChange={(e) => setAdj({ ...adj, reason: e.target.value })} placeholder="Damaged / miscount / expired" /></Field>
@@ -295,7 +295,7 @@ function UsageStats({ drug }: { drug: DrugDTO }) {
         </select>
       </div>
       <UsageChart points={points} unit={drug.unitLabel ?? 'units'} />
-      <div className="grid grid-cols-2 gap-3 mt-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
         <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm">
           <span className="text-gray-500">Total quantity </span>
           <span className="font-semibold text-gray-900">{totalQty}</span>

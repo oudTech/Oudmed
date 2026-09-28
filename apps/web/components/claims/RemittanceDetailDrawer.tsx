@@ -52,7 +52,7 @@ export function RemittanceDetailDrawer({
               Reversed on {dt(r.reversedAt)}{r.reversalReason ? ` · ${r.reversalReason}` : ''}
             </p>
           )}
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
             <Info label="Provider" value={r.providerName} />
             <Info label="Received" value={dt(r.receivedAt)} />
             <Info label="Amount received" value={naira(r.receivedAmount)} />

@@ -277,7 +277,7 @@ function NewWardModal({ open, onClose }: { open: boolean; onClose: () => void })
         <Field label="Ward name" required>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Surgical Ward B" autoFocus />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Type">
             <Select value={wardType} onChange={(e) => setWardType(e.target.value)}>
               {WARD_TYPES.map((w) => (

@@ -1,5 +1,5 @@
 'use client'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
@@ -82,6 +82,7 @@ export default function PlatformShell({
 
   const { data: session } = useSession()
   const pathname = usePathname()
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   useEffect(() => {
     setPlatformAuthToken(session?.platformToken ?? initialToken)
@@ -89,12 +90,32 @@ export default function PlatformShell({
 
   return (
     <div className="h-screen flex overflow-hidden font-hanken bg-gray-50">
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/30 z-30 lg:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <aside
-        className="w-[208px] flex flex-col flex-shrink-0"
+        className={`w-[208px] flex flex-col flex-shrink-0 transition-transform duration-200
+          fixed inset-y-0 left-0 z-40 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
+          lg:static lg:z-auto lg:translate-x-0`}
         style={{ backgroundColor: '#F5F7FB', borderRight: '1px solid #D6DEE8' }}
       >
-        <div className="h-16 flex items-center px-5 flex-shrink-0">
+        <div className="h-16 flex items-center justify-between px-5 flex-shrink-0">
           <span className="text-lg font-bold text-primary">Oudmed</span>
+          <button
+            className="lg:hidden text-gray-500 hover:text-gray-700"
+            title="Close menu"
+            aria-label="Close menu"
+            onClick={() => setMobileOpen(false)}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
         </div>
         <nav className="flex-1 px-3 space-y-1">
           {NAV.map((item) => {
@@ -103,6 +124,7 @@ export default function PlatformShell({
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={() => setMobileOpen(false)}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
                   active ? 'bg-white shadow-sm' : 'hover:bg-black/5'
                 }`}
@@ -129,6 +151,19 @@ export default function PlatformShell({
         </div>
       </aside>
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="lg:hidden flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+          <button
+            className="p-1 -ml-1 flex-shrink-0"
+            title="Open menu"
+            aria-label="Open menu"
+            onClick={() => setMobileOpen(true)}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#111827" strokeWidth="2" strokeLinecap="round">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <span className="text-sm font-bold text-primary">Oudmed</span>
+        </div>
         <div className="flex-1 overflow-y-auto">{children}</div>
       </div>
     </div>

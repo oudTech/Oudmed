@@ -57,7 +57,7 @@ export function PricingSettingsTab() {
         <p className="text-xs text-gray-400">
           Applies to every hospital's next billing cycle - current periods are not retroactively changed.
         </p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Admin seat (₦/month)">
             <Input type="number" min={0} value={form.adminSeatPriceMonthly} onChange={(e) => setForm((f) => ({ ...f, adminSeatPriceMonthly: e.target.value }))} />
           </Field>

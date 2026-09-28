@@ -63,7 +63,7 @@ export function ComplaintDetailModal({
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Complaint</p>
           <p className="text-sm text-gray-900">{complaint.description}</p>
         </div>
-        <div className="grid grid-cols-2 gap-4 text-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           <div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Onset</p>
             <p className="text-gray-800">{complaint.onsetNote || '-'}</p>
@@ -114,7 +114,7 @@ export function AddComplaintModal({ patientId, open, onClose }: { patientId: str
         <Field label="Complaint" required>
           <Textarea rows={2} value={d.description} onChange={(e) => setD({ ...d, description: e.target.value })} placeholder="Presenting complaint" />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Severity">
             <Select value={d.severity} onChange={(e) => setD({ ...d, severity: e.target.value })}>
               <option value="">-</option><option>Mild</option><option>Moderate</option><option>Severe</option>
@@ -147,7 +147,7 @@ export function AddDiagnosisModal({ patientId, visitId, open, onClose }: { patie
   return (
     <Modal open={open} onClose={onClose} title="Add diagnosis" width={480} align="center">
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Attendance">
             <Select value={d.attendanceType} onChange={(e) => setD({ ...d, attendanceType: e.target.value })}>
               {ATTENDANCE_TYPES.map((a) => <option key={a}>{a}</option>)}
@@ -200,7 +200,7 @@ export function AddVitalsModal({ patientId, visitId, open, onClose }: { patientI
   const num = (v?: string) => (v ? Number(v) : undefined)
   return (
     <Modal open={open} onClose={onClose} title="Record vital signs" width={560} align="center">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Field label="Temp (°C)"><Input type="number" step="0.1" value={d.temperatureC ?? ''} onChange={s('temperatureC')} /></Field>
         <Field label="Pulse (bpm)"><Input type="number" value={d.pulseBpm ?? ''} onChange={s('pulseBpm')} /></Field>
         <Field label="Resp rate"><Input type="number" value={d.respiratoryRate ?? ''} onChange={s('respiratoryRate')} /></Field>
@@ -388,7 +388,7 @@ export function AddPrescriptionModal({ patientId, visitId, open, onClose }: { pa
               }
             />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Route">
               <Select value={draft.route} onChange={(e) => set('route', e.target.value)}>
                 {DRUG_ROUTES.map((r) => <option key={r}>{r}</option>)}

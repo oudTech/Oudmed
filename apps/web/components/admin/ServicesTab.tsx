@@ -155,7 +155,7 @@ function ServiceModal({
         <Field label="Name" required>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Electrolytes / Urea / Creatinine" />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Service code"><Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. SVC-013" /></Field>
           <Field label="Category">
             <Select value={category} onChange={(e) => setCategory(e.target.value)}>

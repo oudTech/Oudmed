@@ -58,7 +58,7 @@ export function GeneralSettingsTab() {
       <div className="bg-white border border-gray-100 rounded-xl p-5 space-y-4">
         <h2 className="text-sm font-semibold text-gray-900">Platform configuration</h2>
         <p className="text-xs text-gray-400">How the platform is presented to hospitals and their staff.</p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Platform name">
             <Input value={form.platformName} onChange={(e) => setForm((f) => ({ ...f, platformName: e.target.value }))} />
           </Field>
@@ -81,7 +81,7 @@ export function GeneralSettingsTab() {
       <div className="bg-white border border-gray-100 rounded-xl p-5 space-y-4">
         <h2 className="text-sm font-semibold text-gray-900">Regional defaults</h2>
         <p className="text-xs text-gray-400">Applied to new hospitals only. Existing hospitals keep their own preferences.</p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Default country">
             <Input
               value={form.defaultCountry}

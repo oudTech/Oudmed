@@ -65,7 +65,7 @@ export function QuickAddModal({ open, onClose }: { open: boolean; onClose: () =>
         Creates the record and a patient number now. Complete the full profile later.
       </p>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="First name" required>
             <Input value={f.firstName} onChange={set('firstName')} autoFocus />
           </Field>
@@ -73,7 +73,7 @@ export function QuickAddModal({ open, onClose }: { open: boolean; onClose: () =>
             <Input value={f.lastName} onChange={set('lastName')} />
           </Field>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Gender">
             <Select value={f.gender} onChange={set('gender')}>
               <option value="">Select</option>
@@ -99,7 +99,7 @@ export function QuickAddModal({ open, onClose }: { open: boolean; onClose: () =>
           </Select>
         </Field>
         {f.payerType === 'HMO' && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input placeholder="HMO name" value={f.hmoName} onChange={set('hmoName')} />
             <Input placeholder="HMO number" value={f.hmoNumber} onChange={set('hmoNumber')} />
           </div>

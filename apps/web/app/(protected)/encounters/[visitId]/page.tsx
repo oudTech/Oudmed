@@ -597,7 +597,7 @@ function OrderModal({ visitId, open, onClose }: { visitId: string; open: boolean
             <p className="px-3 py-3 text-sm text-gray-400">No matching {category.toLowerCase()} items.</p>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Priority">
             <Select value={priority} onChange={(ev) => setPriority(ev.target.value)}>
               {ORDER_PRIORITIES.map((p) => <option key={p}>{p}</option>)}

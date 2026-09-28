@@ -102,7 +102,7 @@ export function NewAdmissionModal({
           Admission information
         </p>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Admitting doctor">
             <Select value={admittingDoctorId} onChange={(e) => setAdmittingDoctorId(e.target.value)}>
               <option value="">Not set</option>
@@ -125,7 +125,7 @@ export function NewAdmissionModal({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Department">
             <Select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
               <option value="">Not set</option>
@@ -147,7 +147,7 @@ export function NewAdmissionModal({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Ward" required>
             <Select
               value={wardId}
