@@ -9,6 +9,7 @@ module.exports = {
     extend: {
       fontFamily: {
         hanken: ['var(--font-hanken)', 'sans-serif'],
+        inter: ['var(--font-inter)', 'sans-serif'],
       },
       colors: {
         // Tenant-themable accent. AuthProvider sets --brand-primary from the

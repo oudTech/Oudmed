@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { Hanken_Grotesk } from 'next/font/google'
+import { Hanken_Grotesk, Inter } from 'next/font/google'
 import './globals.css'
 import Providers from '@/components/Providers'
 import { auth } from '@/lib/auth'
@@ -8,6 +8,12 @@ import { ROOT_DOMAIN, APP_PROTOCOL } from '@/lib/tenant'
 const hanken = Hanken_Grotesk({
   subsets: ['latin'],
   variable: '--font-hanken',
+  display: 'swap',
+})
+
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
   display: 'swap',
 })
 
@@ -48,7 +54,7 @@ const organizationJsonLd = {
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const session = await auth()
   return (
-    <html lang="en" className={hanken.variable}>
+    <html lang="en" className={`${hanken.variable} ${inter.variable}`}>
       <body className="font-hanken">
         <script
           type="application/ld+json"

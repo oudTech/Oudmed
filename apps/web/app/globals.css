@@ -7,12 +7,32 @@
   --brand-primary: #3366e3;
 }
 
+/* Defensive guard against transform-based horizontal overflow (tilt/hover/
+   magnetic-button effects can otherwise push a few px past the viewport
+   edge). `clip` rather than `hidden` so it doesn't affect GSAP's ScrollTrigger
+   pinning or create a second vertical scroll container. */
+html,
+body {
+  overflow-x: clip;
+}
+
 @keyframes slidein {
   from {
     transform: translateX(100%);
   }
   to {
     transform: translateX(0);
+  }
+}
+
+/* Marketing pages only (see app/(marketing)/template.tsx) - hides the native
+   cursor in favor of CustomCursor.tsx, but only on pointer-fine devices so
+   touch users never lose their cursor. */
+@media (pointer: fine) {
+  .marketing-root,
+  .marketing-root a,
+  .marketing-root button {
+    cursor: none;
   }
 }
 
