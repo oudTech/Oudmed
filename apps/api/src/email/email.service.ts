@@ -6,6 +6,7 @@ interface SendArgs {
   subject: string;
   html: string;
   text: string;
+  replyTo?: string;
 }
 
 /**
@@ -24,15 +25,15 @@ export class EmailService {
     this.from = process.env.EMAIL_FROM ?? 'Oudmed <onboarding@resend.dev>';
   }
 
-  private async send({ to, subject, html, text }: SendArgs): Promise<void> {
+  private async send({ to, subject, html, text, replyTo }: SendArgs): Promise<void> {
     if (!this.resend) {
       this.logger.warn(
-        `[email:dev] To: ${to}\nSubject: ${subject}\n${text}`,
+        `[email:dev] To: ${to}${replyTo ? ` (reply-to: ${replyTo})` : ''}\nSubject: ${subject}\n${text}`,
       );
       return;
     }
     try {
-      await this.resend.emails.send({ from: this.from, to, subject, html, text });
+      await this.resend.emails.send({ from: this.from, to, subject, html, text, ...(replyTo ? { replyTo } : {}) });
     } catch (err) {
       this.logger.error(`Failed to send "${subject}" to ${to}`, err as Error);
       throw err;
@@ -113,6 +114,27 @@ export class EmailService {
         <p style="margin:24px 0">
           <a href="${billingUrl}" style="background:#3366E3;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">Set up billing</a>
         </p>
+      `),
+    });
+  }
+
+  async sendContactInquiry(
+    to: string,
+    data: { firstName: string; lastName: string; email: string; phone: string; message: string },
+  ): Promise<void> {
+    const fullName = `${data.firstName} ${data.lastName}`.trim();
+    await this.send({
+      to,
+      // The submitter's address is set as reply-to, never as a send target -
+      // this endpoint only ever sends to the fixed internal inbox above, so
+      // it can't be used to relay unsolicited email to a third party.
+      replyTo: data.email,
+      subject: `New contact inquiry from ${fullName}`,
+      text: `${fullName}\nEmail: ${data.email}\nPhone: ${data.phone}\n\n${data.message}`,
+      html: layout(`
+        <p><strong>${escapeHtml(fullName)}</strong></p>
+        <p>Email: ${escapeHtml(data.email)}<br/>Phone: ${escapeHtml(data.phone)}</p>
+        <p style="white-space:pre-wrap">${escapeHtml(data.message)}</p>
       `),
     });
   }

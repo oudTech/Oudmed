@@ -92,6 +92,16 @@ services:
       - key: CLAMAV_HOST
         value: ""
 
+      # Marketing site "Contact Us" form (POST /contact). Required in production -
+      # env.validation.ts fails the API's boot without it. Get the secret key from
+      # the Cloudflare Turnstile dashboard; the matching site key is a Fly secret
+      # on the web app, not here. CONTACT_INQUIRY_TO defaults to
+      # info@Oudtechnologies.com in code if left unset in the dashboard.
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
+      - key: CONTACT_INQUIRY_TO
+        sync: false
+
   - type: web
     name: oudhealth-web
     runtime: docker

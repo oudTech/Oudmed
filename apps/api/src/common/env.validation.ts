@@ -59,6 +59,12 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
       warnings.push('APP_ROOT_DOMAIN is unset or points at localhost in production');
     }
     if (env.APP_PROTOCOL !== 'https') warnings.push('APP_PROTOCOL is not "https" in production');
+
+    if (!env.TURNSTILE_SECRET_KEY) {
+      errors.push('TURNSTILE_SECRET_KEY is required in production (the contact form would reject every submission without it)');
+    }
+  } else if (!env.TURNSTILE_SECRET_KEY) {
+    warnings.push('TURNSTILE_SECRET_KEY is not set - the contact form will reject every submission until it is');
   }
 
   for (const w of warnings) log.warn(w);
