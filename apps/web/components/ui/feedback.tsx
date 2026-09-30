@@ -59,7 +59,7 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
 
       {typeof document !== 'undefined' &&
         createPortal(
-          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[1001] flex flex-col items-center gap-2">
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[1310] flex flex-col items-center gap-2">
             {toasts.map((t) => (
               <div key={t.id} className={`rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg ${TONE[t.tone]}`}>
                 {t.message}

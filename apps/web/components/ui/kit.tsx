@@ -29,7 +29,7 @@ export function Modal({
   if (!open || typeof document === 'undefined') return null
   return createPortal(
     <div
-      className={`fixed inset-0 z-[999] flex justify-center overflow-y-auto py-10 px-4 ${
+      className={`fixed inset-0 z-[1300] flex justify-center overflow-y-auto py-10 px-4 ${
         align === 'center' ? 'items-center' : 'items-start'
       }`}
       style={{ background: 'rgba(15,23,42,0.35)' }}
@@ -80,7 +80,7 @@ export function Drawer({
   if (!open || typeof document === 'undefined') return null
   return createPortal(
     <div
-      className="fixed inset-0 z-[999] flex justify-end"
+      className="fixed inset-0 z-[1300] flex justify-end"
       style={{ background: 'rgba(15,23,42,0.35)' }}
       onClick={onClose}
     >
