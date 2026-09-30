@@ -27,6 +27,8 @@ export const drugsApi = {
     api.post<DrugDTO>(`/pharmacy/drugs/${id}/adjust`, data).then((r) => r.data),
   importDrugs: (rows: Record<string, unknown>[]) =>
     api.post<DrugImportResultDTO>('/pharmacy/drugs/import', { rows }).then((r) => r.data),
+  offFormularyReport: () =>
+    api.get<{ drugName: string; count: number; prices: string[] }[]>('/pharmacy/off-formulary-report').then((r) => r.data),
 }
 
 export const STOCK_STATUS_META: Record<string, { label: string; color: string; bg: string }> = {

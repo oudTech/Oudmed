@@ -107,9 +107,67 @@ export function InventoryList() {
         </div>
       )}
 
+      {canManage && <OffFormularyReport />}
+
       <AddDrugModal open={add} onClose={() => setAdd(false)} />
       <ImportDrugsModal open={importing} onClose={() => setImporting(false)} />
       <DrugDetailModal drugId={openId} open={!!openId} onClose={() => setOpenId(null)} />
+    </div>
+  )
+}
+
+/** Which non-catalogue drugs get dispensed often enough to add to the formulary. */
+function OffFormularyReport() {
+  const [open, setOpen] = useState(false)
+  const report = useQuery({
+    queryKey: ['off-formulary-report'],
+    queryFn: drugsApi.offFormularyReport,
+    enabled: open,
+  })
+
+  return (
+    <div className="mt-5 border border-gray-100 rounded-xl">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700"
+      >
+        Off-formulary dispenses
+        <span className="text-gray-400">{open ? '-' : '+'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-gray-100 px-4 py-3">
+          {!report.data ? (
+            <p className="text-sm text-gray-400">Loading…</p>
+          ) : report.data.length === 0 ? (
+            <p className="text-sm text-gray-400">No off-formulary dispenses on record.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-gray-500">
+                <tr>
+                  {['Drug name', 'Times dispensed', 'Prices used'].map((h) => (
+                    <th key={h} className="text-left font-medium px-2 py-1.5">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {report.data.map((r) => (
+                  <tr key={r.drugName} className="border-t border-gray-50">
+                    <td className="px-2 py-1.5 font-medium text-gray-900">{r.drugName}</td>
+                    <td className="px-2 py-1.5 text-gray-600">{r.count}</td>
+                    <td className="px-2 py-1.5 text-gray-500">
+                      {r.prices.map((p) => naira(p)).join(', ') || '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="text-xs text-gray-400 mt-2">
+            Consider adding frequently-dispensed drugs to the formulary so pricing is consistent and tracked in inventory.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

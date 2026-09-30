@@ -229,13 +229,24 @@ export class EncountersService {
       });
 
       // A catalogue-linked order resolves its price server-side, the same way
-      // pharmacy dispensing does (see PharmacyService.resolveDispensePrice) -
-      // a non-catalogue (free-text) order has nothing to resolve against and
-      // keeps the pre-existing client-trusted price, same as an off-formulary
-      // drug; both are a known, separate gap tracked together.
-      const unitPrice = serviceItemId && svc
-        ? await this.resolveOrderPrice(actor, visitId, order.id, name, svc.unitPrice, dto, can(actor.role, 'billing:manage'))
-        : new Prisma.Decimal(dto.unitPrice ?? 0);
+      // pharmacy dispensing does (see PharmacyService.resolveDispensePrice). A
+      // free-text (non-catalogue) order has nothing to resolve against, so -
+      // same as an off-formulary drug - it always needs a reason on record,
+      // even though the shipped UI never actually places one of these today.
+      let unitPrice: Prisma.Decimal;
+      if (serviceItemId && svc) {
+        unitPrice = await this.resolveOrderPrice(actor, visitId, order.id, name, svc.unitPrice, dto, can(actor.role, 'billing:manage'));
+      } else {
+        if (!dto.overrideReason?.trim()) {
+          throw new BadRequestException(`A reason is required to price the off-catalogue order "${name}"`);
+        }
+        unitPrice = new Prisma.Decimal(dto.unitPrice ?? 0);
+        await this.audit.record({
+          tenantId: actor.tenantId, userId: actor.userId, action: 'OFF_CATALOGUE_ORDER',
+          entityType: 'ClinicalOrder', entityId: order.id,
+          metadata: { name, price: Number(unitPrice), reason: dto.overrideReason, visitId },
+        });
+      }
 
       const { lineId } = await this.billing.postChargeToVisit(tx, {
         tenantId: actor.tenantId,

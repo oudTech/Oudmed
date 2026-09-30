@@ -135,6 +135,8 @@ function DispenseModal({
     }))
 
   const total = rows.reduce((sum, r) => sum + (Number(r.quantity) || 0) * (Number(r.unitPrice) || 0), 0)
+  const needsReason = (r: (typeof rows)[number]) =>
+    Number(r.quantity) > 0 && (!r.it.drugId || r.overriding) && !r.overrideReason.trim()
 
   const m = useMutation({
     mutationFn: () =>
@@ -143,13 +145,14 @@ function DispenseModal({
           itemId: r.it.id,
           quantity: Number(r.quantity) || 0,
           // Only send a price when actually overriding (formulary) or for an
-          // off-formulary item (no catalogue to resolve server-side); otherwise
-          // let the server resolve and charge the catalogue price.
+          // off-formulary item (no catalogue to resolve server-side, always
+          // needs a reason); otherwise let the server resolve and charge the
+          // catalogue price.
           ...(r.it.drugId
             ? r.overriding
               ? { unitPrice: Number(r.unitPrice) || 0, overrideReason: r.overrideReason }
               : {}
-            : { unitPrice: Number(r.unitPrice) || 0 }),
+            : { unitPrice: Number(r.unitPrice) || 0, overrideReason: r.overrideReason }),
         })),
         note: note || undefined,
       }),
@@ -184,7 +187,14 @@ function DispenseModal({
                     <td className="px-3 py-2">
                       <span className="font-medium text-gray-900">{r.it.drugName}</span>
                       {r.it.strengthConc && <span className="text-gray-400 text-xs ml-1">{r.it.strengthConc}</span>}
-                      {!r.it.drugId && <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-600">off-formulary</span>}
+                      {!r.it.drugId && (
+                        <span
+                          className="ml-2 text-[10px] uppercase tracking-wide text-amber-600"
+                          title="Not in the pharmacy catalogue - does not affect stock levels"
+                        >
+                          off-formulary
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-gray-500 text-xs">
                       {[r.it.amountPerUse, r.it.frequency, r.it.durationNumber ? `${r.it.durationNumber} ${(r.it.durationType ?? 'days').toLowerCase()}` : null]
@@ -212,15 +222,13 @@ function DispenseModal({
                             value={r.unitPrice}
                             onChange={(e) => set(r.it.id, { unitPrice: e.target.value })}
                           />
-                          {r.it.drugId && (
-                            <input
-                              type="text"
-                              className="border border-gray-200 rounded-md px-2 py-1 w-24 text-xs"
-                              placeholder="Reason"
-                              value={r.overrideReason}
-                              onChange={(e) => set(r.it.id, { overrideReason: e.target.value })}
-                            />
-                          )}
+                          <input
+                            type="text"
+                            className="border border-gray-200 rounded-md px-2 py-1 w-24 text-xs"
+                            placeholder="Reason"
+                            value={r.overrideReason}
+                            onChange={(e) => set(r.it.id, { overrideReason: e.target.value })}
+                          />
                         </div>
                       ) : (
                         <div>
@@ -251,24 +259,24 @@ function DispenseModal({
           </table>
         </div>
         <p className="text-xs text-gray-400">
-          Formulary items draw stock earliest-expiry first. Items left at quantity 0 stay pending. Charges
-          post to the visit invoice (or a new pharmacy invoice if there is no visit).
+          Formulary items draw stock earliest-expiry first. Off-formulary items are not in the pharmacy
+          catalogue and do not affect stock levels. Items left at quantity 0 stay pending. Charges post to
+          the visit invoice (or a new pharmacy invoice if there is no visit).
         </p>
         <Field label="Note">
           <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Counselling / substitution notes" />
         </Field>
         {err && <p className="text-sm text-red-600">{err}</p>}
-        {rows.some((r) => r.overriding && !r.overrideReason.trim()) && (
-          <p className="text-xs text-amber-600">Enter a reason for each price override before confirming.</p>
+        {rows.some(needsReason) && (
+          <p className="text-xs text-amber-600">
+            Enter a reason for each price override or off-formulary item before confirming.
+          </p>
         )}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button
             loading={m.isPending}
-            disabled={
-              !rows.some((r) => Number(r.quantity) > 0) ||
-              rows.some((r) => r.overriding && !r.overrideReason.trim())
-            }
+            disabled={!rows.some((r) => Number(r.quantity) > 0) || rows.some(needsReason)}
             onClick={() => m.mutate()}
           >
             Confirm dispense

@@ -337,4 +337,73 @@ describe('PharmacyService (integration - FEFO stock draw-down)', () => {
     const moves = await ownerPrisma.stockMovement.findMany({ where: { drugId: drug.id, type: 'DISPENSE' } });
     expect(Number(moves[0].unitPrice)).toBe(75);
   });
+
+  // ─────────────────────────── off-formulary dispensing ───────────────────────────
+
+  async function offFormularyRx() {
+    const patient = await makePatient(tenantId);
+    return ownerPrisma.prescription.create({
+      data: {
+        tenantId, patientId: patient.id, status: 'ACTIVE', dispenseStatus: 'PENDING',
+        items: { create: [{ tenantId, drugId: null, drugName: 'Off-Catalogue Drug' }] },
+      },
+      include: { items: true },
+    });
+  }
+
+  it('off-formulary: dispensing without a reason is rejected, even for a billing:manage actor', async () => {
+    const rx = await offFormularyRx();
+    await expect(
+      pharmacy.dispense(adminActor, rx.id, { items: [{ itemId: rx.items[0].id, quantity: 2, unitPrice: 150 }] }),
+    ).rejects.toThrow(/reason is required/);
+  });
+
+  it('off-formulary: dispensing with a reason succeeds and is audited (drug, price, reason, who, visit)', async () => {
+    const rx = await offFormularyRx();
+    await pharmacy.dispense(actor, rx.id, {
+      items: [{ itemId: rx.items[0].id, quantity: 2, unitPrice: 150, overrideReason: 'Not yet in catalogue, prescribed by Dr. X' }],
+    });
+
+    const patientId = (await ownerPrisma.prescription.findUnique({ where: { id: rx.id }, select: { patientId: true } }))!.patientId;
+    const lines = await ownerPrisma.invoiceLine.findMany({ where: { invoice: { patientId } } });
+    expect(Number(lines[0].unitPrice)).toBe(150);
+
+    const auditRows = await ownerPrisma.auditLog.findMany({
+      where: { tenantId, action: 'OFF_FORMULARY_DISPENSE', entityId: rx.items[0].id },
+    });
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].userId).toBe(actor.userId);
+    expect(auditRows[0].metadata).toMatchObject({
+      drugName: 'Off-Catalogue Drug', price: 150, reason: 'Not yet in catalogue, prescribed by Dr. X', visitId: null,
+    });
+
+    // no stock movement for this prescription - off-formulary items never touch inventory
+    const moves = await ownerPrisma.stockMovement.count({ where: { prescriptionId: rx.id } });
+    expect(moves).toBe(0);
+  });
+
+  it('off-formulary: the report aggregates dispenses by drug name with count and prices used', async () => {
+    const rxA1 = await offFormularyRx();
+    await pharmacy.dispense(actor, rxA1.id, {
+      items: [{ itemId: rxA1.items[0].id, quantity: 1, unitPrice: 100, overrideReason: 'test' }],
+    });
+    // dispense the same off-catalogue drug name again, at a different price
+    const patient = await makePatient(tenantId);
+    const rxA2 = await ownerPrisma.prescription.create({
+      data: {
+        tenantId, patientId: patient.id, status: 'ACTIVE', dispenseStatus: 'PENDING',
+        items: { create: [{ tenantId, drugId: null, drugName: 'Off-Catalogue Drug' }] },
+      },
+      include: { items: true },
+    });
+    await pharmacy.dispense(actor, rxA2.id, {
+      items: [{ itemId: rxA2.items[0].id, quantity: 1, unitPrice: 120, overrideReason: 'test' }],
+    });
+
+    const report = await pharmacy.offFormularyReport(tenantId);
+    const row = report.find((r) => r.drugName === 'Off-Catalogue Drug');
+    expect(row).toBeDefined();
+    expect(row!.count).toBeGreaterThanOrEqual(2);
+    expect(row!.prices).toEqual(expect.arrayContaining(['100', '120']));
+  });
 });

@@ -127,4 +127,30 @@ describe('EncountersService.createOrder (integration - FUNC-1 sweep: catalogue p
     const lines = await ownerPrisma.invoiceLine.findMany({ where: { invoice: { patientId } } });
     expect(Number(lines[0].unitPrice)).toBe(200);
   });
+
+  // ─────────────────────────── off-catalogue (free-text) orders ───────────────────────────
+
+  it('off-catalogue: an order with no serviceItemId and no reason is rejected', async () => {
+    await expect(
+      encounters.createOrder(doctorActor, visitId, { orderType: 'PROCEDURE', name: 'Custom procedure', unitPrice: 100 } as any),
+    ).rejects.toThrow(/reason is required/);
+  });
+
+  it('off-catalogue: an order with a reason succeeds and is audited (name, price, reason, who, visit)', async () => {
+    const order = await encounters.createOrder(doctorActor, visitId, {
+      orderType: 'PROCEDURE', name: 'Custom procedure', unitPrice: 100, overrideReason: 'Not yet in the service catalogue',
+    } as any);
+
+    const lines = await ownerPrisma.invoiceLine.findMany({ where: { invoice: { patientId } } });
+    expect(Number(lines[0].unitPrice)).toBe(100);
+
+    const auditRows = await ownerPrisma.auditLog.findMany({
+      where: { tenantId, action: 'OFF_CATALOGUE_ORDER', entityId: order.id },
+    });
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].userId).toBe(doctorActor.userId);
+    expect(auditRows[0].metadata).toMatchObject({
+      name: 'Custom procedure', price: 100, reason: 'Not yet in the service catalogue', visitId,
+    });
+  });
 });

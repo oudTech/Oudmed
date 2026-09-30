@@ -205,6 +205,11 @@ export class PharmacyService {
    * anyone else it's logged as a mismatch and ignored. A missing/zero
    * catalogue price blocks the dispense rather than posting a free charge,
    * unless a privileged override explicitly sets a real price.
+   *
+   * Off-formulary (free-text, no drugId) items have no catalogue to resolve
+   * against, so anyone dispensing one must give a reason - the price itself
+   * isn't checked against anything, but who set it, what it was, and why is
+   * always on record (FUNC-1 off-formulary decision).
    */
   private async resolveDispensePrice(
     tx: Prisma.TransactionClient,
@@ -217,10 +222,18 @@ export class PharmacyService {
   ): Promise<number> {
     if (delta <= 0) return 0; // nothing new dispensed on this line - unused downstream
 
-    // Off-formulary (free-text) items have no catalogue entry to resolve
-    // against - unchanged pre-existing behavior. Same vulnerability class as
-    // the catalogue case, but out of scope for this fix; flagged separately.
-    if (!it.drugId) return line.unitPrice ?? 0;
+    if (!it.drugId) {
+      if (!line.overrideReason?.trim()) {
+        throw new BadRequestException(`A reason is required to dispense the off-formulary item "${it.drugName}"`);
+      }
+      const price = line.unitPrice ?? 0;
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'OFF_FORMULARY_DISPENSE',
+        entityType: 'PrescriptionItem', entityId: it.id,
+        metadata: { drugName: it.drugName, price, reason: line.overrideReason, visitId },
+      });
+      return price;
+    }
 
     const drug = await tx.drug.findFirst({ where: { id: it.drugId }, select: { sellPrice: true } });
     const cataloguePrice = drug ? Number(drug.sellPrice) : 0;
@@ -308,6 +321,35 @@ export class PharmacyService {
     await tx.drug.update({
       where: { id: p.drugId },
       data: { quantityOnHand: { decrement: p.quantity } },
+    });
+  }
+
+  /**
+   * A simple aggregate of off-formulary dispenses (drug name, how often, and
+   * what prices were used) so an admin can spot which non-catalogue drugs
+   * come up often enough to add to the formulary (FUNC-1 off-formulary
+   * decision - point 3, visibility).
+   */
+  async offFormularyReport(tenantId: string) {
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const items = await tx.prescriptionItem.findMany({
+        where: { drugId: null, dispensedQty: { gt: 0 } },
+        select: { drugName: true, dispenseUnitPrice: true },
+      });
+      const byName = new Map<string, { count: number; prices: Set<string> }>();
+      for (const it of items) {
+        const entry = byName.get(it.drugName) ?? { count: 0, prices: new Set<string>() };
+        entry.count += 1;
+        if (it.dispenseUnitPrice) entry.prices.add(it.dispenseUnitPrice.toString());
+        byName.set(it.drugName, entry);
+      }
+      return [...byName.entries()]
+        .map(([drugName, v]) => ({
+          drugName,
+          count: v.count,
+          prices: [...v.prices].sort((a, b) => Number(a) - Number(b)),
+        }))
+        .sort((a, b) => b.count - a.count);
     });
   }
 

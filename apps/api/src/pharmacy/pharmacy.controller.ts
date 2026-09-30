@@ -54,6 +54,12 @@ export class PharmacyController {
     return this.pharmacy.cancel(actor(u), id);
   }
 
+  @Get('off-formulary-report')
+  offFormularyReport(@CurrentUser() u: AuthUser) {
+    assertCan(u.role, 'pharmacy:manage');
+    return this.pharmacy.offFormularyReport(u.tenantId);
+  }
+
   // ── drug inventory (static routes before :id) ──
   @Get('drugs/stats')
   drugStats(@CurrentUser() u: AuthUser) {

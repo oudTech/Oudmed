@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ComplaintDTO } from '@oudhealth/contracts'
+import type { ComplaintDTO, DrugSearchItemDTO } from '@oudhealth/contracts'
 import { Modal, Field, Input, Select, Textarea, Button } from '@/components/ui/kit'
 import {
   patientsApi,
@@ -329,14 +329,32 @@ export function AddPrescriptionModal({ patientId, visitId, open, onClose }: { pa
   const [notes, setNotes] = useState('')
   const [items, setItems] = useState<RxItem[]>([])
   const [draft, setDraft] = useState<RxItem>(EMPTY_ITEM)
+  const [confirm, setConfirm] = useState<{ matches: DrugSearchItemDTO[]; after: 'add' | 'save' } | null>(null)
   const m = useAdd(patientId, 'prescriptions', (data) => patientsApi.addPrescription(patientId, { ...data, visitId }), () => {
     setItems([]); setDraft(EMPTY_ITEM); setNotes(''); onClose()
   })
   const set = (k: keyof RxItem, v: string) => setDraft((it) => ({ ...it, [k]: v }))
-  const addDraft = () => {
-    if (!draft.drugName.trim()) return
-    setItems((a) => [...a, draft])
-    setDraft(EMPTY_ITEM)
+
+  function commitItem(it: RxItem, after: 'add' | 'save') {
+    if (after === 'add') {
+      setItems((a) => [...a, it]); setDraft(EMPTY_ITEM)
+    } else {
+      m.mutate({ notes: notes || undefined, items: [...items, it].map(toPayload) })
+    }
+  }
+
+  // A drug typed but never picked from the catalogue dropdown must be
+  // confirmed before it silently becomes off-formulary - a typo should never
+  // slip through. If nothing was typed, or a catalogue pick was already
+  // made, proceed straight through.
+  async function addDraft(after: 'add' | 'save' = 'add') {
+    if (!draft.drugName.trim()) {
+      if (after === 'save' && items.length > 0) m.mutate({ notes: notes || undefined, items: items.map(toPayload) })
+      return
+    }
+    if (draft.drugId) { commitItem(draft, after); return }
+    const matches = await drugsApi.search(draft.drugName.trim())
+    setConfirm({ matches, after })
   }
   const toPayload = (it: RxItem) => ({
     drugId: it.drugId || undefined,
@@ -428,13 +446,42 @@ export function AddPrescriptionModal({ patientId, visitId, open, onClose }: { pa
             <Textarea rows={2} value={draft.instructions} onChange={(e) => set('instructions', e.target.value)} placeholder="Directions for the patient" />
           </Field>
           <button
-            onClick={addDraft}
+            onClick={() => addDraft('add')}
             disabled={!draft.drugName.trim()}
             className="text-sm font-medium text-[#0A89D3] hover:underline disabled:text-gray-300"
           >
             + Add another medicine
           </button>
         </div>
+
+        {confirm && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2 text-sm">
+            <p className="text-gray-700">
+              &quot;{draft.drugName}&quot; isn&apos;t in the pharmacy catalogue
+              {confirm.matches.length > 0 ? '. Did you mean:' : '.'}
+            </p>
+            {confirm.matches.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {confirm.matches.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    className="px-2 py-1 rounded-md bg-white border border-gray-200 hover:bg-gray-50 text-sm"
+                    onClick={() => { commitItem({ ...draft, drugId: d.id, drugName: d.name }, confirm.after); setConfirm(null) }}
+                  >
+                    {d.name}{d.strength ? ` ${d.strength}` : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setConfirm(null)}>Cancel</Button>
+              <Button onClick={() => { commitItem(draft, confirm.after); setConfirm(null) }}>
+                Prescribe as off-formulary
+              </Button>
+            </div>
+          </div>
+        )}
 
         <Field label="Prescription notes">
           <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
@@ -445,7 +492,7 @@ export function AddPrescriptionModal({ patientId, visitId, open, onClose }: { pa
           <Button
             loading={m.isPending}
             disabled={all.length === 0}
-            onClick={() => m.mutate({ notes: notes || undefined, items: all.map(toPayload) })}
+            onClick={() => addDraft('save')}
           >
             Save prescription
           </Button>
