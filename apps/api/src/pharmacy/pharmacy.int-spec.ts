@@ -21,6 +21,7 @@ describe('PharmacyService (integration - FEFO stock draw-down)', () => {
   let pharmacy: PharmacyService;
   let tenantId: string;
   let actor: { tenantId: string; userId: string; role: string };
+  let adminActor: { tenantId: string; userId: string; role: string };
 
   beforeAll(async () => {
     const mod = await Test.createTestingModule({
@@ -33,6 +34,8 @@ describe('PharmacyService (integration - FEFO stock draw-down)', () => {
     tenantId = tenant.id;
     const u = await makeUser(tenantId, 'PHARMACIST');
     actor = actorFor(tenantId, u.id, 'PHARMACIST');
+    const admin = await makeUser(tenantId, 'HOSPITAL_ADMIN');
+    adminActor = actorFor(tenantId, admin.id, 'HOSPITAL_ADMIN');
   });
 
   afterAll(async () => {
@@ -229,5 +232,109 @@ describe('PharmacyService (integration - FEFO stock draw-down)', () => {
     expect(d!.quantityOnHand).toBe(2);
     const moves = await ownerPrisma.stockMovement.count({ where: { drugId: drug.id, type: 'DISPENSE' } });
     expect(moves).toBe(1);
+  });
+
+  // ─────────────────────────── FUNC-1: server-side catalogue pricing ───────────────────────────
+
+  it('FUNC-1: a pharmacist sending unitPrice 0 is charged the catalogue price, not free', async () => {
+    const { drug } = await drugWithBatches(10, 0); // sellPrice: 100
+    const rx = await prescriptionFor(drug.id);
+
+    await pharmacy.dispense(actor, rx.id, { items: [{ itemId: rx.items[0].id, quantity: 2, unitPrice: 0 }] });
+
+    const moves = await ownerPrisma.stockMovement.findMany({ where: { drugId: drug.id, type: 'DISPENSE' } });
+    expect(moves).toHaveLength(1);
+    expect(Number(moves[0].unitPrice)).toBe(100);
+    const patientId = (await ownerPrisma.prescription.findUnique({ where: { id: rx.id }, select: { patientId: true } }))!.patientId;
+    const lines = await ownerPrisma.invoiceLine.findMany({ where: { invoice: { patientId } } });
+    expect(lines).toHaveLength(1);
+    expect(Number(lines[0].unitPrice)).toBe(100);
+    expect(Number(lines[0].lineTotal)).toBe(200);
+  });
+
+  it('FUNC-1: a billing:manage actor can override the price with a reason, and it is audited', async () => {
+    const { drug } = await drugWithBatches(10, 0); // sellPrice: 100
+    const rx = await prescriptionFor(drug.id);
+
+    await pharmacy.dispense(adminActor, rx.id, {
+      items: [{ itemId: rx.items[0].id, quantity: 2, unitPrice: 60, overrideReason: 'Discounted for a hardship case' }],
+    });
+
+    const moves = await ownerPrisma.stockMovement.findMany({ where: { drugId: drug.id, type: 'DISPENSE' } });
+    expect(Number(moves[0].unitPrice)).toBe(60);
+    const patientId = (await ownerPrisma.prescription.findUnique({ where: { id: rx.id }, select: { patientId: true } }))!.patientId;
+    const lines = await ownerPrisma.invoiceLine.findMany({ where: { invoice: { patientId } } });
+    expect(Number(lines[0].unitPrice)).toBe(60);
+
+    const auditRows = await ownerPrisma.auditLog.findMany({
+      where: { tenantId, action: 'DISPENSE_PRICE_OVERRIDE', entityId: rx.items[0].id },
+    });
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].metadata).toMatchObject({
+      cataloguePrice: 100, overridePrice: 60, reason: 'Discounted for a hardship case',
+    });
+  });
+
+  it('FUNC-1: an override without a reason is rejected even for a billing:manage actor', async () => {
+    const { drug } = await drugWithBatches(10, 0);
+    const rx = await prescriptionFor(drug.id);
+
+    await expect(
+      pharmacy.dispense(adminActor, rx.id, { items: [{ itemId: rx.items[0].id, quantity: 2, unitPrice: 60 }] }),
+    ).rejects.toThrow();
+  });
+
+  it('FUNC-1: a non-privileged mismatch is ignored (catalogue price charged) and logged', async () => {
+    const { drug } = await drugWithBatches(10, 0); // sellPrice: 100
+    const rx = await prescriptionFor(drug.id);
+
+    // a pharmacist (no billing:manage) sends a different price than the catalogue
+    await pharmacy.dispense(actor, rx.id, { items: [{ itemId: rx.items[0].id, quantity: 2, unitPrice: 40 }] });
+
+    const moves = await ownerPrisma.stockMovement.findMany({ where: { drugId: drug.id, type: 'DISPENSE' } });
+    expect(Number(moves[0].unitPrice)).toBe(100); // catalogue price wins, not the requested 40
+
+    const auditRows = await ownerPrisma.auditLog.findMany({
+      where: { tenantId, action: 'DISPENSE_PRICE_MISMATCH', entityId: rx.items[0].id },
+    });
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].metadata).toMatchObject({ cataloguePrice: 100, requestedPrice: 40 });
+  });
+
+  it('FUNC-1: a drug with no catalogue price blocks the dispense instead of charging zero', async () => {
+    const drug = await ownerPrisma.drug.create({
+      data: { tenantId, sku: `MED-${Math.random().toString(36).slice(2, 8)}`, name: 'No Price Drug', sellPrice: 0, quantityOnHand: 10 },
+    });
+    await ownerPrisma.drugBatch.create({
+      data: { tenantId, drugId: drug.id, batchNumber: 'B1', expiryDate: day(30), quantity: 10 },
+    });
+    const rx = await prescriptionFor(drug.id);
+
+    await expect(
+      pharmacy.dispense(actor, rx.id, { items: [{ itemId: rx.items[0].id, quantity: 2 }] }),
+    ).rejects.toThrow(/No selling price set/);
+
+    // nothing mutated - no stock drawn, no charge posted
+    const b = await ownerPrisma.drugBatch.findMany({ where: { drugId: drug.id } });
+    expect(b.reduce((s, x) => s + x.quantity, 0)).toBe(10);
+    const moves = await ownerPrisma.stockMovement.count({ where: { drugId: drug.id } });
+    expect(moves).toBe(0);
+  });
+
+  it('FUNC-1: a billing:manage actor can override a zero catalogue price with a reason', async () => {
+    const drug = await ownerPrisma.drug.create({
+      data: { tenantId, sku: `MED-${Math.random().toString(36).slice(2, 8)}`, name: 'No Price Drug 2', sellPrice: 0, quantityOnHand: 10 },
+    });
+    await ownerPrisma.drugBatch.create({
+      data: { tenantId, drugId: drug.id, batchNumber: 'B1', expiryDate: day(30), quantity: 10 },
+    });
+    const rx = await prescriptionFor(drug.id);
+
+    await pharmacy.dispense(adminActor, rx.id, {
+      items: [{ itemId: rx.items[0].id, quantity: 2, unitPrice: 75, overrideReason: 'Catalogue price not set yet' }],
+    });
+
+    const moves = await ownerPrisma.stockMovement.findMany({ where: { drugId: drug.id, type: 'DISPENSE' } });
+    expect(Number(moves[0].unitPrice)).toBe(75);
   });
 });

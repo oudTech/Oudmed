@@ -15,7 +15,11 @@ import {
 class DispenseItemDto {
   @IsUUID() itemId: string;
   @IsInt() @Min(0) quantity: number;
-  @IsNumber() @Min(0) unitPrice: number;
+  // Trusted only as an override candidate for actors with billing:manage, and
+  // only with overrideReason set - see PharmacyService.dispense. Everyone
+  // else's dispense is priced from the drug catalogue regardless of this.
+  @IsOptional() @IsNumber() @Min(0) unitPrice?: number;
+  @IsOptional() @IsString() @MaxLength(300) overrideReason?: string;
 }
 
 export class DispenseDto {

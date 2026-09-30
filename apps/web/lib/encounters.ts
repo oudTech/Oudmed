@@ -49,7 +49,10 @@ export const pharmacyApi = {
     api.get<PharmacyQueueItemDTO[]>('/pharmacy/queue', { params: { status } }).then((r) => r.data),
   dispense: (
     id: string,
-    data: { items: { itemId: string; quantity: number; unitPrice: number }[]; note?: string },
+    data: {
+      items: { itemId: string; quantity: number; unitPrice?: number; overrideReason?: string }[]
+      note?: string
+    },
   ) => api.post(`/pharmacy/prescriptions/${id}/dispense`, data).then((r) => r.data),
   cancel: (id: string) =>
     api.patch(`/pharmacy/prescriptions/${id}/cancel`).then((r) => r.data),

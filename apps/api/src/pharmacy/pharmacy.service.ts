@@ -2,13 +2,14 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
-import { assertCan } from '../common/permissions';
+import { assertCan, can } from '../common/permissions';
 import { DispenseDto } from './dto/pharmacy.dto';
 
 interface Actor {
@@ -19,6 +20,8 @@ interface Actor {
 
 @Injectable()
 export class PharmacyService {
+  private readonly log = new Logger(PharmacyService.name);
+
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
@@ -88,17 +91,20 @@ export class PharmacyService {
       }
 
       const byId = new Map(rx.items.map((it) => [it.id, it]));
+      const canOverridePrice = can(actor.role, 'billing:manage');
 
       // Each line's `quantity` is the cumulative quantity dispensed for that item
       // (the dispensing form pre-fills it with the item's current dispensedQty).
       // Only the increase over what is already recorded draws stock and posts a
       // charge - so replaying a completed dispense is a no-op, and a top-up
       // moves only the delta.
-      const plan = dto.items.map((line) => {
+      const plan: { line: (typeof dto.items)[number]; it: (typeof rx.items)[number]; delta: number; unitPrice: number }[] = [];
+      for (const line of dto.items) {
         const it = byId.get(line.itemId);
         if (!it) throw new BadRequestException('Unknown prescription item');
-        return { line, it, delta: line.quantity - (it.dispensedQty ?? 0) };
-      });
+        const delta = line.quantity - (it.dispensedQty ?? 0);
+        plan.push({ line, it, delta, unitPrice: await this.resolveDispensePrice(tx, actor, rx.visitId, it, line, delta, canOverridePrice) });
+      }
 
       for (const p of plan) {
         if (p.delta <= 0) continue;
@@ -106,7 +112,7 @@ export class PharmacyService {
           where: { id: p.line.itemId },
           data: {
             dispensedQty: p.line.quantity,
-            dispenseUnitPrice: new Prisma.Decimal(p.line.unitPrice),
+            dispenseUnitPrice: new Prisma.Decimal(p.unitPrice),
           },
         });
       }
@@ -130,14 +136,14 @@ export class PharmacyService {
           userId: actor.userId,
           drugId: p.it.drugId,
           quantity: p.delta,
-          unitPrice: p.line.unitPrice,
+          unitPrice: p.unitPrice,
           prescriptionId: rx.id,
           visitId: rx.visitId,
         });
       }
 
       // charge the delta only
-      const billable = plan.filter((p) => p.delta > 0 && p.line.unitPrice > 0);
+      const billable = plan.filter((p) => p.delta > 0 && p.unitPrice > 0);
       if (billable.length) {
         if (rx.visitId) {
           for (const p of billable) {
@@ -148,7 +154,7 @@ export class PharmacyService {
               patientId: rx.patientId,
               description: `${p.it.drugName}${p.it.strengthConc ? ` ${p.it.strengthConc}` : ''} x${p.delta}`,
               quantity: p.delta,
-              unitPrice: p.line.unitPrice,
+              unitPrice: p.unitPrice,
               category: 'Pharmacy',
             });
           }
@@ -160,7 +166,7 @@ export class PharmacyService {
               category: 'Pharmacy',
               description: `${p.it.drugName}${p.it.strengthConc ? ` ${p.it.strengthConc}` : ''} x${p.delta}`,
               quantity: p.delta,
-              unitPrice: p.line.unitPrice,
+              unitPrice: p.unitPrice,
             })),
           } as any);
         }
@@ -188,6 +194,66 @@ export class PharmacyService {
       });
       return updated;
     });
+  }
+
+  /**
+   * The catalogue (`Drug.sellPrice`) is the only authoritative price for a
+   * formulary item - the same single-source-of-truth pattern the consultation
+   * charge already uses (`ScheduleService`'s `ServiceItem.unitPrice`, never
+   * client-suppliable). A client-sent `unitPrice` is trusted as an override
+   * only for an actor with `billing:manage`, and only with a reason; from
+   * anyone else it's logged as a mismatch and ignored. A missing/zero
+   * catalogue price blocks the dispense rather than posting a free charge,
+   * unless a privileged override explicitly sets a real price.
+   */
+  private async resolveDispensePrice(
+    tx: Prisma.TransactionClient,
+    actor: Actor,
+    visitId: string | null,
+    it: { id: string; drugId: string | null; drugName: string },
+    line: { unitPrice?: number; overrideReason?: string },
+    delta: number,
+    canOverride: boolean,
+  ): Promise<number> {
+    if (delta <= 0) return 0; // nothing new dispensed on this line - unused downstream
+
+    // Off-formulary (free-text) items have no catalogue entry to resolve
+    // against - unchanged pre-existing behavior. Same vulnerability class as
+    // the catalogue case, but out of scope for this fix; flagged separately.
+    if (!it.drugId) return line.unitPrice ?? 0;
+
+    const drug = await tx.drug.findFirst({ where: { id: it.drugId }, select: { sellPrice: true } });
+    const cataloguePrice = drug ? Number(drug.sellPrice) : 0;
+    const requested = line.unitPrice;
+    const mismatched = requested !== undefined && requested !== cataloguePrice;
+
+    if (mismatched && canOverride) {
+      if (!line.overrideReason?.trim()) {
+        throw new BadRequestException(`A reason is required to charge a different price for ${it.drugName}`);
+      }
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'DISPENSE_PRICE_OVERRIDE',
+        entityType: 'PrescriptionItem', entityId: it.id,
+        metadata: { drugId: it.drugId, drugName: it.drugName, cataloguePrice, overridePrice: requested, reason: line.overrideReason, visitId },
+      });
+      return requested as number;
+    }
+
+    if (mismatched) {
+      this.log.warn(
+        `Dispense price mismatch: user ${actor.userId} sent ${requested} for ${it.drugName} (catalogue ${cataloguePrice}); charging catalogue price.`,
+      );
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'DISPENSE_PRICE_MISMATCH',
+        entityType: 'PrescriptionItem', entityId: it.id,
+        metadata: { drugId: it.drugId, drugName: it.drugName, cataloguePrice, requestedPrice: requested, visitId },
+      });
+    }
+
+    if (cataloguePrice <= 0) {
+      throw new BadRequestException(`No selling price set for ${it.drugName}. Ask an admin to set it in Pharmacy > Inventory.`);
+    }
+    return cataloguePrice;
   }
 
   /** Draw `quantity` from a drug's batches, earliest expiry first. Throws 409 if short. */

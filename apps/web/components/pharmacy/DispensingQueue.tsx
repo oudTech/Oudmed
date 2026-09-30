@@ -101,26 +101,37 @@ function DispenseModal({
   open: boolean
   onClose: () => void
 }) {
+  const { data: session } = useSession()
+  const canOverridePrice = can(session?.role, 'billing:manage')
   const qc = useQueryClient()
-  const [lines, setLines] = useState<Record<string, { quantity: string; unitPrice: string }>>({})
+  const [lines, setLines] = useState<
+    Record<string, { quantity: string; unitPrice: string; overriding: boolean; overrideReason: string }>
+  >({})
   const [note, setNote] = useState('')
   const [err, setErr] = useState('')
 
   const rows = useMemo(
     () =>
-      (rx?.items ?? []).map((it) => ({
-        it,
-        quantity: lines[it.id]?.quantity ?? String(it.dispensedQty ?? ''),
-        unitPrice:
-          lines[it.id]?.unitPrice ?? (it.dispenseUnitPrice ?? it.sellPrice ?? ''),
-      })),
+      (rx?.items ?? []).map((it) => {
+        const catalogueOr = it.dispenseUnitPrice ?? it.sellPrice ?? ''
+        const line = lines[it.id]
+        return {
+          it,
+          quantity: line?.quantity ?? String(it.dispensedQty ?? ''),
+          // Off-formulary items have no catalogue price to lock to - stays freely editable, unchanged behavior.
+          unitPrice: it.drugId ? (line?.overriding ? (line?.unitPrice ?? catalogueOr) : catalogueOr) : (line?.unitPrice ?? catalogueOr),
+          overriding: line?.overriding ?? false,
+          overrideReason: line?.overrideReason ?? '',
+        }
+      }),
     [rx, lines],
   )
 
-  const set = (id: string, k: 'quantity' | 'unitPrice', v: string) =>
+  const LINE_DEFAULTS = { quantity: '', unitPrice: '', overriding: false, overrideReason: '' }
+  const set = (id: string, patch: Partial<{ quantity: string; unitPrice: string; overriding: boolean; overrideReason: string }>) =>
     setLines((s) => ({
       ...s,
-      [id]: { quantity: s[id]?.quantity ?? '', unitPrice: s[id]?.unitPrice ?? '', [k]: v },
+      [id]: { ...LINE_DEFAULTS, ...s[id], ...patch },
     }))
 
   const total = rows.reduce((sum, r) => sum + (Number(r.quantity) || 0) * (Number(r.unitPrice) || 0), 0)
@@ -131,7 +142,14 @@ function DispenseModal({
         items: rows.map((r) => ({
           itemId: r.it.id,
           quantity: Number(r.quantity) || 0,
-          unitPrice: Number(r.unitPrice) || 0,
+          // Only send a price when actually overriding (formulary) or for an
+          // off-formulary item (no catalogue to resolve server-side); otherwise
+          // let the server resolve and charge the catalogue price.
+          ...(r.it.drugId
+            ? r.overriding
+              ? { unitPrice: Number(r.unitPrice) || 0, overrideReason: r.overrideReason }
+              : {}
+            : { unitPrice: Number(r.unitPrice) || 0 }),
         })),
         note: note || undefined,
       }),
@@ -182,16 +200,42 @@ function DispenseModal({
                         type="number"
                         className={`border rounded-md px-2 py-1 w-16 text-sm ${short ? 'border-red-300' : 'border-gray-200'}`}
                         value={r.quantity}
-                        onChange={(e) => set(r.it.id, 'quantity', e.target.value)}
+                        onChange={(e) => set(r.it.id, { quantity: e.target.value })}
                       />
                     </td>
-                    <td className="px-3 py-2 w-24">
-                      <input
-                        type="number"
-                        className="border border-gray-200 rounded-md px-2 py-1 w-20 text-sm"
-                        value={r.unitPrice}
-                        onChange={(e) => set(r.it.id, 'unitPrice', e.target.value)}
-                      />
+                    <td className="px-3 py-2 w-28">
+                      {!r.it.drugId || (canOverridePrice && r.overriding) ? (
+                        <div className="space-y-1">
+                          <input
+                            type="number"
+                            className="border border-gray-200 rounded-md px-2 py-1 w-24 text-sm"
+                            value={r.unitPrice}
+                            onChange={(e) => set(r.it.id, { unitPrice: e.target.value })}
+                          />
+                          {r.it.drugId && (
+                            <input
+                              type="text"
+                              className="border border-gray-200 rounded-md px-2 py-1 w-24 text-xs"
+                              placeholder="Reason"
+                              value={r.overrideReason}
+                              onChange={(e) => set(r.it.id, { overrideReason: e.target.value })}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <span className="text-sm text-gray-700">₦{(Number(r.unitPrice) || 0).toLocaleString()}</span>
+                          {canOverridePrice && (
+                            <button
+                              type="button"
+                              className="block text-[11px] text-primary hover:underline"
+                              onClick={() => set(r.it.id, { overriding: true, unitPrice: String(r.unitPrice) })}
+                            >
+                              Override
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-gray-700">
                       ₦{((Number(r.quantity) || 0) * (Number(r.unitPrice) || 0)).toLocaleString()}
@@ -214,11 +258,17 @@ function DispenseModal({
           <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Counselling / substitution notes" />
         </Field>
         {err && <p className="text-sm text-red-600">{err}</p>}
+        {rows.some((r) => r.overriding && !r.overrideReason.trim()) && (
+          <p className="text-xs text-amber-600">Enter a reason for each price override before confirming.</p>
+        )}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button
             loading={m.isPending}
-            disabled={!rows.some((r) => Number(r.quantity) > 0)}
+            disabled={
+              !rows.some((r) => Number(r.quantity) > 0) ||
+              rows.some((r) => r.overriding && !r.overrideReason.trim())
+            }
             onClick={() => m.mutate()}
           >
             Confirm dispense
