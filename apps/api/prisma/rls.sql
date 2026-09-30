@@ -16,6 +16,10 @@
 -- None has a tenantId column - Tenant IS the tenant boundary, and the other
 -- three are global platform state shared across every tenant.
 --
+--   DrillMarker
+-- Disaster-recovery restore-drill scratch table only (docs/OPERATIONS_GUIDE.md).
+-- Holds no real data and no tenantId.
+--
 -- Kept as a single DO block: apply-rls.ts sends the file as one statement.
 
 DO $$

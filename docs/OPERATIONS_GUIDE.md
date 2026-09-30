@@ -375,18 +375,121 @@ grants. **Every new tenant-scoped table needs its own RLS policy in
 `apps/api/prisma/rls.sql`** - this is the single most important rule in the
 codebase; a missing policy is a real data leak, not a theoretical one.
 
-### Backup & restore
-Neon (the production Postgres) supports point-in-time restore/preview.
-**Verified** this pass: a "Preview data" (non-destructive, browses historical
-state) succeeded at ~4 hours back and correctly failed ("Date is beyond the
-history retention") at ~24 hours back on the current plan. **This means the
-effective backup window today is under 24 hours** - a real risk for
-production patient data, flagged explicitly rather than assumed adequate.
-Upgrading Neon's plan for a longer retention window is a pre-launch decision
-the hospital/operator needs to make consciously, not a default that was
-silently accepted. Note the distinction: "Restore" overwrites the live branch
-destructively; "Preview data" does not - always confirm which one a workflow
-is about to trigger.
+### Backup & restore / disaster recovery
+
+**Status: PROD-1 done pending 24h drill.** Neon's plan was upgraded for a
+longer point-in-time-restore (PITR) window (target: at least 7 days). A
+provider-independent nightly `pg_dump` to object storage is tracked
+separately as a Phase 2 item, since PITR alone is tied to one vendor.
+
+#### One-time account setup (do after upgrading the Neon plan)
+
+1. In the Neon dashboard, open the project's **Settings -> Backup/Restore**
+   (or **Branches -> History**) and set the **history retention window to the
+   maximum the new plan allows** - target at least 7 days. This is what
+   determines how far back a restore can reach; it only starts counting
+   *after* the upgrade, so day-old data isn't retroactively covered.
+2. Enable **2FA on the Neon account** (Account settings -> Security) and on
+   the **Render account** (Account settings -> Security) that owns this
+   project. Confirm who else has access to each (Neon: project members;
+   Render: team members) and remove anyone who shouldn't have it.
+3. If the plan offers **branch protection** for the main/production branch
+   (prevents accidental deletion or destructive reset of that branch
+   specifically), turn it on.
+4. Note the Neon project's billing owner and payment method on file, so a
+   failed payment doesn't silently downgrade the plan (and the retention
+   window) without anyone noticing.
+
+#### Restore drill design
+
+Uses a dedicated `DrillMarker` table (migration
+`20260930000000_dr_drill_marker`, excluded from RLS - see `rls.sql`) that
+holds no real data, so the drill never touches patient, billing, or any
+other real record. Helper script: `apps/api/prisma/dr-drill.ts`
+(`pnpm --filter @oudhealth/api dr-drill <plant|check|clear> [id]`).
+
+**Drill procedure** (never restores in place over production - always
+branch-from-point-in-time to a *new* branch, and only ever point a
+scratch/local environment at that new branch):
+
+1. Against the production database: `pnpm dr-drill plant`. Record the
+   printed `id`, `label`, and `createdAt` timestamp somewhere durable
+   (this runbook's drill log, below).
+2. Wait a deliberate interval (a few minutes is enough to prove the
+   mechanism; the second drill below waits ~24h to prove the window that
+   previously failed). Note the exact time you're about to act.
+3. `pnpm dr-drill clear <id>` - this is the simulated data-loss event.
+   Record the exact "Cleared marker ... at ..." timestamp it prints; that
+   is the "restore to just before this" target.
+4. In the Neon dashboard, create a **new branch** restored to a point in
+   time a few seconds before the "cleared at" timestamp from step 3 (Neon:
+   **Branches -> Create branch -> From a point in time**). Do not touch the
+   main/production branch.
+5. Copy that new branch's connection string. On a local machine (never on
+   Render production), point a scratch `.env`'s `DATABASE_URL` at it and
+   run `pnpm dr-drill check <id>` against it - confirm the marker is
+   `FOUND` with the correct `label`/`createdAt`.
+6. Record timings: time from step 3 (data loss) to step 4 (branch ready) to
+   step 6 (confirmed found) - this is the measured recovery point/time,
+   filled into the drill log below.
+7. Delete the scratch branch once confirmed (branches consume storage/compute
+   even when idle).
+
+**Second drill (required, at least 24h after the first):** repeat the same
+steps, but restore to a point ~24 hours back specifically - this is exactly
+the window that failed on the free plan before the upgrade, so it's the one
+that actually proves the fix.
+
+**Drill log** (fill in as drills complete):
+
+| Drill | Date | Marker cleared at | Branch restored to | Time to confirm restored data | Result |
+|---|---|---|---|---|---|
+| 1 (short interval) | _pending_ | | | | |
+| 2 (~24h back) | _pending_ | | | | |
+
+#### Restore procedure (a real incident, not a drill)
+
+1. **When to restore vs. fix forward:** if the problem is bad *data* (a
+   destructive bug, an accidental bulk delete/update, a corrupted migration)
+   and the blast radius is unclear or large, restoring to a point before it
+   happened is safer than trying to hand-patch rows. If the problem is a
+   *code* bug with no data corruption (a crash, a bad deploy), fix forward -
+   redeploy the previous known-good image instead; a database restore loses
+   every write since the restore point and should never be the first
+   response to a pure application bug.
+2. Create a new Neon branch from a point in time just before the incident
+   (same mechanism as the drill above).
+3. **Repoint Render**, do not touch the database in place:
+   - Update `DATABASE_URL` and `APP_DATABASE_URL` on the `oudhealth-api`
+     Render service (Render dashboard -> service -> Environment) to the new
+     branch's connection strings (owner and `oudhealth_app` role
+     respectively - the role still needs to exist on the new branch; Neon
+     branches copy roles from their parent, so `db:setup-role` should not be
+     needed again, but verify).
+   - Trigger a manual redeploy (or it picks up the env change on next boot,
+     which also re-runs `prisma migrate deploy` + `rls.sql` per
+     `docker-entrypoint.sh` - harmless/idempotent against an already-migrated
+     branch).
+4. **Verify health:** `GET /api/health/ready` returns 200; log in as the
+   demo/a real hospital admin and confirm the dashboard loads with data that
+   looks right for the restore point chosen; spot-check that the incident's
+   cause (the bad write) is actually gone.
+5. **Recovery point / recovery time (fill in once measured by the drills
+   above):** expected data loss = however far back the restore point was
+   from the incident (operator's judgment call, bounded by the retention
+   window); expected time-to-restore = _pending first drill result_.
+6. **Who to contact:** the on-call engineer / whoever holds Render+Neon
+   access (fill in name/contact once assigned). **What to tell the
+   hospital:** a plain-language status update - what's affected (patient
+   records / billing / scheduling), that the team is aware and actively
+   restoring, and an honest estimate of when service returns, updated as
+   soon as the drill-measured recovery time above gives a real number to
+   quote instead of a guess.
+
+Note the distinction: Neon's **"Restore"** action overwrites the live branch
+destructively; **branching from a point in time** (used throughout this
+runbook) does not touch the original branch at all - always confirm which
+one a workflow is about to trigger before clicking it.
 
 ## 10. Known limitations (as of this writing)
 

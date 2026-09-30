@@ -1420,3 +1420,11 @@ model AuditLog {
 
   @@index([tenantId])
 }
+
+/// Disaster-recovery restore drills only (see docs/OPERATIONS_GUIDE.md).
+/// Not tenant-scoped, holds no real data - deliberately absent from rls.sql.
+model DrillMarker {
+  id        String   @id @default(uuid())
+  label     String
+  createdAt DateTime @default(now())
+}
