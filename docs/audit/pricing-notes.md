@@ -40,8 +40,36 @@ schema-level decision, not a quick patch.
 | Service/drug catalogue price-setting | `admin.service.ts` (ServiceItem CRUD), `inventory.service.ts` (Drug CRUD) | `admin:settings` / `pharmacy:manage` | N/A - this is where prices come from | By design - the source of truth itself |
 | Admissions / ward / bed charges | (searched, none found) | N/A | No charge-creation path exists yet | Not applicable - feature doesn't exist |
 
-**Remaining known gap (not fixed):** off-formulary prescription items and
-free-text (non-catalogue) clinical orders have no catalogue price to resolve
-against, so their price is still fully client-entered with no check -
-tracked as a separate decision, see the fix-session report for the proposal
-and pending owner decision.
+**Off-formulary / off-catalogue pricing: fixed 2026-09-30.** Both paths now
+require a reason and are always audited (`OFF_FORMULARY_DISPENSE` /
+`OFF_CATALOGUE_ORDER` - drug/item name, price, reason, who, visit),
+regardless of role, since there's no catalogue to validate the price
+against. The prescribing UI also now blocks a typo from silently becoming
+an untracked off-formulary item (a "did you mean" confirmation is required
+before one can be added). A "Off-formulary dispenses" report on the
+Inventory tab (`GET /pharmacy/off-formulary-report`) shows which
+non-catalogue drugs are dispensed often enough to add to the formulary.
+
+## Admissions / ward / bed stays: no billing exists (potential go-live blocker)
+
+Confirmed 2026-09-30: `Ward` (`schema.prisma:814-828`) and `Bed`
+(`schema.prisma:830-844`) have **no rate/price field at all** - this isn't a
+wiring bug, pricing for inpatient stays was never designed into the schema.
+`AdmissionsService` (`apps/api/src/admissions/admissions.service.ts`)
+implements `admit`, `transfer`, `discharge`, `update`, `list`, `getOne` -
+none of them call `postChargeToVisit`, create an invoice line, or reference
+any price at all. What exists today:
+
+- **Admit:** assign a patient to a ward/bed, with an admitting/attending
+  doctor and department. No charge posted.
+- **Transfer:** move the patient to a different bed/ward. No charge posted.
+- **Discharge:** close the admission. No charge posted.
+- There is no concept anywhere of a daily bed rate, a ward-tier price, or a
+  length-of-stay calculation.
+
+**If this hospital runs inpatient wards, this is a real gap**, not a
+polish item: every day a patient occupies a bed today generates zero
+revenue in the system. Fixing it is a real feature (schema: a rate on
+`Ward` or a `WardRate` table; logic: a per-day or per-discharge charge
+calculation; decision: charged daily, at discharge, or both) rather than a
+quick patch, and should be scoped as its own item once confirmed needed.
