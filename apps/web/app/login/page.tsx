@@ -11,11 +11,23 @@ import { currentSubdomain, tenantUrl, ROOT_DOMAIN } from '@/lib/tenant'
 /** Apex domain: no subdomain yet - let the visitor find their hospital's own address. */
 function FindHospital() {
   const [slug, setSlug] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
-  const go = (e: React.FormEvent) => {
+  async function go(e: React.FormEvent) {
     e.preventDefault()
     const s = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
-    if (s) window.location.href = tenantUrl(s, '/login')
+    if (!s) return
+    setError('')
+    setLoading(true)
+    try {
+      // Verify the hospital actually exists before the address bar ever changes.
+      await authApi.resolveTenant(s)
+      window.location.href = tenantUrl(s, '/login')
+    } catch {
+      setError("We couldn't find a hospital at that address. Check it and try again.")
+      setLoading(false)
+    }
   }
 
   return (
@@ -27,10 +39,15 @@ function FindHospital() {
 
       <form onSubmit={go} className="mt-8">
         <label className="block text-sm font-medium text-gray-700 mb-1.5">Hospital address</label>
-        <div className="flex items-stretch border border-gray-200 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-primary focus-within:border-transparent">
+        <div
+          className={`flex items-stretch border rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-primary focus-within:border-transparent ${error ? 'border-red-300' : 'border-gray-200'}`}
+        >
           <input
             value={slug}
-            onChange={(e) => setSlug(e.target.value)}
+            onChange={(e) => {
+              setSlug(e.target.value)
+              if (error) setError('')
+            }}
             placeholder="your-hospital"
             className="flex-1 px-4 py-2.5 text-sm focus:outline-none"
             autoFocus
@@ -39,8 +56,9 @@ function FindHospital() {
             .{ROOT_DOMAIN.replace(/:\d+$/, '')}
           </span>
         </div>
+        {error && <p className="text-xs text-red-500 mt-1.5">{error}</p>}
         <div className="mt-4">
-          <SubmitButton>Continue</SubmitButton>
+          <SubmitButton loading={loading}>Continue</SubmitButton>
         </div>
       </form>
 

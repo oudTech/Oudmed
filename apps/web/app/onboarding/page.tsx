@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { TextField, SelectField, FormError } from '@/components/auth/fields'
 import { authApi } from '@/lib/authApi'
 import { COUNTRIES } from '@/lib/countries'
+import { tenantUrl } from '@/lib/tenant'
 
 const FACILITY_TYPES = [
   { value: 'HOSPITAL', label: 'Hospital' },
@@ -27,6 +28,8 @@ export default function OnboardingPage() {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [created, setCreated] = useState<{ slug: string; redirectUrl: string } | null>(null)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     const t = sessionStorage.getItem('oud_pending_token')
@@ -51,7 +54,7 @@ export default function OnboardingPage() {
 
     setLoading(true)
     try {
-      const { redirectUrl } = await authApi.createTenant(pendingToken, {
+      const { tenant, redirectUrl } = await authApi.createTenant(pendingToken, {
         name: form.name.trim(),
         facilityType: form.facilityType,
         country: form.country,
@@ -59,12 +62,70 @@ export default function OnboardingPage() {
       })
       sessionStorage.removeItem('oud_pending_token')
       sessionStorage.removeItem('oud_pending_email')
-      // Hand off to the new tenant subdomain (full navigation, not client routing).
-      window.location.href = redirectUrl
+      setCreated({ slug: tenant.slug, redirectUrl })
+      setLoading(false)
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Could not create your workspace')
       setLoading(false)
     }
+  }
+
+  function copyAddress(address: string) {
+    navigator.clipboard?.writeText(address).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  if (created) {
+    const address = tenantUrl(created.slug)
+    return (
+      <div className="min-h-screen flex flex-col font-hanken bg-white">
+        <header className="px-8 sm:px-14 pt-10">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/oudmed-logo.svg" alt="Oudmed" className="h-7 w-auto" />
+        </header>
+
+        <main className="flex-1 flex items-start sm:items-center">
+          <div className="w-full max-w-2xl mx-auto px-8 sm:px-14 py-12">
+            <h1 className="text-[1.75rem] font-bold leading-snug">
+              <span className="text-primary">Your workspace is ready.</span> Save your hospital&apos;s
+              address
+            </h1>
+            <p className="text-sm text-gray-500 mt-3">
+              From now on, sign in directly at this address instead of going through oudmed.com and
+              typing your hospital&apos;s name. Bookmark it, and share it with your staff so they can
+              sign in directly too.
+            </p>
+
+            <div className="mt-8 flex items-stretch border border-gray-200 rounded-lg overflow-hidden">
+              <span className="flex-1 px-4 py-3 text-sm font-medium text-gray-900 truncate">
+                {address}
+              </span>
+              <button
+                type="button"
+                onClick={() => copyAddress(address)}
+                className="px-4 text-sm font-medium text-primary border-l border-gray-200 hover:bg-gray-50 transition whitespace-nowrap"
+              >
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+
+            <div className="flex justify-end mt-10">
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = created.redirectUrl
+                }}
+                className="bg-primary text-white rounded-lg px-8 py-2.5 text-sm font-semibold hover:bg-[#2b58c9] transition"
+              >
+                Continue to dashboard
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    )
   }
 
   return (

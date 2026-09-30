@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import { useSession } from 'next-auth/react'
+import { useSession, signOut } from 'next-auth/react'
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -106,6 +106,14 @@ function SupportIcon({ color = INACTIVE }: { color?: string }) {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
       <path d="M4.8 5.78738L4.35279 4.89296C4.01401 5.06235 3.8 5.40861 3.8 5.78738H4.8ZM12 21.3874L11.466 22.2329C11.7922 22.4389 12.2078 22.4389 12.534 22.2329L12 21.3874ZM19.2 5.78738H20.2C20.2 5.40861 19.986 5.06235 19.6472 4.89296L19.2 5.78738ZM10.39 2.99237L9.94282 2.09794L10.39 2.99237ZM13.61 2.99237L14.0572 2.09794V2.09794L13.61 2.99237ZM14.7 11.8875C15.2523 11.8875 15.7 11.4398 15.7 10.8875C15.7 10.3352 15.2523 9.88752 14.7 9.88752V10.8875V11.8875ZM9.3 9.88752C8.74772 9.88752 8.3 10.3352 8.3 10.8875C8.3 11.4398 8.74772 11.8875 9.3 11.8875V10.8875V9.88752ZM11 13.5874C11 14.1397 11.4477 14.5874 12 14.5874C12.5523 14.5874 13 14.1397 13 13.5874H12H11ZM13 8.18738C13 7.6351 12.5523 7.18738 12 7.18738C11.4477 7.18738 11 7.6351 11 8.18738H12H13ZM10.39 2.99237L9.94282 2.09794L4.35279 4.89296L4.8 5.78738L5.24722 6.68181L10.8372 3.88679L10.39 2.99237ZM4.8 5.78738H3.8V13.8154H4.8H5.8V5.78738H4.8ZM4.8 13.8154H3.8C3.8 15.2949 4.66307 16.697 5.94384 18.0146C7.24507 19.3532 9.12191 20.7525 11.466 22.2329L12 21.3874L12.534 20.5419C10.2405 19.0935 8.51734 17.7927 7.37796 16.6206C6.21814 15.4274 5.8 14.5079 5.8 13.8154H4.8ZM12 21.3874L12.534 22.2329C14.8389 20.7772 16.7279 19.5251 18.0344 18.2613C19.3682 16.9711 20.2 15.5677 20.2 13.8154H19.2H18.2C18.2 14.8351 17.7506 15.7532 16.6438 16.8238C15.5097 17.9209 13.7987 19.0687 11.466 20.5419L12 21.3874ZM19.2 13.8154H20.2V5.78738H19.2H18.2V13.8154H19.2ZM19.6472 4.89296L14.0572 2.09794L13.61 2.99237L13.1628 3.88679L18.7528 6.68181L19.2 5.78738L19.6472 4.89296ZM10.39 2.99237L10.8372 3.88679C11.5692 3.52081 12.4308 3.52081 13.1628 3.88679L13.61 2.99237L14.0572 2.09794C12.7622 1.45043 11.2378 1.45043 9.94282 2.09794L10.39 2.99237ZM14.7 10.8875V9.88752H12V10.8875V11.8875H14.7V10.8875ZM12 10.8875V9.88752H9.3V10.8875V11.8875H12V10.8875ZM12 13.5874H13V10.8875H12H11V13.5874H12ZM12 10.8875H13V8.18738H12H11V10.8875H12Z" fill={color}/>
+    </svg>
+  )
+}
+
+function LogoutIcon({ color = INACTIVE }: { color?: string }) {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
     </svg>
   )
 }
@@ -298,6 +306,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             )
           })}
+          <button
+            type="button"
+            data-tour="nav-logout"
+            onClick={() => {
+              setMobileOpen(false)
+              signOut({ callbackUrl: '/login' })
+            }}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors hover:bg-black/5"
+            style={{ color: INACTIVE }}
+          >
+            <LogoutIcon />
+            {showLabels && <span className="font-medium">Log out</span>}
+          </button>
         </div>
       </aside>
 
