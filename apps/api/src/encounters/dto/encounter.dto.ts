@@ -21,7 +21,11 @@ export class CreateOrderDto {
   @IsIn(Object.values(OrderType)) orderType: OrderType;
   @IsOptional() @IsUUID() serviceItemId?: string;
   @IsOptional() @IsString() @MaxLength(160) name?: string;
+  // Trusted only as an override candidate for actors with billing:manage, and
+  // only with overrideReason set - see EncountersService.createOrder. Everyone
+  // else's order is priced from the service catalogue regardless of this.
   @IsOptional() @IsNumber() @Min(0) unitPrice?: number;
+  @IsOptional() @IsString() @MaxLength(300) overrideReason?: string;
   @IsOptional() @IsInt() @Min(1) quantity?: number;
   @IsOptional() @IsIn(['Routine', 'Urgent', 'STAT']) priority?: string;
   @IsOptional() @IsString() @MaxLength(1000) clinicalNote?: string;

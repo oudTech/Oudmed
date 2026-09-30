@@ -1,9 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OrderType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
-import { assertCan } from '../common/permissions';
+import { assertCan, can } from '../common/permissions';
 import { CreateOrderDto, UpdateOrderDto, UpsertNoteDto } from './dto/encounter.dto';
 
 interface Actor {
@@ -29,6 +29,8 @@ function ageFrom(dob: Date | null): number | null {
 
 @Injectable()
 export class EncountersService {
+  private readonly log = new Logger(EncountersService.name);
+
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
@@ -202,13 +204,12 @@ export class EncountersService {
       if (!visit) throw new NotFoundException('Visit not found');
 
       let name = dto.name?.trim();
-      let unitPrice = new Prisma.Decimal(dto.unitPrice ?? 0);
       let serviceItemId: string | null = dto.serviceItemId ?? null;
+      let svc: { name: string; unitPrice: Prisma.Decimal } | null = null;
       if (serviceItemId) {
-        const svc = await tx.serviceItem.findFirst({ where: { id: serviceItemId } });
+        svc = await tx.serviceItem.findFirst({ where: { id: serviceItemId }, select: { name: true, unitPrice: true } });
         if (!svc) throw new BadRequestException('Service item not found');
         name = name || svc.name;
-        if (dto.unitPrice === undefined) unitPrice = svc.unitPrice;
       }
       if (!name) throw new BadRequestException('An order needs a name or a service item');
       const quantity = dto.quantity ?? 1;
@@ -226,6 +227,15 @@ export class EncountersService {
           orderedById: actor.userId,
         },
       });
+
+      // A catalogue-linked order resolves its price server-side, the same way
+      // pharmacy dispensing does (see PharmacyService.resolveDispensePrice) -
+      // a non-catalogue (free-text) order has nothing to resolve against and
+      // keeps the pre-existing client-trusted price, same as an off-formulary
+      // drug; both are a known, separate gap tracked together.
+      const unitPrice = serviceItemId && svc
+        ? await this.resolveOrderPrice(actor, visitId, order.id, name, svc.unitPrice, dto, can(actor.role, 'billing:manage'))
+        : new Prisma.Decimal(dto.unitPrice ?? 0);
 
       const { lineId } = await this.billing.postChargeToVisit(tx, {
         tenantId: actor.tenantId,
@@ -248,6 +258,57 @@ export class EncountersService {
       });
       return { ...order, invoiceLineId: lineId };
     });
+  }
+
+  /**
+   * The service catalogue (`ServiceItem.unitPrice`) is the only authoritative
+   * price for a catalogue-linked order - same pattern as
+   * PharmacyService.resolveDispensePrice. A client-sent unitPrice is trusted
+   * as an override only for an actor with billing:manage, and only with a
+   * reason; from anyone else it's logged as a mismatch and ignored. A
+   * missing/zero catalogue price blocks the order rather than posting a free
+   * charge, unless a privileged override explicitly sets a real price.
+   */
+  private async resolveOrderPrice(
+    actor: Actor,
+    visitId: string,
+    orderId: string,
+    itemName: string,
+    cataloguePriceDecimal: Prisma.Decimal,
+    dto: { unitPrice?: number; overrideReason?: string },
+    canOverride: boolean,
+  ): Promise<Prisma.Decimal> {
+    const cataloguePrice = Number(cataloguePriceDecimal);
+    const requested = dto.unitPrice;
+    const mismatched = requested !== undefined && requested !== cataloguePrice;
+
+    if (mismatched && canOverride) {
+      if (!dto.overrideReason?.trim()) {
+        throw new BadRequestException(`A reason is required to charge a different price for ${itemName}`);
+      }
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'ORDER_PRICE_OVERRIDE',
+        entityType: 'ClinicalOrder', entityId: orderId,
+        metadata: { itemName, cataloguePrice, overridePrice: requested, reason: dto.overrideReason, visitId },
+      });
+      return new Prisma.Decimal(requested as number);
+    }
+
+    if (mismatched) {
+      this.log.warn(
+        `Order price mismatch: user ${actor.userId} sent ${requested} for ${itemName} (catalogue ${cataloguePrice}); charging catalogue price.`,
+      );
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'ORDER_PRICE_MISMATCH',
+        entityType: 'ClinicalOrder', entityId: orderId,
+        metadata: { itemName, cataloguePrice, requestedPrice: requested, visitId },
+      });
+    }
+
+    if (cataloguePrice <= 0) {
+      throw new BadRequestException(`No price set for ${itemName}. Ask an admin to set it in Administration > Services.`);
+    }
+    return cataloguePriceDecimal;
   }
 
   async updateOrder(actor: Actor, orderId: string, dto: UpdateOrderDto) {

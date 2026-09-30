@@ -17,6 +17,7 @@ export const encountersApi = {
       serviceItemId?: string
       name?: string
       unitPrice?: number
+      overrideReason?: string
       quantity?: number
       priority?: string
       clinicalNote?: string
