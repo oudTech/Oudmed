@@ -88,6 +88,12 @@ export function ClaimDetailDrawer({
             {claim.submittedAt && <Info label="Submitted" value={dt(claim.submittedAt)} />}
           </div>
 
+          {claim.diagnosesChangedSinceGenerated && (
+            <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-sm text-amber-700">
+              Diagnoses changed since this claim was generated. Regenerate?
+            </div>
+          )}
+
           <div className="border border-gray-100 rounded-xl overflow-x-auto">
             <table className="w-full text-sm whitespace-nowrap">
               <thead className="bg-gray-50 text-gray-500">

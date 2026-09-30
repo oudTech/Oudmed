@@ -56,18 +56,18 @@ describe('ClaimsService (integration - remittance reconciliation)', () => {
     const visit = await makeVisit(tenantId, patient.id, {
       payerType: 'HMO', hmoName: 'Test HMO', insuranceProviderId: providerId,
     });
-    await prisma.forTenant(tenantId, (tx) =>
+    const { invoiceId } = await prisma.forTenant(tenantId, (tx) =>
       billing.postChargeToVisit(tx, {
         tenantId, userId, visitId: visit.id, patientId: patient.id,
         description: 'Consultation', quantity: 1, unitPrice: 10000, category: 'Consultation',
       }),
     );
-    return visit;
+    return { visit, invoiceId };
   }
 
   it('generate applies the co-pay split and mirrors the invoice lines', async () => {
-    const visit = await claimableVisit();
-    const { created, skipped } = await claims.generate(actor, { visitIds: [visit.id] });
+    const { invoiceId } = await claimableVisit();
+    const { created, skipped } = await claims.generate(actor, { invoiceIds: [invoiceId] });
     expect(skipped).toHaveLength(0);
     expect(created).toHaveLength(1);
 
@@ -77,15 +77,15 @@ describe('ClaimsService (integration - remittance reconciliation)', () => {
     expect(Number(c.patientResponsibility)).toBe(1000);
     expect(c.lines).toHaveLength(1);
 
-    // re-running skips the already-claimed visit
-    const again = await claims.generate(actor, { visitIds: [visit.id] });
+    // re-running skips the already-claimed invoice
+    const again = await claims.generate(actor, { invoiceIds: [invoiceId] });
     expect(again.created).toHaveLength(0);
     expect(again.skipped[0].reason).toMatch(/already exists/i);
   });
 
   it('remittance posts a payment on the invoice; reversal rolls it back', async () => {
-    const visit = await claimableVisit();
-    const claimId = (await claims.generate(actor, { visitIds: [visit.id] })).created[0];
+    const { invoiceId: chargedInvoiceId } = await claimableVisit();
+    const claimId = (await claims.generate(actor, { invoiceIds: [chargedInvoiceId] })).created[0];
     await claims.submitClaim(actor, claimId, {});
 
     const before = await claims.getClaim(actor, claimId);
@@ -119,8 +119,8 @@ describe('ClaimsService (integration - remittance reconciliation)', () => {
   });
 
   it('write-off closes the claim and posts a negative adjustment line', async () => {
-    const visit = await claimableVisit();
-    const claimId = (await claims.generate(actor, { visitIds: [visit.id] })).created[0];
+    const { invoiceId: chargedInvoiceId } = await claimableVisit();
+    const claimId = (await claims.generate(actor, { invoiceIds: [chargedInvoiceId] })).created[0];
     await claims.submitClaim(actor, claimId, {});
 
     const c = await claims.getClaim(actor, claimId);
@@ -136,5 +136,45 @@ describe('ClaimsService (integration - remittance reconciliation)', () => {
     const inv = await billing.getInvoice(tenantId, invoiceId);
     expect(Number(inv.totalAmount)).toBe(totalBefore - 9000);
     expect(inv.lines.some((l) => l.category === 'HMO Adjustment' && Number(l.lineTotal) === -9000)).toBe(true);
+  });
+
+  it('FUNC-2: receivables aging counts a supplementary invoice\'s claim separately, no double-count and none missed', async () => {
+    const before = await claims.receivables(actor);
+    const patient = await makePatient(tenantId, { hmoNumber: 'M-456', insuranceProviderId: providerId });
+    const visit = await makeVisit(tenantId, patient.id, {
+      payerType: 'HMO', hmoName: 'Test HMO', insuranceProviderId: providerId,
+    });
+    const { invoiceId: originalId } = await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToVisit(tx, {
+        tenantId, userId, visitId: visit.id, patientId: patient.id,
+        description: 'Consultation', quantity: 1, unitPrice: 10000, category: 'Consultation',
+      }),
+    );
+    const originalClaimId = (await claims.generate(actor, { invoiceIds: [originalId] })).created[0];
+    await claims.submitClaim(actor, originalClaimId, {});
+
+    // lock the original with a claim already exists; a further charge must
+    // land on a supplementary invoice, which can carry its own claim
+    const { invoiceId: supplementId } = await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToVisit(tx, {
+        tenantId, userId, visitId: visit.id, patientId: patient.id,
+        description: 'Late lab order', quantity: 1, unitPrice: 5000, category: 'Laboratory',
+      }),
+    );
+    expect(supplementId).not.toBe(originalId);
+    const supplementClaimId = (await claims.generate(actor, { invoiceIds: [supplementId] })).created[0];
+    await claims.submitClaim(actor, supplementClaimId, {});
+
+    const originalClaim = await claims.getClaim(actor, originalClaimId);
+    const supplementClaim = await claims.getClaim(actor, supplementClaimId);
+
+    const after = await claims.receivables(actor);
+    const delta = Number(after.totals.outstanding) - Number(before.totals.outstanding);
+    const expectedDelta = Number(originalClaim.outstanding) + Number(supplementClaim.outstanding);
+    expect(delta).toBeCloseTo(expectedDelta, 2);
+    // sanity: both claims are genuinely distinct and both counted (not the same claim twice)
+    expect(originalClaimId).not.toBe(supplementClaimId);
+    expect(Number(originalClaim.outstanding)).toBeGreaterThan(0);
+    expect(Number(supplementClaim.outstanding)).toBeGreaterThan(0);
   });
 });

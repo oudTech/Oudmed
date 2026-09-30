@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { EncounterDTO } from '@oudhealth/contracts'
 import { Button, Field, Input, Select, Textarea, Modal } from '@/components/ui/kit'
-import { useConfirm } from '@/components/ui/feedback'
+import { useConfirm, useToast } from '@/components/ui/feedback'
 import { can } from '@/lib/permissions'
 import {
   patientsApi,
@@ -22,7 +22,7 @@ import {
   DISPENSE_STATUS_META,
   ORDER_PRIORITIES,
 } from '@/lib/encounters'
-import { setVisitStatus, VISIT_STATUS_META, VISIT_TYPE_LABEL } from '@/lib/hospital'
+import { setVisitStatus, reopenVisit, VISIT_STATUS_META, VISIT_TYPE_LABEL } from '@/lib/hospital'
 import { timeLabel } from '@/lib/datetime'
 import { trackFirst } from '@/lib/onboarding/analytics'
 import {
@@ -42,6 +42,7 @@ export default function EncounterPage() {
   const { data: session } = useSession()
   const role = session?.role
 
+  const toast = useToast()
   const allowed = can(role, 'patient:read')
   const q = useQuery({
     queryKey: ['encounter', visitId],
@@ -56,12 +57,24 @@ export default function EncounterPage() {
     mutationFn: () => setVisitStatus(visitId, 'COMPLETED'),
     onSuccess: () => {
       trackFirst('first_consultation_completed')
+      toast('Visit completed', 'success')
       qc.invalidateQueries({ queryKey: ['schedule'] })
       router.push('/schedule')
     },
+    onError: (err: any) => toast(err?.response?.data?.message ?? 'Could not complete the visit.', 'error'),
   })
 
-  const [modal, setModal] = useState<null | 'diagnosis' | 'vitals' | 'prescription' | 'order'>(null)
+  const [modal, setModal] = useState<null | 'diagnosis' | 'vitals' | 'prescription' | 'order' | 'reopen'>(null)
+  const [reopenReason, setReopenReason] = useState('')
+  const reopen = useMutation({
+    mutationFn: () => reopenVisit(visitId, reopenReason.trim()),
+    onSuccess: () => {
+      toast('Visit reopened', 'success')
+      setModal(null); setReopenReason('')
+      refresh()
+    },
+    onError: (err: any) => toast(err?.response?.data?.message ?? 'Could not reopen the visit.', 'error'),
+  })
 
   if (!allowed) {
     return (
@@ -78,7 +91,11 @@ export default function EncounterPage() {
   if (!e) return <div className="p-8 text-sm text-gray-400">Encounter not found.</div>
 
   const meta = VISIT_STATUS_META[e.visit.status as keyof typeof VISIT_STATUS_META]
-  const done = e.visit.status === 'COMPLETED' || e.visit.status === 'CANCELLED'
+  const cancelled = e.visit.status === 'CANCELLED'
+  // Billable/overwrite-risk actions (orders, prescriptions, editing the note)
+  // need the visit reopened once completed. Documentation that's already
+  // append-only (complaint/vitals/diagnosis) stays available - see FUNC-2.
+  const done = e.visit.status === 'COMPLETED' || cancelled
   const canDoc = can(role, 'diagnosis:record')
   const canNote = can(role, 'note:write')
   const canOrder = can(role, 'order:create')
@@ -127,8 +144,17 @@ export default function EncounterPage() {
               Complete visit
             </Button>
           )}
+          {e.visit.status === 'COMPLETED' && can(role, 'visit:reopen') && (
+            <Button variant="secondary" onClick={() => setModal('reopen')}>Reopen visit</Button>
+          )}
         </div>
       </div>
+
+      {e.visit.reopenedAt && (
+        <div className="px-8 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-700">
+          This visit was reopened on {dt(e.visit.reopenedAt)}.
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         {/* left rail: patient snapshot */}
@@ -187,12 +213,12 @@ export default function EncounterPage() {
             {e.visit.reason ? ` · ${e.visit.reason}` : ''}
           </p>
 
-          <Complaints e={e} disabled={done} onDone={refresh} />
+          <Complaints e={e} disabled={cancelled} onDone={refresh} />
 
           <Section
             title="Vital signs"
             action={
-              canVitals && !done && (
+              canVitals && !cancelled && (
                 <Button variant="secondary" onClick={() => setModal('vitals')}>Record vitals</Button>
               )
             }
@@ -208,7 +234,10 @@ export default function EncounterPage() {
                   <tbody>
                     {e.vitals.map((v) => (
                       <tr key={v.id} className="border-t border-gray-100">
-                        <td className="px-3 py-2 text-gray-500">{timeLabel(v.recordedAt)}</td>
+                        <td className="px-3 py-2 text-gray-500">
+                          {timeLabel(v.recordedAt)}
+                          {v.lateEntry && <LateEntryTag />}
+                        </td>
                         <VCell flag={vitalFlag('systolicBp', v.systolicBp) ?? vitalFlag('diastolicBp', v.diastolicBp)}>{v.systolicBp && v.diastolicBp ? `${v.systolicBp}/${v.diastolicBp}` : '-'}</VCell>
                         <VCell flag={vitalFlag('pulseBpm', v.pulseBpm)}>{v.pulseBpm ?? '-'}</VCell>
                         <VCell flag={vitalFlag('temperatureC', v.temperatureC)}>{v.temperatureC ? `${v.temperatureC}°` : '-'}</VCell>
@@ -226,7 +255,7 @@ export default function EncounterPage() {
 
           <Section
             title="Diagnoses"
-            action={canDoc && !done && <Button variant="secondary" onClick={() => setModal('diagnosis')}>Add diagnosis</Button>}
+            action={canDoc && !cancelled && <Button variant="secondary" onClick={() => setModal('diagnosis')}>Add diagnosis</Button>}
           >
             {e.diagnoses.length === 0 ? (
               <Empty>No diagnosis recorded.</Empty>
@@ -238,6 +267,7 @@ export default function EncounterPage() {
                       <p className="text-sm font-medium text-gray-900">
                         {dx.description}
                         {dx.code && <span className="ml-1 text-xs text-gray-400 font-mono">{dx.code}</span>}
+                        {dx.lateEntry && <LateEntryTag />}
                       </p>
                       <span className="text-xs text-gray-500 bg-gray-100 rounded-full px-2 py-0.5">{titleCase(dx.certainty)}</span>
                     </div>
@@ -285,7 +315,7 @@ export default function EncounterPage() {
             )}
           </Section>
 
-          <NoteEditor e={e} disabled={done || !canNote} visitId={visitId} />
+          <NoteEditor e={e} completed={done} canNote={canNote} visitId={visitId} />
 
           <Charges e={e} />
         </div>
@@ -295,6 +325,23 @@ export default function EncounterPage() {
       <AddDiagnosisModal patientId={e.patient.id} visitId={visitId} open={modal === 'diagnosis'} onClose={() => { setModal(null); refresh() }} />
       <AddPrescriptionModal patientId={e.patient.id} visitId={visitId} open={modal === 'prescription'} onClose={() => { setModal(null); refresh() }} />
       <OrderModal visitId={visitId} open={modal === 'order'} onClose={() => { setModal(null); refresh() }} />
+      <Modal open={modal === 'reopen'} onClose={() => setModal(null)} title="Reopen visit" width={460} align="center">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            Reopening moves this visit back to in-progress so you can add orders, prescriptions or edit the
+            note. Completing it again will not re-charge the consultation fee.
+          </p>
+          <Field label="Reason" required>
+            <Textarea rows={2} value={reopenReason} onChange={(ev) => setReopenReason(ev.target.value)} placeholder="Why does this visit need to be reopened?" />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
+            <Button loading={reopen.isPending} disabled={!reopenReason.trim()} onClick={() => reopen.mutate()}>
+              Reopen visit
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
@@ -368,7 +415,10 @@ function Complaints({ e, disabled, onDone }: { e: EncounterDTO; disabled: boolea
         <ul className="border border-gray-100 rounded-xl divide-y">
           {e.complaints.map((c) => (
             <li key={c.id} className="px-4 py-3">
-              <p className="text-sm text-gray-900">{c.description}</p>
+              <p className="text-sm text-gray-900">
+                {c.description}
+                {c.lateEntry && <LateEntryTag />}
+              </p>
               <p className="text-xs text-gray-400 mt-0.5">
                 {[c.severity, c.onsetNote, c.recordedByName].filter(Boolean).join(' · ')}
               </p>
@@ -443,8 +493,12 @@ function Orders({
   )
 }
 
-function NoteEditor({ e, disabled, visitId }: { e: EncounterDTO; disabled: boolean; visitId: string }) {
+function NoteEditor({
+  e, completed, canNote, visitId,
+}: { e: EncounterDTO; completed: boolean; canNote: boolean; visitId: string }) {
   const qc = useQueryClient()
+  const toast = useToast()
+  const disabled = completed || !canNote
   const [f, setF] = useState({
     subjective: e.note?.subjective ?? '',
     objective: e.note?.objective ?? '',
@@ -463,8 +517,25 @@ function NoteEditor({ e, disabled, visitId }: { e: EncounterDTO; disabled: boole
 
   const m = useMutation({
     mutationFn: () => encountersApi.saveNote(visitId, f),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['encounter', visitId] }),
+    onSuccess: () => {
+      toast('Note saved', 'success')
+      qc.invalidateQueries({ queryKey: ['encounter', visitId] })
+    },
+    onError: (err: any) => toast(err?.response?.data?.message ?? 'Could not save the note.', 'error'),
   })
+
+  const [addendum, setAddendum] = useState({ subjective: '', objective: '', assessment: '', plan: '' })
+  const addendumHasContent = Object.values(addendum).some((v) => v.trim())
+  const addAddendum = useMutation({
+    mutationFn: () => encountersApi.addNoteAddendum(visitId, addendum),
+    onSuccess: () => {
+      toast('Addendum added', 'success')
+      setAddendum({ subjective: '', objective: '', assessment: '', plan: '' })
+      qc.invalidateQueries({ queryKey: ['encounter', visitId] })
+    },
+    onError: (err: any) => toast(err?.response?.data?.message ?? 'Could not save the addendum.', 'error'),
+  })
+
   const dirty =
     f.subjective !== (e.note?.subjective ?? '') ||
     f.objective !== (e.note?.objective ?? '') ||
@@ -496,6 +567,45 @@ function NoteEditor({ e, disabled, visitId }: { e: EncounterDTO; disabled: boole
         ))}
         {e.note && <p className="text-xs text-gray-400">Last saved {dt(e.note.updatedAt)}{e.note.authorName ? ` by ${e.note.authorName}` : ''}</p>}
       </div>
+
+      {e.noteAddenda.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {e.noteAddenda.map((a) => (
+            <div key={a.id} className="border border-amber-100 bg-amber-50/50 rounded-xl p-4">
+              <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2">
+                Addendum · {dt(a.createdAt)}{a.authorName ? ` · ${a.authorName}` : ''}
+              </p>
+              <div className="space-y-1 text-sm text-gray-800">
+                {a.subjective && <p><span className="text-gray-400">S: </span>{a.subjective}</p>}
+                {a.objective && <p><span className="text-gray-400">O: </span>{a.objective}</p>}
+                {a.assessment && <p><span className="text-gray-400">A: </span>{a.assessment}</p>}
+                {a.plan && <p><span className="text-gray-400">P: </span>{a.plan}</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {completed && canNote && (
+        <div className="mt-3 border border-gray-100 rounded-xl p-4 space-y-3">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Add a late addendum</p>
+          {FIELDS.map(([k, label]) => (
+            <div key={k}>
+              <label className="text-xs text-gray-500 mb-1 block">{label}</label>
+              <Textarea rows={2} value={addendum[k]} onChange={(ev) => setAddendum({ ...addendum, [k]: ev.target.value })} />
+            </div>
+          ))}
+          <div className="flex justify-end">
+            <Button
+              loading={addAddendum.isPending}
+              disabled={!addendumHasContent}
+              onClick={() => addAddendum.mutate()}
+            >
+              Save addendum
+            </Button>
+          </div>
+        </div>
+      )}
     </Section>
   )
 }
@@ -503,46 +613,64 @@ function NoteEditor({ e, disabled, visitId }: { e: EncounterDTO; disabled: boole
 function Charges({ e }: { e: EncounterDTO }) {
   return (
     <Section title="Charges">
-      {!e.invoice ? (
+      {e.invoices.length === 0 ? (
         <Empty>Nothing billed yet.</Empty>
       ) : (
-        <div className="border border-gray-100 rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-500">
-              <tr>{['Item', 'Category', 'Qty', 'Amount'].map((h) => <th key={h} className="text-left font-medium px-3 py-2">{h}</th>)}</tr>
-            </thead>
-            <tbody>
-              {e.invoice.lines.map((l) => (
-                <tr key={l.id} className="border-t border-gray-100">
-                  <td className="px-3 py-2">{l.description}</td>
-                  <td className="px-3 py-2 text-gray-500">{l.category ?? '-'}</td>
-                  <td className="px-3 py-2">{l.quantity}</td>
-                  <td className="px-3 py-2">{naira(l.lineTotal)}</td>
-                </tr>
-              ))}
-              <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
-                <td className="px-3 py-2" colSpan={3}>Total</td>
-                <td className="px-3 py-2">{naira(e.invoice.totalAmount)}</td>
-              </tr>
-              <tr className="text-gray-500">
-                <td className="px-3 py-1.5" colSpan={3}>Paid</td>
-                <td className="px-3 py-1.5">{naira(e.invoice.paidAmount)}</td>
-              </tr>
-              <tr className="font-semibold">
-                <td className="px-3 py-1.5" colSpan={3}>Balance due</td>
-                <td className="px-3 py-1.5">{naira(e.invoice.balanceDue)}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div className="space-y-3">
+          {e.invoices.map((invoice) => (
+            <div key={invoice.id} className="border border-gray-100 rounded-xl overflow-hidden">
+              {invoice.isSupplementary && (
+                <div className="bg-amber-50 border-b border-amber-100 px-3 py-1.5 text-xs font-medium text-amber-700 uppercase tracking-wide">
+                  Supplementary - linked to {e.invoices.find((i) => i.id === invoice.supplementOfInvoiceId)?.invoiceNumber ?? 'original invoice'}
+                </div>
+              )}
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500">
+                  <tr>{['Item', 'Category', 'Qty', 'Amount'].map((h) => <th key={h} className="text-left font-medium px-3 py-2">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {invoice.lines.map((l) => (
+                    <tr key={l.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2">{l.description}</td>
+                      <td className="px-3 py-2 text-gray-500">{l.category ?? '-'}</td>
+                      <td className="px-3 py-2">{l.quantity}</td>
+                      <td className="px-3 py-2">{naira(l.lineTotal)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
+                    <td className="px-3 py-2" colSpan={3}>Total</td>
+                    <td className="px-3 py-2">{naira(invoice.totalAmount)}</td>
+                  </tr>
+                  <tr className="text-gray-500">
+                    <td className="px-3 py-1.5" colSpan={3}>Paid</td>
+                    <td className="px-3 py-1.5">{naira(invoice.paidAmount)}</td>
+                  </tr>
+                  <tr className="font-semibold">
+                    <td className="px-3 py-1.5" colSpan={3}>Balance due</td>
+                    <td className="px-3 py-1.5">{naira(invoice.balanceDue)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p className="text-xs text-gray-400 px-3 py-2">Invoice {invoice.invoiceNumber} · settle at the cashier from the patient chart.</p>
+            </div>
+          ))}
         </div>
       )}
-      <p className="text-xs text-gray-400 mt-2">Invoice {e.invoice?.invoiceNumber ?? ''} · settle at the cashier from the patient chart.</p>
     </Section>
+  )
+}
+
+function LateEntryTag() {
+  return (
+    <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-600 align-middle" title="Recorded after the visit was completed">
+      Late entry
+    </span>
   )
 }
 
 function OrderModal({ visitId, open, onClose }: { visitId: string; open: boolean; onClose: () => void }) {
   const { data: session } = useSession()
+  const toast = useToast()
   const canOverridePrice = can(session?.role, 'billing:manage')
   const [orderType, setOrderType] = useState<'LABORATORY' | 'IMAGING' | 'PROCEDURE'>('LABORATORY')
   const [q, setQ] = useState('')
@@ -572,9 +700,11 @@ function OrderModal({ visitId, open, onClose }: { visitId: string; open: boolean
         ...(overriding ? { unitPrice: Number(overridePrice) || 0, overrideReason } : {}),
       }),
     onSuccess: () => {
+      toast(`${picked?.name ?? 'Order'} placed`, 'success')
       setPicked(null); setQ(''); setNote(''); setPriority('Routine'); resetOverride()
       onClose()
     },
+    onError: (err: any) => toast(err?.response?.data?.message ?? 'Could not place the order.', 'error'),
   })
 
   return (
@@ -631,7 +761,6 @@ function OrderModal({ visitId, open, onClose }: { visitId: string; open: boolean
         <Field label="Clinical details for the lab">
           <Textarea rows={2} value={note} onChange={(ev) => setNote(ev.target.value)} placeholder="Relevant history / what to look for" />
         </Field>
-        {m.isError && <p className="text-sm text-red-600">Could not place the order.</p>}
         {overriding && !overrideReason.trim() && (
           <p className="text-xs text-amber-600">Enter a reason for the price override before confirming.</p>
         )}

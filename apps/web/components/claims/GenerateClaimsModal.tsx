@@ -46,7 +46,7 @@ export function GenerateClaimsModal({ open, onClose }: { open: boolean; onClose:
       return n
     })
   const rows = eligible.data ?? []
-  const allPicked = rows.length > 0 && rows.every((r) => picked.has(r.visitId))
+  const allPicked = rows.length > 0 && rows.every((r) => picked.has(r.invoiceId))
 
   return (
     <Modal open={open} onClose={onClose} title="Generate claims" width={720} align="center">
@@ -69,7 +69,7 @@ export function GenerateClaimsModal({ open, onClose }: { open: boolean; onClose:
                   <input
                     type="checkbox"
                     checked={allPicked}
-                    onChange={(e) => setPicked(e.target.checked ? new Set(rows.map((r) => r.visitId)) : new Set())}
+                    onChange={(e) => setPicked(e.target.checked ? new Set(rows.map((r) => r.invoiceId)) : new Set())}
                   />
                 </th>
                 {['Patient', 'Provider', 'Service date', 'Invoice total'].map((h) => (
@@ -84,11 +84,16 @@ export function GenerateClaimsModal({ open, onClose }: { open: boolean; onClose:
                 <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-400">No eligible visits.</td></tr>
               ) : (
                 rows.map((r) => (
-                  <tr key={r.visitId} className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggle(r.visitId)}>
-                    <td className="px-3 py-2"><input type="checkbox" checked={picked.has(r.visitId)} readOnly /></td>
-                    <td className="px-3 py-2 text-gray-800">{r.patientName}<span className="block text-xs text-gray-400">{r.patientNumber}</span></td>
+                  <tr key={r.invoiceId} className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggle(r.invoiceId)}>
+                    <td className="px-3 py-2"><input type="checkbox" checked={picked.has(r.invoiceId)} readOnly /></td>
+                    <td className="px-3 py-2 text-gray-800">
+                      {r.patientName}<span className="block text-xs text-gray-400">{r.patientNumber}</span>
+                    </td>
                     <td className="px-3 py-2 text-gray-600">{r.providerName ?? <span className="text-amber-600">no provider</span>}</td>
-                    <td className="px-3 py-2 text-gray-500">{new Date(r.serviceDate).toLocaleDateString('en-GB')}</td>
+                    <td className="px-3 py-2 text-gray-500">
+                      {new Date(r.serviceDate).toLocaleDateString('en-GB')}
+                      {r.isSupplementary && <span className="block text-[10px] uppercase tracking-wide text-amber-600">Supplementary</span>}
+                    </td>
                     <td className="px-3 py-2">{naira(r.invoiceTotal)}</td>
                   </tr>
                 ))

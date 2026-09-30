@@ -7,6 +7,7 @@ import { ScheduleService } from './schedule.service';
 import {
   CreateVisitDto,
   ListVisitsQueryDto,
+  ReopenVisitDto,
   RescheduleVisitDto,
   SetVisitStatusDto,
   UpdateVisitDto,
@@ -59,5 +60,10 @@ export class ScheduleController {
     @Body() dto: SetVisitStatusDto,
   ) {
     return this.schedule.setStatus(actor(user), id, dto);
+  }
+
+  @Post(':id/reopen')
+  reopen(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: ReopenVisitDto) {
+    return this.schedule.reopenVisit(actor(user), id, dto);
   }
 }

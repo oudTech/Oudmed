@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { InvoiceDetailDTO } from '@oudhealth/contracts'
 import { Button, Drawer, Field, Textarea } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
 import { can } from '@/lib/permissions'
 import { billingApi, naira, INVOICE_STATUS_META, PAYER_TYPES } from '@/lib/billing'
 import { claimsApi, CLAIM_STATUS_META } from '@/lib/claims'
@@ -24,6 +25,7 @@ export function InvoiceDetailDrawer({
   onClose: () => void
 }) {
   const { data: session } = useSession()
+  const toast = useToast()
   const canManage = can(session?.role, 'billing:manage')
   const canPay = can(session?.role, 'invoice:pay')
   const canClaims = can(session?.role, 'claims:manage')
@@ -60,12 +62,17 @@ export function InvoiceDetailDrawer({
     onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not cancel.'),
   })
   const raiseClaim = useMutation({
-    mutationFn: (visitId: string) => claimsApi.generate([visitId]),
+    mutationFn: (invId: string) => claimsApi.generate([invId]),
     onSuccess: (res) => {
       if (res.created.length) router.push('/claims')
       else setErr(res.skipped[0]?.reason ?? 'Could not raise a claim for this invoice.')
     },
     onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not raise a claim.'),
+  })
+  const acknowledgeReopen = useMutation({
+    mutationFn: () => billingApi.acknowledgeReopen(invoiceId!),
+    onSuccess: () => { toast('Reopen notice acknowledged', 'success'); invalidate() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not acknowledge.', 'error'),
   })
 
   const meta = inv ? INVOICE_STATUS_META[inv.status] : null
@@ -92,6 +99,27 @@ export function InvoiceDetailDrawer({
               )}
             </div>
 
+            {inv.isSupplementary && (
+              <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-sm text-amber-700">
+                Supplementary invoice{inv.supplementOfInvoiceNumber ? ` - linked to ${inv.supplementOfInvoiceNumber}` : ''}
+              </div>
+            )}
+
+            {inv.reopenFlaggedAt && !inv.reopenAcknowledgedAt && (
+              <div className="flex items-center justify-between rounded-lg bg-red-50 border border-red-100 px-3 py-2 text-sm text-red-700">
+                <span>This visit was reopened on {dt(inv.reopenFlaggedAt)} while this invoice was already paid or claimed.</span>
+                {canManage && (
+                  <button
+                    className="text-red-700 font-medium hover:underline disabled:opacity-50 flex-shrink-0 ml-3"
+                    disabled={acknowledgeReopen.isPending}
+                    onClick={() => acknowledgeReopen.mutate()}
+                  >
+                    Acknowledge
+                  </button>
+                )}
+              </div>
+            )}
+
             {inv.status === 'CANCELLED' && (
               <div className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-600">
                 Cancelled {dt(inv.cancelledAt)} · {inv.voidReason}
@@ -117,7 +145,7 @@ export function InvoiceDetailDrawer({
                     <button
                       className="text-primary hover:underline disabled:opacity-50"
                       disabled={raiseClaim.isPending}
-                      onClick={() => raiseClaim.mutate(inv.visitId!)}
+                      onClick={() => raiseClaim.mutate(inv.id)}
                     >
                       Raise claim
                     </button>

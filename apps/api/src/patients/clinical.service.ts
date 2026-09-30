@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PaymentMethod, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
@@ -255,6 +255,15 @@ export class ClinicalService {
     assertCan(actor.role, 'prescription:write');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
       await this.assertPatient(tx, patientId);
+      if (dto.visitId) {
+        const visit = await tx.visit.findFirst({ where: { id: dto.visitId }, select: { status: true } });
+        if (visit?.status === 'COMPLETED') {
+          throw new BadRequestException({
+            message: 'This visit is completed. Reopen it to write a new prescription.',
+            code: 'VISIT_COMPLETED',
+          });
+        }
+      }
       const row = await tx.prescription.create({
         data: {
           tenantId: actor.tenantId, patientId,
@@ -301,7 +310,12 @@ export class ClinicalService {
         include: {
           doctor: { select: { id: true, fullName: true } },
           department: { select: { id: true, name: true } },
-          invoice: { select: { id: true, invoiceNumber: true, status: true } },
+          // A visit may carry a supplementary invoice too (FUNC-2) - this
+          // summary list shows the primary one, matching prior behavior.
+          invoices: {
+            select: { id: true, invoiceNumber: true, status: true, isSupplementary: true },
+            orderBy: { createdAt: 'asc' },
+          },
         },
         orderBy: { startsAt: 'desc' },
         take: 100,
@@ -343,7 +357,8 @@ export class ClinicalService {
         doctor: v.doctor,
         department: v.department,
         primaryDiagnosis: dxByVisit.get(v.id) ?? null,
-        invoice: v.invoice ?? null,
+        invoice: v.invoices.find((i) => !i.isSupplementary) ?? v.invoices[0] ?? null,
+        hasSupplementaryInvoice: v.invoices.some((i) => i.isSupplementary),
         hasNote: noteVisits.has(v.id),
         orderCount: orderCountByVisit.get(v.id) ?? 0,
       }));

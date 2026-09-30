@@ -84,6 +84,11 @@ export class BillingController {
     return this.billing.cancelInvoice(actor(u), id, dto);
   }
 
+  @Post('billing/invoices/:id/acknowledge-reopen')
+  acknowledgeReopen(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.billing.acknowledgeReopen(actor(u), id);
+  }
+
   @Post('billing/payments/:id/reverse')
   reversePayment(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ReversePaymentDto) {
     return this.billing.reversePayment(actor(u), id, dto);

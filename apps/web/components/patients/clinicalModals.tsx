@@ -18,9 +18,11 @@ import {
 } from '@/lib/patients'
 import { drugsApi } from '@/lib/pharmacy'
 import { newIdempotencyKey } from '@/lib/billing'
+import { useToast } from '@/components/ui/feedback'
 
 function useAdd(patientId: string, key: string, fn: (data: any) => Promise<any>, onDone: () => void) {
   const qc = useQueryClient()
+  const toast = useToast()
   return useMutation({
     mutationFn: fn,
     onSuccess: () => {
@@ -28,6 +30,7 @@ function useAdd(patientId: string, key: string, fn: (data: any) => Promise<any>,
       qc.invalidateQueries({ queryKey: ['patient', patientId] })
       onDone()
     },
+    onError: (err: any) => toast(err?.response?.data?.message ?? 'Could not save.', 'error'),
   })
 }
 

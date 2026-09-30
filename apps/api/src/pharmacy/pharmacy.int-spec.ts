@@ -5,12 +5,14 @@ import { AuditModule } from '../common/audit/audit.module';
 import { StorageModule } from '../storage/storage.module';
 import { PharmacyModule } from './pharmacy.module';
 import { PharmacyService } from './pharmacy.service';
+import { BillingService } from '../billing/billing.service';
 import {
   actorFor,
   destroyTenant,
   makePatient,
   makeTenant,
   makeUser,
+  makeVisit,
   ownerPrisma,
 } from '../../test/int-helpers';
 
@@ -19,6 +21,7 @@ const day = (n: number) => new Date(Date.now() + n * 86_400_000);
 describe('PharmacyService (integration - FEFO stock draw-down)', () => {
   let prisma: PrismaService;
   let pharmacy: PharmacyService;
+  let billing: BillingService;
   let tenantId: string;
   let actor: { tenantId: string; userId: string; role: string };
   let adminActor: { tenantId: string; userId: string; role: string };
@@ -29,6 +32,7 @@ describe('PharmacyService (integration - FEFO stock draw-down)', () => {
     }).compile();
     prisma = mod.get(PrismaService);
     pharmacy = mod.get(PharmacyService);
+    billing = mod.get(BillingService);
 
     const tenant = await makeTenant();
     tenantId = tenant.id;
@@ -405,5 +409,79 @@ describe('PharmacyService (integration - FEFO stock draw-down)', () => {
     expect(row).toBeDefined();
     expect(row!.count).toBeGreaterThanOrEqual(2);
     expect(row!.prices).toEqual(expect.arrayContaining(['100', '120']));
+  });
+
+  // ─────────────────────────── FUNC-2: dispensing after payment/reopen ───────────────────────────
+
+  it('FUNC-2: dispensing after the visit invoice is fully paid lands on a supplementary invoice, not the paid one', async () => {
+    const { drug } = await drugWithBatches(10, 0); // sellPrice: 100
+    const patient = await makePatient(tenantId);
+    const visit = await makeVisit(tenantId, patient.id);
+
+    const { invoiceId: originalId } = await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToVisit(tx, {
+        tenantId, userId: actor.userId, visitId: visit.id, patientId: patient.id,
+        description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation',
+      }),
+    );
+    await billing.addPayment(adminActor, originalId, { amount: 5000, method: 'CASH' } as any);
+
+    const rx = await ownerPrisma.prescription.create({
+      data: {
+        tenantId, patientId: patient.id, visitId: visit.id, status: 'ACTIVE', dispenseStatus: 'PENDING',
+        items: { create: [{ tenantId, drugId: drug.id, drugName: 'Test Drug' }] },
+      },
+      include: { items: true },
+    });
+
+    await pharmacy.dispense(actor, rx.id, { items: [{ itemId: rx.items[0].id, quantity: 2, unitPrice: 100 }] });
+
+    const original = await ownerPrisma.invoice.findUnique({ where: { id: originalId } });
+    expect(original!.status).toBe('PAID');
+    expect(Number(original!.totalAmount)).toBe(5000); // untouched by the dispense charge
+
+    const supplement = await ownerPrisma.invoice.findFirst({ where: { visitId: visit.id, isSupplementary: true } });
+    expect(supplement).not.toBeNull();
+    expect(Number(supplement!.totalAmount)).toBe(200);
+  });
+
+  it('FUNC-2: two dispenses against the same locked visit reuse one supplementary invoice, never two', async () => {
+    const a = await drugWithBatches(10, 0);
+    const b = await drugWithBatches(10, 0);
+    const patient = await makePatient(tenantId);
+    const visit = await makeVisit(tenantId, patient.id);
+
+    const { invoiceId: originalId } = await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToVisit(tx, {
+        tenantId, userId: actor.userId, visitId: visit.id, patientId: patient.id,
+        description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation',
+      }),
+    );
+    await billing.addPayment(adminActor, originalId, { amount: 5000, method: 'CASH' } as any);
+
+    const rxA = await ownerPrisma.prescription.create({
+      data: {
+        tenantId, patientId: patient.id, visitId: visit.id, status: 'ACTIVE', dispenseStatus: 'PENDING',
+        items: { create: [{ tenantId, drugId: a.drug.id, drugName: 'Drug A' }] },
+      },
+      include: { items: true },
+    });
+    const rxB = await ownerPrisma.prescription.create({
+      data: {
+        tenantId, patientId: patient.id, visitId: visit.id, status: 'ACTIVE', dispenseStatus: 'PENDING',
+        items: { create: [{ tenantId, drugId: b.drug.id, drugName: 'Drug B' }] },
+      },
+      include: { items: true },
+    });
+
+    // dispensed concurrently, same visit, same lock
+    await Promise.all([
+      pharmacy.dispense(actor, rxA.id, { items: [{ itemId: rxA.items[0].id, quantity: 1, unitPrice: 100 }] }),
+      pharmacy.dispense(actor, rxB.id, { items: [{ itemId: rxB.items[0].id, quantity: 1, unitPrice: 100 }] }),
+    ]);
+
+    const supplements = await ownerPrisma.invoice.findMany({ where: { visitId: visit.id, isSupplementary: true } });
+    expect(supplements).toHaveLength(1);
+    expect(Number(supplements[0].totalAmount)).toBe(200); // both dispenses landed on it
   });
 });

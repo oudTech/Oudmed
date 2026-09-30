@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, VisitStatus, VisitType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
@@ -7,6 +7,7 @@ import { assertCan, STATUS_ACTION } from '../common/permissions';
 import {
   CreateVisitDto,
   ListVisitsQueryDto,
+  ReopenVisitDto,
   RescheduleVisitDto,
   SetVisitStatusDto,
   UpdateVisitDto,
@@ -215,6 +216,49 @@ export class ScheduleService {
     });
   }
 
+  /**
+   * Reopen a completed visit for more clinical/billing activity - the
+   * attending doctor or a Hospital Admin only, with a required reason
+   * (FUNC-2). Moves the visit back to IN_PROGRESS so it follows the normal
+   * completion path again rather than skipping straight back to COMPLETED
+   * (draftInvoiceForVisit's own idempotency check keeps a re-completion from
+   * double-posting the consultation charge).
+   */
+  async reopenVisit(actor: Actor, id: string, dto: ReopenVisitDto) {
+    assertCan(actor.role, 'visit:reopen');
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      const visit = await tx.visit.findFirst({ where: { id } });
+      if (!visit) throw new NotFoundException('Appointment not found');
+      if (visit.status !== 'COMPLETED') {
+        throw new BadRequestException('Only a completed visit can be reopened');
+      }
+      if (actor.role === 'DOCTOR' && visit.doctorId !== actor.userId) {
+        throw new ForbiddenException('Only the attending doctor or a Hospital Admin can reopen this visit');
+      }
+
+      const updated = await tx.visit.update({
+        where: { id },
+        data: {
+          status: 'IN_PROGRESS',
+          reopenedAt: new Date(),
+          notes: appendNote(visit.notes, 'REOPENED', dto.reason),
+        },
+        include: VISIT_INCLUDE,
+      });
+
+      // Flag any of this visit's invoices that are already locked (paid or
+      // claimed) so billing staff see this was reopened, even though new
+      // charges will land on a supplementary invoice rather than touching them.
+      await this.billing.flagReopenedInvoices(tx, id);
+
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'REOPEN_VISIT',
+        entityType: 'Visit', entityId: id, metadata: { reason: dto.reason },
+      });
+      return updated;
+    });
+  }
+
   // ── helpers ──
 
   private async assertDoctor(tx: Prisma.TransactionClient, doctorId: string) {
@@ -267,15 +311,20 @@ export class ScheduleService {
     }
   }
 
-  /** On completion, make sure the visit's invoice carries a consultation line, once. */
+  /**
+   * On completion, make sure the visit carries a consultation line, once -
+   * across ANY of the visit's invoices (a reopened, re-completed visit may
+   * already have its consultation line on an earlier invoice even if that
+   * invoice is now locked), so re-completing never double-posts it.
+   */
   private async draftInvoiceForVisit(tx: Prisma.TransactionClient, actor: Actor, visitId: string) {
-    const visit = await tx.visit.findFirst({
-      where: { id: visitId },
-      include: { invoice: { include: { lines: true } } },
-    });
+    const visit = await tx.visit.findFirst({ where: { id: visitId } });
     if (!visit) return;
 
-    const alreadyBilled = visit.invoice?.lines.some((l) => l.category === 'Consultation');
+    const alreadyBilled = await tx.invoiceLine.findFirst({
+      where: { category: 'Consultation', invoice: { visitId } },
+      select: { id: true },
+    });
     if (alreadyBilled) return;
 
     const svc = await tx.serviceItem.findFirst({

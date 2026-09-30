@@ -17,6 +17,14 @@ export class UpsertNoteDto {
   @IsOptional() @IsString() @MaxLength(5000) plan?: string;
 }
 
+/** A late addition to a completed visit's note - see ClinicalNoteAddendum. */
+export class AddNoteAddendumDto {
+  @IsOptional() @IsString() @MaxLength(5000) subjective?: string;
+  @IsOptional() @IsString() @MaxLength(5000) objective?: string;
+  @IsOptional() @IsString() @MaxLength(5000) assessment?: string;
+  @IsOptional() @IsString() @MaxLength(5000) plan?: string;
+}
+
 export class CreateOrderDto {
   @IsIn(Object.values(OrderType)) orderType: OrderType;
   @IsOptional() @IsUUID() serviceItemId?: string;

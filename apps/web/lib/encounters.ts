@@ -10,6 +10,11 @@ export const encountersApi = {
     data: { subjective?: string; objective?: string; assessment?: string; plan?: string },
   ) => api.put(`/encounters/${visitId}/note`, data).then((r) => r.data),
 
+  addNoteAddendum: (
+    visitId: string,
+    data: { subjective?: string; objective?: string; assessment?: string; plan?: string },
+  ) => api.post(`/encounters/${visitId}/note/addenda`, data).then((r) => r.data),
+
   createOrder: (
     visitId: string,
     data: {

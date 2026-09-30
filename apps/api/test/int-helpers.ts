@@ -92,6 +92,7 @@ export async function destroyTenant(tenantId: string) {
   await p.prescriptionItem.deleteMany({ where: { prescription: { tenantId } } });
   await p.prescription.deleteMany({ where: { tenantId } });
   await p.clinicalOrder.deleteMany({ where: { tenantId } });
+  await p.clinicalNoteAddendum.deleteMany({ where: { tenantId } });
   await p.clinicalNote.deleteMany({ where: { tenantId } });
   await p.vitalSigns.deleteMany({ where: { tenantId } });
   await p.diagnosis.deleteMany({ where: { tenantId } });

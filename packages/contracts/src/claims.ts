@@ -127,6 +127,7 @@ export interface ClaimDetailDTO {
   serviceDate: string
   diagnosisCode: string | null
   diagnosisSummary: string | null
+  diagnosesChangedSinceGenerated: boolean
   claimedAmount: string
   approvedAmount: string | null
   paidAmount: string
@@ -156,6 +157,7 @@ export interface ClaimLineInput {
 export interface EligibleVisitDTO {
   visitId: string
   invoiceId: string
+  isSupplementary: boolean
   patientName: string
   patientNumber: string
   providerId: string | null
@@ -166,7 +168,7 @@ export interface EligibleVisitDTO {
 
 export interface GenerateClaimsResultDTO {
   created: string[]
-  skipped: { visitId: string; reason: string }[]
+  skipped: { invoiceId: string; reason: string }[]
 }
 
 export interface ClaimBatchDTO {

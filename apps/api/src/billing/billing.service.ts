@@ -119,33 +119,14 @@ export class BillingService {
     const unitPrice = new Prisma.Decimal(c.unitPrice as any);
     const { gross, net } = lineNet(unitPrice, c.quantity, null);
 
-    // Serialize concurrent first-charge-on-this-visit so two callers can't both
-    // try to INSERT the visit's (unique) invoice and 500 on the constraint.
-    // Transaction-scoped advisory lock; auto-released on commit/rollback; only
-    // contends with other charges for the SAME visit.
+    // Serialize concurrent charges to this visit so two callers can't both try
+    // to INSERT the same "first invoice" (or, now, both decide to open a new
+    // supplementary invoice at once). Transaction-scoped advisory lock,
+    // auto-released on commit/rollback; only contends with other charges for
+    // the SAME visit.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${c.visitId}, 0))`;
 
-    let invoice = await tx.invoice.findFirst({ where: { visitId: c.visitId } });
-    if (!invoice) {
-      const visit = await tx.visit.findUnique({
-        where: { id: c.visitId },
-        select: { payerType: true },
-      });
-      invoice = await tx.invoice.create({
-        data: {
-          tenantId: c.tenantId,
-          patientId: c.patientId,
-          visitId: c.visitId,
-          invoiceNumber: await this.nextNumber(tx, c.tenantId, 'INV'),
-          category: c.category,
-          status: InvoiceStatus.UNPAID,
-          payerType: visit?.payerType ?? PayerType.CASH,
-          subtotal: D0(),
-          totalAmount: D0(),
-          createdById: c.userId,
-        },
-      });
-    }
+    const invoice = await this.resolveOpenInvoiceForVisit(tx, c);
 
     const line = await tx.invoiceLine.create({
       data: {
@@ -170,6 +151,49 @@ export class BillingService {
       metadata: { category: c.category, description: c.description, lineTotal: net.toString() },
     });
     return { invoiceId: invoice.id, lineId: line.id };
+  }
+
+  /**
+   * The invoice a new charge for this visit should land on: the primary
+   * (non-supplementary) invoice if it's still open; an existing open
+   * supplementary invoice if the primary is locked (a live payment or a
+   * claim); or a brand-new supplementary invoice if neither exists yet.
+   * Called while the caller already holds the per-visit advisory lock, so
+   * this can never create two open supplementary invoices for one visit
+   * (FUNC-2).
+   */
+  private async resolveOpenInvoiceForVisit(tx: Prisma.TransactionClient, c: ChargeInput) {
+    const invoices = await tx.invoice.findMany({
+      where: { visitId: c.visitId },
+      include: { payments: true, claim: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const primary = invoices.find((i) => !i.isSupplementary) ?? null;
+    if (primary && !this.isLocked(primary)) return primary;
+
+    const openSupplement = invoices.find(
+      (i) => i.isSupplementary && i.status !== InvoiceStatus.CANCELLED && !this.isLocked(i),
+    );
+    if (openSupplement) return openSupplement;
+
+    const visit = await tx.visit.findUnique({ where: { id: c.visitId }, select: { payerType: true } });
+    return tx.invoice.create({
+      data: {
+        tenantId: c.tenantId,
+        patientId: c.patientId,
+        visitId: c.visitId,
+        invoiceNumber: await this.nextNumber(tx, c.tenantId, 'INV'),
+        category: c.category,
+        status: InvoiceStatus.UNPAID,
+        payerType: primary?.payerType ?? visit?.payerType ?? PayerType.CASH,
+        isSupplementary: !!primary,
+        supplementOfInvoiceId: primary?.id ?? null,
+        subtotal: D0(),
+        totalAmount: D0(),
+        createdById: c.userId,
+      },
+    });
   }
 
   async voidInvoiceLine(tx: Prisma.TransactionClient, lineId: string) {
@@ -305,6 +329,7 @@ export class BillingService {
           include: {
             patient: { select: { id: true, firstName: true, lastName: true, patientNumber: true } },
             payments: { select: { amount: true, reversedAt: true } },
+            supplementOfInvoice: { select: { invoiceNumber: true } },
             _count: { select: { lines: true } },
           },
           orderBy: { createdAt: 'desc' },
@@ -357,6 +382,10 @@ export class BillingService {
             balanceDue: (balance.lt(0) ? D0() : balance).toString(),
             status: inv.status,
             lineCount: inv._count.lines,
+            isSupplementary: inv.isSupplementary,
+            supplementOfInvoiceNumber: inv.supplementOfInvoice?.invoiceNumber ?? null,
+            reopenFlaggedAt: inv.reopenFlaggedAt,
+            reopenAcknowledgedAt: inv.reopenAcknowledgedAt,
           };
         }),
       };
@@ -372,6 +401,7 @@ export class BillingService {
           lines: { orderBy: { providedAt: 'asc' } },
           payments: { orderBy: { paidAt: 'asc' } },
           claim: { select: { id: true, claimNumber: true, status: true } },
+          supplementOfInvoice: { select: { invoiceNumber: true } },
         },
       });
       if (!inv) throw new NotFoundException('Invoice not found');
@@ -402,6 +432,11 @@ export class BillingService {
         cancelledAt: inv.cancelledAt,
         voidReason: inv.voidReason,
         visitId: inv.visitId,
+        isSupplementary: inv.isSupplementary,
+        supplementOfInvoiceId: inv.supplementOfInvoiceId,
+        supplementOfInvoiceNumber: inv.supplementOfInvoice?.invoiceNumber ?? null,
+        reopenFlaggedAt: inv.reopenFlaggedAt,
+        reopenAcknowledgedAt: inv.reopenAcknowledgedAt,
         claim: inv.claim
           ? { id: inv.claim.id, claimNumber: inv.claim.claimNumber, status: inv.claim.status }
           : null,
@@ -617,21 +652,35 @@ export class BillingService {
     });
   }
 
+  /** True once an invoice has a live (non-reversed) payment or any claim - the
+   * point past which it must never be silently modified. Shared by the
+   * billing-desk edit guards and by postChargeToVisit's supplementary-invoice
+   * decision (FUNC-2). */
+  private isLocked(inv: { payments: { reversedAt: Date | null }[]; claim: unknown }): boolean {
+    return inv.payments.some((p) => !p.reversedAt) || !!inv.claim;
+  }
+
   /**
    * Correct an invoice after creation: invoice-level discount, reason, note,
-   * category. Blocked once the invoice is CANCELLED or carries a live payment
-   * (reverse the payments first). Individual line edits are delete + re-add
-   * (`removeInvoiceLine` / raise a fresh invoice) - deliberately not a full
-   * line editor.
+   * category. Blocked once the invoice is CANCELLED, carries a live payment
+   * (reverse the payments first), or has a claim (a supplementary invoice
+   * carries any further changes instead). Individual line edits are delete +
+   * re-add (`removeInvoiceLine` / raise a fresh invoice) - deliberately not a
+   * full line editor.
    */
   async updateInvoice(actor: Actor, id: string, dto: UpdateInvoiceDto) {
     assertCan(actor.role, 'billing:manage');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
-      const inv = await tx.invoice.findFirst({ where: { id }, include: { payments: true } });
+      const inv = await tx.invoice.findFirst({ where: { id }, include: { payments: true, claim: true } });
       if (!inv) throw new NotFoundException('Invoice not found');
       if (inv.status === 'CANCELLED') throw new BadRequestException('This invoice has been cancelled');
-      if (inv.payments.some((p) => !p.reversedAt)) {
-        throw new BadRequestException({ message: 'Reverse the payments on this invoice before editing it', code: 'HAS_PAYMENTS' });
+      if (this.isLocked(inv)) {
+        throw new BadRequestException({
+          message: inv.claim
+            ? 'This invoice has an insurance claim and cannot be edited'
+            : 'Reverse the payments on this invoice before editing it',
+          code: inv.claim ? 'HAS_CLAIM' : 'HAS_PAYMENTS',
+        });
       }
       const data: Prisma.InvoiceUpdateInput = {};
       if (dto.invoiceDiscountPct !== undefined)
@@ -656,12 +705,17 @@ export class BillingService {
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
       const inv = await tx.invoice.findFirst({
         where: { id },
-        include: { payments: true, lines: { select: { id: true } } },
+        include: { payments: true, claim: true, lines: { select: { id: true } } },
       });
       if (!inv) throw new NotFoundException('Invoice not found');
       if (inv.status === 'CANCELLED') throw new BadRequestException('This invoice has been cancelled');
-      if (inv.payments.some((p) => !p.reversedAt)) {
-        throw new BadRequestException({ message: 'Reverse the payments on this invoice before editing it', code: 'HAS_PAYMENTS' });
+      if (this.isLocked(inv)) {
+        throw new BadRequestException({
+          message: inv.claim
+            ? 'This invoice has an insurance claim and cannot be edited'
+            : 'Reverse the payments on this invoice before editing it',
+          code: inv.claim ? 'HAS_CLAIM' : 'HAS_PAYMENTS',
+        });
       }
       if (!inv.lines.some((l) => l.id === lineId)) throw new NotFoundException('Line not found on this invoice');
       if (inv.lines.length <= 1) {
@@ -671,6 +725,42 @@ export class BillingService {
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'VOID_LINE',
         entityType: 'Invoice', entityId: id, metadata: { lineId },
+      });
+      return { ok: true };
+    });
+  }
+
+  /** Set on a visit's locked invoice(s) when the visit is reopened, so billing
+   * staff see a flag (FUNC-2) until they explicitly clear it - never cleared
+   * merely by viewing the invoice. */
+  async flagReopenedInvoices(tx: Prisma.TransactionClient, visitId: string) {
+    const invoices = await tx.invoice.findMany({
+      where: { visitId },
+      include: { payments: true, claim: true },
+    });
+    const locked = invoices.filter((i) => this.isLocked(i));
+    if (!locked.length) return;
+    await tx.invoice.updateMany({
+      where: { id: { in: locked.map((i) => i.id) } },
+      data: { reopenFlaggedAt: new Date(), reopenAcknowledgedAt: null, reopenAcknowledgedById: null },
+    });
+  }
+
+  /** Billing staff explicitly clears the reopen flag on an invoice - never
+   * cleared just by opening the drawer (FUNC-2). */
+  async acknowledgeReopen(actor: Actor, invoiceId: string) {
+    assertCan(actor.role, 'billing:manage');
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      const inv = await tx.invoice.findFirst({ where: { id: invoiceId } });
+      if (!inv) throw new NotFoundException('Invoice not found');
+      if (!inv.reopenFlaggedAt) return { ok: true };
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: { reopenAcknowledgedAt: new Date(), reopenAcknowledgedById: actor.userId },
+      });
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'ACKNOWLEDGE_REOPEN',
+        entityType: 'Invoice', entityId: invoiceId,
       });
       return { ok: true };
     });
@@ -722,6 +812,7 @@ export class BillingService {
         reference: payment.reference,
         cashierName: payment.receivedById ? nm.get(payment.receivedById) ?? null : null,
         invoiceNumber: inv.invoiceNumber,
+        isSupplementary: inv.isSupplementary,
         invoiceTotal: inv.totalAmount.toString(),
         balanceAfter: (balanceAfter.lt(0) ? D0() : balanceAfter).toString(),
         patient: inv.patient

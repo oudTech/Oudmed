@@ -5,6 +5,8 @@ import { AuditModule } from '../common/audit/audit.module';
 import { StorageModule } from '../storage/storage.module';
 import { EncountersModule } from './encounters.module';
 import { EncountersService } from './encounters.service';
+import { PatientsModule } from '../patients/patients.module';
+import { ClinicalService } from '../patients/clinical.service';
 import {
   actorFor,
   destroyTenant,
@@ -42,7 +44,9 @@ describe('EncountersService.createOrder (integration - FUNC-1 sweep: catalogue p
   beforeEach(async () => {
     const patient = await makePatient(tenantId);
     patientId = patient.id;
-    const visit = await makeVisit(tenantId, patientId);
+    // IN_PROGRESS, not makeVisit's COMPLETED default - these tests are about
+    // order pricing, not the completed-visit guard (see its own describe block).
+    const visit = await makeVisit(tenantId, patientId, { status: 'IN_PROGRESS' });
     visitId = visit.id;
   });
 
@@ -152,5 +156,95 @@ describe('EncountersService.createOrder (integration - FUNC-1 sweep: catalogue p
     expect(auditRows[0].metadata).toMatchObject({
       name: 'Custom procedure', price: 100, reason: 'Not yet in the service catalogue', visitId,
     });
+  });
+});
+
+describe('EncountersService (integration - FUNC-2: completed-visit guard, addenda, late entries)', () => {
+  let prisma: PrismaService;
+  let encounters: EncountersService;
+  let clinical: ClinicalService;
+  let tenantId: string;
+  let doctorActor: { tenantId: string; userId: string; role: string };
+  let patientId: string;
+
+  beforeAll(async () => {
+    const mod = await Test.createTestingModule({
+      imports: [PrismaModule, AuditModule, StorageModule, EncountersModule, PatientsModule],
+    }).compile();
+    prisma = mod.get(PrismaService);
+    encounters = mod.get(EncountersService);
+    clinical = mod.get(ClinicalService);
+
+    const tenant = await makeTenant();
+    tenantId = tenant.id;
+    const doc = await makeUser(tenantId, 'DOCTOR');
+    doctorActor = actorFor(tenantId, doc.id, 'DOCTOR');
+  });
+
+  afterAll(async () => {
+    await destroyTenant(tenantId);
+    await prisma.$disconnect();
+    await ownerPrisma.$disconnect();
+  });
+
+  beforeEach(async () => {
+    patientId = (await makePatient(tenantId)).id;
+  });
+
+  it('an order on a COMPLETED visit is blocked with a specific error code', async () => {
+    const visit = await makeVisit(tenantId, patientId, { status: 'COMPLETED', completedAt: new Date() });
+    await expect(
+      encounters.createOrder(doctorActor, visit.id, { orderType: 'LABORATORY', name: 'FBC', overrideReason: 'x' } as any),
+    ).rejects.toMatchObject({ response: { code: 'VISIT_COMPLETED' } });
+  });
+
+  it('editing the note on a COMPLETED visit is blocked, but an addendum is not', async () => {
+    const visit = await makeVisit(tenantId, patientId, { status: 'COMPLETED', completedAt: new Date() });
+    await expect(
+      encounters.upsertNote(doctorActor, visit.id, { plan: 'changed my mind' }),
+    ).rejects.toMatchObject({ response: { code: 'VISIT_COMPLETED' } });
+
+    const addendum = await encounters.addNoteAddendum(doctorActor, visit.id, { plan: 'Follow-up added later' });
+    expect(addendum.plan).toBe('Follow-up added later');
+
+    const rows = await ownerPrisma.clinicalNoteAddendum.findMany({ where: { visitId: visit.id } });
+    expect(rows).toHaveLength(1);
+  });
+
+  it('an addendum needs at least one field filled in', async () => {
+    const visit = await makeVisit(tenantId, patientId, { status: 'COMPLETED', completedAt: new Date() });
+    await expect(encounters.addNoteAddendum(doctorActor, visit.id, {})).rejects.toThrow(/at least one/i);
+  });
+
+  it('writing a new prescription on a COMPLETED visit is blocked (billable via dispense, not just documentation)', async () => {
+    const visit = await makeVisit(tenantId, patientId, { status: 'COMPLETED', completedAt: new Date() });
+    await expect(
+      clinical.addPrescription(doctorActor, patientId, {
+        visitId: visit.id,
+        items: [{ drugName: 'Paracetamol' }],
+      } as any),
+    ).rejects.toMatchObject({ response: { code: 'VISIT_COMPLETED' } });
+  });
+
+  it('complaint/vitals/diagnosis recorded after completion are labelled as late entries', async () => {
+    const completedAt = new Date();
+    const visit = await makeVisit(tenantId, patientId, { status: 'COMPLETED', completedAt });
+
+    // recorded before completion - not late
+    await ownerPrisma.complaint.create({
+      data: { tenantId, patientId, visitId: visit.id, description: 'Headache', recordedAt: new Date(completedAt.getTime() - 60_000) },
+    });
+    // recorded after completion - late
+    await ownerPrisma.diagnosis.create({
+      data: { tenantId, patientId, visitId: visit.id, description: 'Migraine', diagnosedAt: new Date(completedAt.getTime() + 60_000) },
+    });
+    await ownerPrisma.vitalSigns.create({
+      data: { tenantId, patientId, visitId: visit.id, recordedAt: new Date(completedAt.getTime() + 60_000) },
+    });
+
+    const enc = await encounters.getEncounter(doctorActor, visit.id);
+    expect(enc.complaints[0].lateEntry).toBe(false);
+    expect(enc.diagnoses[0].lateEntry).toBe(true);
+    expect(enc.vitals[0].lateEntry).toBe(true);
   });
 });

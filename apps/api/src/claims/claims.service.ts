@@ -226,6 +226,17 @@ export class ClaimsService {
       if (!c) throw new NotFoundException('Claim not found');
       const nm = await this.names(tx, [c.createdById]);
 
+      // diagnosisSummary is a frozen snapshot taken at generation time (see
+      // docs/audit/pricing-notes.md) - it never changes itself, so flag it
+      // instead: only meaningful while the claim hasn't been submitted yet.
+      const diagnosesChangedSinceGenerated =
+        c.status === 'DRAFT' && c.visitId
+          ? !!(await tx.diagnosis.findFirst({
+              where: { visitId: c.visitId, diagnosedAt: { gt: c.createdAt } },
+              select: { id: true },
+            }))
+          : false;
+
       return {
         id: c.id,
         claimNumber: c.claimNumber,
@@ -250,6 +261,7 @@ export class ClaimsService {
         serviceDate: c.serviceDate.toISOString(),
         diagnosisCode: c.diagnosisCode,
         diagnosisSummary: c.diagnosisSummary,
+        diagnosesChangedSinceGenerated,
         claimedAmount: s(c.claimedAmount),
         approvedAmount: c.approvedAmount != null ? s(c.approvedAmount) : null,
         paidAmount: s(c.paidAmount),
@@ -295,40 +307,46 @@ export class ClaimsService {
   async eligibleVisits(actor: Actor, q: EligibleVisitsQueryDto) {
     assertCan(actor.role, 'claims:manage');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
-      const where: Prisma.VisitWhereInput = {
+      const visitWhere: Prisma.VisitWhereInput = {
         status: 'COMPLETED',
         payerType: { in: ['HMO', 'NHIS', 'RETAINER'] },
-        invoice: { is: { status: { not: 'CANCELLED' }, claim: { is: null } } },
       };
-      if (q.providerId) where.insuranceProviderId = q.providerId;
+      if (q.providerId) visitWhere.insuranceProviderId = q.providerId;
       if (q.from || q.to) {
-        where.startsAt = {};
-        if (q.from) (where.startsAt as any).gte = new Date(q.from);
-        if (q.to) (where.startsAt as any).lte = new Date(`${q.to}T23:59:59`);
+        visitWhere.startsAt = {};
+        if (q.from) (visitWhere.startsAt as any).gte = new Date(q.from);
+        if (q.to) (visitWhere.startsAt as any).lte = new Date(`${q.to}T23:59:59`);
       }
 
-      const visits = await tx.visit.findMany({
-        where,
+      // Listed per claimable INVOICE, not per visit - a visit can carry more
+      // than one unclaimed invoice (e.g. a supplementary invoice raised after
+      // the original was already claimed).
+      const invoices = await tx.invoice.findMany({
+        where: { status: { not: 'CANCELLED' }, claim: null, visit: visitWhere },
         include: {
-          patient: { select: { firstName: true, lastName: true, patientNumber: true } },
-          insuranceProvider: { select: { id: true, name: true } },
-          invoice: { select: { id: true, totalAmount: true } },
+          visit: {
+            include: {
+              patient: { select: { firstName: true, lastName: true, patientNumber: true } },
+              insuranceProvider: { select: { id: true, name: true } },
+            },
+          },
         },
-        orderBy: { startsAt: 'desc' },
+        orderBy: { createdAt: 'desc' },
         take: 200,
       });
 
-      return visits
-        .filter((v) => v.invoice)
-        .map((v) => ({
-          visitId: v.id,
-          invoiceId: v.invoice!.id,
-          patientName: `${v.patient.firstName} ${v.patient.lastName}`.trim(),
-          patientNumber: v.patient.patientNumber,
-          providerId: v.insuranceProvider?.id ?? null,
-          providerName: v.insuranceProvider?.name ?? v.hmoName ?? null,
-          serviceDate: v.startsAt.toISOString(),
-          invoiceTotal: s(v.invoice!.totalAmount),
+      return invoices
+        .filter((inv) => inv.visit)
+        .map((inv) => ({
+          visitId: inv.visit!.id,
+          invoiceId: inv.id,
+          isSupplementary: inv.isSupplementary,
+          patientName: `${inv.visit!.patient.firstName} ${inv.visit!.patient.lastName}`.trim(),
+          patientNumber: inv.visit!.patient.patientNumber,
+          providerId: inv.visit!.insuranceProvider?.id ?? null,
+          providerName: inv.visit!.insuranceProvider?.name ?? inv.visit!.hmoName ?? null,
+          serviceDate: inv.visit!.startsAt.toISOString(),
+          invoiceTotal: s(inv.totalAmount),
         }));
     });
   }
@@ -336,31 +354,38 @@ export class ClaimsService {
   async generate(actor: Actor, dto: GenerateClaimsDto) {
     assertCan(actor.role, 'claims:manage');
     const created: string[] = [];
-    const skipped: { visitId: string; reason: string }[] = [];
+    const skipped: { invoiceId: string; reason: string }[] = [];
 
     await this.prisma.forTenant(actor.tenantId, async (tx) => {
-      for (const visitId of dto.visitIds) {
+      for (const invoiceId of dto.invoiceIds) {
+        const invoice = await tx.invoice.findFirst({
+          where: { id: invoiceId },
+          include: { lines: true },
+        });
+        if (!invoice) {
+          skipped.push({ invoiceId, reason: 'Invoice not found' });
+          continue;
+        }
+        if (!invoice.visitId) {
+          skipped.push({ invoiceId, reason: 'Invoice has no visit' });
+          continue;
+        }
         const visit = await tx.visit.findFirst({
-          where: { id: visitId },
+          where: { id: invoice.visitId },
           include: {
             patient: true,
             insuranceProvider: { select: { id: true, defaultCoPayPct: true } },
-            invoice: { include: { lines: true } },
           },
         });
         if (!visit) {
-          skipped.push({ visitId, reason: 'Visit not found' });
-          continue;
-        }
-        if (!visit.invoice) {
-          skipped.push({ visitId, reason: 'Visit has no invoice' });
+          skipped.push({ invoiceId, reason: 'Visit not found' });
           continue;
         }
         const existing = await tx.insuranceClaim.findFirst({
-          where: { invoiceId: visit.invoice.id, status: { not: 'CANCELLED' } },
+          where: { invoiceId: invoice.id, status: { not: 'CANCELLED' } },
         });
         if (existing) {
-          skipped.push({ visitId, reason: 'A claim already exists for this visit' });
+          skipped.push({ invoiceId, reason: 'A claim already exists for this invoice' });
           continue;
         }
 
@@ -381,14 +406,14 @@ export class ClaimsService {
           }
         }
         if (!providerId) {
-          skipped.push({ visitId, reason: 'No insurance provider linked to the visit' });
+          skipped.push({ invoiceId, reason: 'No insurance provider linked to the visit' });
           continue;
         }
 
         const factor = dec(1).sub(dec(coPayPct ?? 0).div(100));
-        const billable = visit.invoice.lines.filter((l) => l.lineTotal.gt(0));
+        const billable = invoice.lines.filter((l) => l.lineTotal.gt(0));
         if (!billable.length) {
-          skipped.push({ visitId, reason: 'Invoice has no billable lines' });
+          skipped.push({ invoiceId, reason: 'Invoice has no billable lines' });
           continue;
         }
         const lines = billable.map((l) => ({
@@ -414,7 +439,7 @@ export class ClaimsService {
             providerId,
             patientId: visit.patientId,
             visitId: visit.id,
-            invoiceId: visit.invoice.id,
+            invoiceId: invoice.id,
             memberName: `${visit.patient.firstName} ${visit.patient.lastName}`.trim(),
             memberNumber: visit.patient.hmoNumber ?? visit.patient.insuranceNumber ?? '',
             authCode: visit.authCode,
@@ -443,7 +468,7 @@ export class ClaimsService {
           action: 'CREATE',
           entityType: 'InsuranceClaim',
           entityId: claim.id,
-          metadata: { claimNumber, source: 'generate', visitId },
+          metadata: { claimNumber, source: 'generate', visitId: visit.id, invoiceId: invoice.id },
         });
         created.push(claim.id);
       }

@@ -94,6 +94,9 @@ export const bookVisit = (data: BookVisitInput) =>
 export const setVisitStatus = (id: string, status: VisitStatus, reason?: string) =>
   api.post<VisitDTO>(`/schedule/${id}/status`, { status, reason }).then((r) => r.data)
 
+export const reopenVisit = (id: string, reason: string) =>
+  api.post<VisitDTO>(`/schedule/${id}/reopen`, { reason }).then((r) => r.data)
+
 export const rescheduleVisit = (
   id: string,
   data: { startsAt: string; durationMinutes?: number; doctorId?: string; force?: boolean },

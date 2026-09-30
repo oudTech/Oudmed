@@ -46,7 +46,7 @@ export function ReceiptView({
             <Row label="Receipt no." value={r.receiptNumber} mono />
             <Row label="Date" value={dt(r.paidAt)} />
             <Row label="Patient" value={r.patient ? `${r.patient.name} (${r.patient.patientNumber})` : '-'} />
-            <Row label="Invoice" value={r.invoiceNumber} mono />
+            <Row label="Invoice" value={r.invoiceNumber + (r.isSupplementary ? ' (Supplementary)' : '')} mono />
             <Row label="Cashier" value={r.cashierName ?? '-'} />
 
             <div className="border-t border-dashed border-gray-300 my-3" />

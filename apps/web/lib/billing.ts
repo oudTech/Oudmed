@@ -49,6 +49,9 @@ export const billingApi = {
   cancelInvoice: (id: string, reason: string) =>
     api.post(`/billing/invoices/${id}/cancel`, { reason }).then((r) => r.data),
 
+  acknowledgeReopen: (id: string) =>
+    api.post(`/billing/invoices/${id}/acknowledge-reopen`).then((r) => r.data),
+
   reversePayment: (paymentId: string, reason: string) =>
     api.post(`/billing/payments/${paymentId}/reverse`, { reason }).then((r) => r.data),
 

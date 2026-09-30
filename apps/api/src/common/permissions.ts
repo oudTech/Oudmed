@@ -35,6 +35,7 @@ export type Action =
   | 'note:write'
   | 'order:create'
   | 'order:result'
+  | 'visit:reopen'
   | 'invoice:pay'
   | 'billing:manage'
   | 'staff:manage'
@@ -84,6 +85,10 @@ export const MATRIX: Record<Action, Role[]> = {
   'note:write': [R.DOCTOR, R.HOSPITAL_ADMIN],
   'order:create': [R.DOCTOR, R.HOSPITAL_ADMIN],
   'order:result': [R.LAB_STAFF, R.DOCTOR, R.HOSPITAL_ADMIN],
+  // Role-level gate only; EncountersService.reopenVisit additionally requires
+  // a DOCTOR to be the visit's own attending/admitting doctor (HOSPITAL_ADMIN
+  // is exempt from that extra check).
+  'visit:reopen': [R.DOCTOR, R.HOSPITAL_ADMIN],
   'invoice:pay': [R.RECEPTIONIST, R.ACCOUNTANT, R.HOSPITAL_ADMIN],
   'billing:manage': [R.RECEPTIONIST, R.ACCOUNTANT, R.HOSPITAL_ADMIN],
   'staff:manage': [R.HOSPITAL_ADMIN],

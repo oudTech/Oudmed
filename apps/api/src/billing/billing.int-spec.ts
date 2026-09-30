@@ -350,4 +350,127 @@ describe('BillingService (integration - money paths)', () => {
       expect(detail.visitId).toBe(v.id);
     });
   });
+
+  describe('FUNC-2: supplementary invoices on a locked visit invoice', () => {
+    it('a new charge on a fully-paid visit invoice creates a supplementary invoice, not a change to the paid one', async () => {
+      const patient = await makePatient(tenantId);
+      const visit = await makeVisit(tenantId, patient.id);
+      const { invoiceId: originalId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation',
+        }),
+      );
+      await billing.addPayment(actor, originalId, { amount: 5000, method: 'CASH' } as any);
+      const paidBefore = await billing.getInvoice(tenantId, originalId);
+      expect(paidBefore.status).toBe('PAID');
+
+      const { invoiceId: secondId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Late lab order', quantity: 1, unitPrice: 3000, category: 'Laboratory',
+        }),
+      );
+
+      expect(secondId).not.toBe(originalId);
+      const original = await ownerPrisma.invoice.findUnique({ where: { id: originalId } });
+      expect(original!.status).toBe('PAID');
+      expect(Number(original!.totalAmount)).toBe(5000); // untouched
+      const supplement = await ownerPrisma.invoice.findUnique({ where: { id: secondId } });
+      expect(supplement!.isSupplementary).toBe(true);
+      expect(supplement!.supplementOfInvoiceId).toBe(originalId);
+      expect(Number(supplement!.totalAmount)).toBe(3000);
+    });
+
+    it('a second charge reuses the same open supplementary invoice rather than creating a third', async () => {
+      const patient = await makePatient(tenantId);
+      const visit = await makeVisit(tenantId, patient.id);
+      const { invoiceId: originalId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation',
+        }),
+      );
+      await billing.addPayment(actor, originalId, { amount: 5000, method: 'CASH' } as any);
+
+      const { invoiceId: firstSupplementId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Lab A', quantity: 1, unitPrice: 1000, category: 'Laboratory',
+        }),
+      );
+      const { invoiceId: secondSupplementId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Lab B', quantity: 1, unitPrice: 2000, category: 'Laboratory',
+        }),
+      );
+
+      expect(secondSupplementId).toBe(firstSupplementId);
+      const invoices = await ownerPrisma.invoice.findMany({ where: { visitId: visit.id } });
+      expect(invoices).toHaveLength(2); // original + exactly one supplementary, never a third
+      const supplement = invoices.find((i) => i.isSupplementary)!;
+      expect(Number(supplement.totalAmount)).toBe(3000); // both lab charges landed on it
+    });
+
+    it('concurrent charges on a locked visit never create two open supplementary invoices', async () => {
+      const patient = await makePatient(tenantId);
+      const visit = await makeVisit(tenantId, patient.id);
+      const { invoiceId: originalId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation',
+        }),
+      );
+      await billing.addPayment(actor, originalId, { amount: 5000, method: 'CASH' } as any);
+
+      const results = await Promise.all(
+        [1, 2, 3].map((n) =>
+          prisma.forTenant(tenantId, (tx) =>
+            billing.postChargeToVisit(tx, {
+              tenantId, userId, visitId: visit.id, patientId: patient.id,
+              description: `Concurrent charge ${n}`, quantity: 1, unitPrice: 500, category: 'Laboratory',
+            }),
+          ),
+        ),
+      );
+
+      const supplementIds = new Set(results.map((r) => r.invoiceId));
+      expect(supplementIds.size).toBe(1); // all three landed on the same one supplementary invoice
+      const invoices = await ownerPrisma.invoice.findMany({ where: { visitId: visit.id, isSupplementary: true } });
+      expect(invoices).toHaveLength(1);
+      expect(Number(invoices[0].totalAmount)).toBe(1500);
+    });
+
+    it('an invoice with a claim is never modified by updateInvoice or removeInvoiceLine', async () => {
+      const patient = await makePatient(tenantId, { hmoNumber: 'M-1' });
+      const visit = await makeVisit(tenantId, patient.id, { payerType: 'HMO' });
+      const { invoiceId, lineId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation',
+        }),
+      );
+      const provider = await ownerPrisma.insuranceProvider.create({
+        data: { tenantId, name: 'Test HMO 2', kind: 'HMO' },
+      });
+      await ownerPrisma.insuranceClaim.create({
+        data: {
+          tenantId, providerId: provider.id, patientId: patient.id, visitId: visit.id, invoiceId,
+          claimNumber: 'CLM-TEST-1', memberName: 'Test Patient', memberNumber: 'M-1', serviceDate: new Date(),
+          claimedAmount: 5000,
+        },
+      });
+
+      await expect(
+        billing.updateInvoice(actor, invoiceId, { note: 'trying to sneak an edit in' } as any),
+      ).rejects.toMatchObject({ response: { code: 'HAS_CLAIM' } });
+      await expect(billing.removeInvoiceLine(actor, invoiceId, lineId)).rejects.toMatchObject({
+        response: { code: 'HAS_CLAIM' },
+      });
+
+      const untouched = await ownerPrisma.invoice.findUnique({ where: { id: invoiceId } });
+      expect(untouched!.note).toBeNull();
+    });
+  });
 });

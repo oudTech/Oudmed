@@ -60,6 +60,10 @@ export interface InvoiceListItemDTO {
   balanceDue: string
   status: InvoiceStatus
   lineCount: number
+  isSupplementary: boolean
+  supplementOfInvoiceNumber: string | null
+  reopenFlaggedAt: string | null
+  reopenAcknowledgedAt: string | null
 }
 
 export interface InvoiceListSummaryDTO {
@@ -96,6 +100,11 @@ export interface InvoiceDetailDTO {
   voidReason: string | null
   patient: { id: string; name: string; patientNumber: string; phone: string | null } | null
   visitId: string | null
+  isSupplementary: boolean
+  supplementOfInvoiceId: string | null
+  supplementOfInvoiceNumber: string | null
+  reopenFlaggedAt: string | null
+  reopenAcknowledgedAt: string | null
   claim: { id: string; claimNumber: string; status: string } | null
   lines: InvoiceLineDTO[]
   payments: PaymentDTO[]
@@ -127,6 +136,7 @@ export interface ReceiptDTO {
   reference: string | null
   cashierName: string | null
   invoiceNumber: string
+  isSupplementary: boolean
   invoiceTotal: string
   balanceAfter: string
   patient: { name: string; patientNumber: string } | null

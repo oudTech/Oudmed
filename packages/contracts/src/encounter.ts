@@ -28,6 +28,18 @@ export interface ClinicalNoteDTO {
   updatedAt: string
 }
 
+/** A late addition to the note, added after the visit was already completed. */
+export interface NoteAddendumDTO {
+  id: string
+  visitId: string
+  subjective: string | null
+  objective: string | null
+  assessment: string | null
+  plan: string | null
+  authorName: string | null
+  createdAt: string
+}
+
 export interface ClinicalOrderDTO {
   id: string
   visitId: string | null
@@ -60,6 +72,10 @@ export interface EncounterInvoiceDTO {
   id: string
   invoiceNumber: string
   status: 'UNPAID' | 'PARTIAL' | 'PAID'
+  isSupplementary: boolean
+  supplementOfInvoiceId: string | null
+  reopenFlaggedAt: string | null
+  reopenAcknowledgedAt: string | null
   totalAmount: string
   paidAmount: string
   balanceDue: string
@@ -92,6 +108,7 @@ export interface EncounterVisitDTO {
   reason: string | null
   startedAt: string | null
   completedAt: string | null
+  reopenedAt: string | null
   doctor: { id: string; fullName: string } | null
   department: { id: string; name: string } | null
 }
@@ -106,7 +123,8 @@ export interface EncounterDTO {
   orders: ClinicalOrderDTO[]
   prescriptions: PrescriptionDTO[]
   note: ClinicalNoteDTO | null
-  invoice: EncounterInvoiceDTO | null
+  noteAddenda: NoteAddendumDTO[]
+  invoices: EncounterInvoiceDTO[]
 }
 
 export interface PharmacyQueueItemDTO {

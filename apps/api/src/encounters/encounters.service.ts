@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
 import { assertCan, can } from '../common/permissions';
-import { CreateOrderDto, UpdateOrderDto, UpsertNoteDto } from './dto/encounter.dto';
+import { AddNoteAddendumDto, CreateOrderDto, UpdateOrderDto, UpsertNoteDto } from './dto/encounter.dto';
 
 interface Actor {
   tenantId: string;
@@ -62,7 +62,7 @@ export class EncountersService {
       if (!visit) throw new NotFoundException('Visit not found');
       const p = visit.patient;
 
-      const [complaints, vitals, diagnoses, orders, prescriptions, note, invoice, lastVitals] =
+      const [complaints, vitals, diagnoses, orders, prescriptions, note, addenda, invoices, lastVitals] =
         await Promise.all([
           tx.complaint.findMany({ where: { visitId }, orderBy: { recordedAt: 'desc' } }),
           tx.vitalSigns.findMany({ where: { visitId }, orderBy: { recordedAt: 'desc' } }),
@@ -74,7 +74,10 @@ export class EncountersService {
             orderBy: { prescribedAt: 'desc' },
           }),
           tx.clinicalNote.findFirst({ where: { visitId } }),
-          tx.invoice.findFirst({ where: { visitId }, include: { lines: true, payments: true } }),
+          tx.clinicalNoteAddendum.findMany({ where: { visitId }, orderBy: { createdAt: 'asc' } }),
+          // A visit may carry a supplementary invoice once its primary is
+          // locked by a payment or a claim (FUNC-2) - show both.
+          tx.invoice.findMany({ where: { visitId }, include: { lines: true, payments: true } }),
           tx.vitalSigns.findFirst({ where: { patientId: p.id }, orderBy: { recordedAt: 'desc' } }),
         ]);
 
@@ -85,13 +88,14 @@ export class EncountersService {
         ...orders.flatMap((o) => [o.orderedById, o.resultedById]),
         ...prescriptions.map((r) => r.prescribedById),
         note?.authorId,
+        ...addenda.map((a) => a.authorId),
       ]);
       const nm = (id: string | null) => (id ? nameMap.get(id) ?? null : null);
 
-      const paid =
-        invoice?.payments.reduce((s, x) => s.add(x.amount), new Prisma.Decimal(0)) ??
-        new Prisma.Decimal(0);
-      const total = invoice?.totalAmount ?? new Prisma.Decimal(0);
+      // "Late entry" once the visit was already completed at the time it was
+      // recorded (FUNC-2) - complaint/vitals/diagnosis stay append-only after
+      // completion rather than being blocked, so this just labels them.
+      const isLate = (recordedAt: Date) => !!visit.completedAt && recordedAt > visit.completedAt;
 
       return {
         visit: {
@@ -103,6 +107,7 @@ export class EncountersService {
           reason: visit.reason,
           startedAt: visit.startedAt,
           completedAt: visit.completedAt,
+          reopenedAt: visit.reopenedAt,
           doctor: visit.doctor,
           department: visit.department,
         },
@@ -123,9 +128,15 @@ export class EncountersService {
           hmoName: p.hmoName,
         },
         lastVitals: lastVitals ?? null,
-        complaints: complaints.map((c) => ({ ...c, recordedByName: nm(c.recordedById) })),
-        vitals: vitals.map((v) => ({ ...v, recordedByName: nm(v.recordedById) })),
-        diagnoses: diagnoses.map((d) => ({ ...d, recordedByName: nm(d.diagnosedById) })),
+        complaints: complaints.map((c) => ({
+          ...c, recordedByName: nm(c.recordedById), lateEntry: isLate(c.recordedAt),
+        })),
+        vitals: vitals.map((v) => ({
+          ...v, recordedByName: nm(v.recordedById), lateEntry: isLate(v.recordedAt),
+        })),
+        diagnoses: diagnoses.map((d) => ({
+          ...d, recordedByName: nm(d.diagnosedById), lateEntry: isLate(d.diagnosedAt),
+        })),
         orders: orders.map((o) => ({
           ...o,
           orderedByName: nm(o.orderedById),
@@ -139,24 +150,31 @@ export class EncountersService {
         note: note
           ? { ...note, authorName: nm(note.authorId) }
           : null,
-        invoice: invoice
-          ? {
-              id: invoice.id,
-              invoiceNumber: invoice.invoiceNumber,
-              status: invoice.status,
-              totalAmount: total.toString(),
-              paidAmount: paid.toString(),
-              balanceDue: (total.sub(paid).lt(0) ? new Prisma.Decimal(0) : total.sub(paid)).toString(),
-              lines: invoice.lines.map((l) => ({
-                id: l.id,
-                category: l.category,
-                description: l.description,
-                quantity: l.quantity,
-                unitPrice: l.unitPrice.toString(),
-                lineTotal: l.lineTotal.toString(),
-              })),
-            }
-          : null,
+        noteAddenda: addenda.map((a) => ({ ...a, authorName: nm(a.authorId) })),
+        invoices: invoices.map((invoice) => {
+          const paid = invoice.payments.reduce((s, x) => s.add(x.amount), new Prisma.Decimal(0));
+          const total = invoice.totalAmount;
+          return {
+            id: invoice.id,
+            invoiceNumber: invoice.invoiceNumber,
+            status: invoice.status,
+            isSupplementary: invoice.isSupplementary,
+            supplementOfInvoiceId: invoice.supplementOfInvoiceId,
+            reopenFlaggedAt: invoice.reopenFlaggedAt,
+            reopenAcknowledgedAt: invoice.reopenAcknowledgedAt,
+            totalAmount: total.toString(),
+            paidAmount: paid.toString(),
+            balanceDue: (total.sub(paid).lt(0) ? new Prisma.Decimal(0) : total.sub(paid)).toString(),
+            lines: invoice.lines.map((l) => ({
+              id: l.id,
+              category: l.category,
+              description: l.description,
+              quantity: l.quantity,
+              unitPrice: l.unitPrice.toString(),
+              lineTotal: l.lineTotal.toString(),
+            })),
+          };
+        }),
       };
     });
   }
@@ -164,8 +182,14 @@ export class EncountersService {
   async upsertNote(actor: Actor, visitId: string, dto: UpsertNoteDto) {
     assertCan(actor.role, 'note:write');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
-      const visit = await tx.visit.findFirst({ where: { id: visitId }, select: { id: true, patientId: true } });
+      const visit = await tx.visit.findFirst({ where: { id: visitId }, select: { id: true, patientId: true, status: true } });
       if (!visit) throw new NotFoundException('Visit not found');
+      if (visit.status === 'COMPLETED') {
+        throw new BadRequestException({
+          message: 'This visit is completed. Reopen it to edit the note, or add an addendum instead.',
+          code: 'VISIT_COMPLETED',
+        });
+      }
       const row = await tx.clinicalNote.upsert({
         where: { visitId },
         create: {
@@ -194,14 +218,55 @@ export class EncountersService {
     });
   }
 
+  /**
+   * A late addition to the SOAP note after the visit was already completed
+   * (upsertNote itself is blocked once completed - see above). Deliberately a
+   * separate, append-only row rather than editing ClinicalNote, so the
+   * original note is never silently changed; never blocked by completion,
+   * the same as complaint/vitals/diagnosis (FUNC-2).
+   */
+  async addNoteAddendum(actor: Actor, visitId: string, dto: AddNoteAddendumDto) {
+    assertCan(actor.role, 'note:write');
+    if (!dto.subjective && !dto.objective && !dto.assessment && !dto.plan) {
+      throw new BadRequestException('An addendum needs at least one field filled in');
+    }
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      const visit = await tx.visit.findFirst({ where: { id: visitId }, select: { id: true, patientId: true } });
+      if (!visit) throw new NotFoundException('Visit not found');
+      const row = await tx.clinicalNoteAddendum.create({
+        data: {
+          tenantId: actor.tenantId,
+          patientId: visit.patientId,
+          visitId,
+          subjective: dto.subjective,
+          objective: dto.objective,
+          assessment: dto.assessment,
+          plan: dto.plan,
+          authorId: actor.userId,
+        },
+      });
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'ADD_NOTE_ADDENDUM',
+        entityType: 'Visit', entityId: visitId, metadata: { addendumId: row.id },
+      });
+      return row;
+    });
+  }
+
   async createOrder(actor: Actor, visitId: string, dto: CreateOrderDto) {
     assertCan(actor.role, 'order:create');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
       const visit = await tx.visit.findFirst({
         where: { id: visitId },
-        select: { id: true, patientId: true },
+        select: { id: true, patientId: true, status: true },
       });
       if (!visit) throw new NotFoundException('Visit not found');
+      if (visit.status === 'COMPLETED') {
+        throw new BadRequestException({
+          message: 'This visit is completed. Reopen it to add orders.',
+          code: 'VISIT_COMPLETED',
+        });
+      }
 
       let name = dto.name?.trim();
       let serviceItemId: string | null = dto.serviceItemId ?? null;

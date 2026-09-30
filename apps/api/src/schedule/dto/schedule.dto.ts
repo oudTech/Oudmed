@@ -3,6 +3,7 @@ import {
   IsDateString,
   IsEnum,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -11,6 +12,10 @@ import {
   Min,
 } from 'class-validator';
 import { PayerType, VisitStatus, VisitType } from '@prisma/client';
+
+export class ReopenVisitDto {
+  @IsString() @IsNotEmpty() @MaxLength(300) reason: string;
+}
 
 export class ListVisitsQueryDto {
   @IsOptional() @IsDateString() from?: string;

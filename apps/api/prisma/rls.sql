@@ -27,7 +27,7 @@ DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY[
     'Department','Ward','Bed','DoctorShift','Patient','PatientDocument',
-    'Complaint','Diagnosis','VitalSigns','Prescription','ClinicalNote','ClinicalOrder',
+    'Complaint','Diagnosis','VitalSigns','Prescription','ClinicalNote','ClinicalNoteAddendum','ClinicalOrder',
     'Drug','DrugBatch','StockMovement','InsuranceProvider',
     'InsuranceClaim','InsuranceClaimLine','ClaimBatch','ClaimRemittance','ClaimRemittanceAllocation',
     'StoredFile','TenantSequence',

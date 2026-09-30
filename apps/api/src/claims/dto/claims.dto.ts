@@ -33,7 +33,10 @@ export class EligibleVisitsQueryDto {
 }
 
 export class GenerateClaimsDto {
-  @IsArray() @IsString({ each: true }) visitIds: string[];
+  // Invoice ids, not visit ids - a visit can carry more than one claimable
+  // invoice (a supplementary invoice raised after the original was already
+  // claimed), and a claim links to exactly one invoice (FUNC-2).
+  @IsArray() @IsString({ each: true }) invoiceIds: string[];
 }
 
 export class ClaimLineDto {

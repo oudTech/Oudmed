@@ -4,7 +4,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { assertCan } from '../common/permissions';
 import { CurrentUser, AuthUser } from '../common/current-user.decorator';
 import { EncountersService } from './encounters.service';
-import { CreateOrderDto, UpdateOrderDto, UpsertNoteDto } from './dto/encounter.dto';
+import { AddNoteAddendumDto, CreateOrderDto, UpdateOrderDto, UpsertNoteDto } from './dto/encounter.dto';
 
 const actor = (u: AuthUser) => ({ tenantId: u.tenantId, userId: u.userId, role: u.role });
 
@@ -42,6 +42,15 @@ export class EncountersController {
     @Body() dto: UpsertNoteDto,
   ) {
     return this.encounters.upsertNote(actor(u), visitId, dto);
+  }
+
+  @Post('encounters/:visitId/note/addenda')
+  addNoteAddendum(
+    @CurrentUser() u: AuthUser,
+    @Param('visitId') visitId: string,
+    @Body() dto: AddNoteAddendumDto,
+  ) {
+    return this.encounters.addNoteAddendum(actor(u), visitId, dto);
   }
 
   @Post('encounters/:visitId/orders')

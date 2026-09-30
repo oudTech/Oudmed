@@ -191,6 +191,8 @@ export interface ComplaintDTO {
   visitId: string | null
   recordedByName: string | null
   recordedAt: string
+  /** Recorded after the visit was already completed (encounter view only). */
+  lateEntry?: boolean
 }
 
 export interface DiagnosisDTO {
@@ -202,6 +204,8 @@ export interface DiagnosisDTO {
   notes: string | null
   recordedByName: string | null
   diagnosedAt: string
+  /** Recorded after the visit was already completed (encounter view only). */
+  lateEntry?: boolean
 }
 
 export interface VitalSignsDTO {
@@ -222,6 +226,8 @@ export interface VitalSignsDTO {
   notes: string | null
   recordedByName: string | null
   recordedAt: string
+  /** Recorded after the visit was already completed (encounter view only). */
+  lateEntry?: boolean
 }
 
 export interface PrescriptionItemDTO {

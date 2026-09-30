@@ -31,6 +31,7 @@ export type Action =
   | 'note:write'
   | 'order:create'
   | 'order:result'
+  | 'visit:reopen'
   | 'invoice:pay'
   | 'billing:manage'
   | 'staff:manage'
@@ -72,6 +73,7 @@ export const MATRIX: Record<Action, string[]> = {
   'note:write': ['DOCTOR', 'HOSPITAL_ADMIN'],
   'order:create': ['DOCTOR', 'HOSPITAL_ADMIN'],
   'order:result': ['LAB_STAFF', 'DOCTOR', 'HOSPITAL_ADMIN'],
+  'visit:reopen': ['DOCTOR', 'HOSPITAL_ADMIN'],
   'invoice:pay': ['RECEPTIONIST', 'ACCOUNTANT', 'HOSPITAL_ADMIN'],
   'billing:manage': ['RECEPTIONIST', 'ACCOUNTANT', 'HOSPITAL_ADMIN'],
   'staff:manage': ['HOSPITAL_ADMIN'],

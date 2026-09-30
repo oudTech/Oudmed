@@ -158,7 +158,12 @@ function BillingInner() {
                   const m = INVOICE_STATUS_META[inv.status]
                   return (
                     <tr key={inv.id} className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => setOpenId(inv.id)}>
-                      <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{inv.invoiceNumber}</td>
+                      <td className="px-3 py-2.5 font-mono text-xs text-gray-600">
+                        {inv.invoiceNumber}
+                        {inv.isSupplementary && (
+                          <span className="ml-1.5 text-[10px] uppercase tracking-wide text-amber-600 font-sans">Supplementary</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2.5 text-gray-500">{d(inv.createdAt)}</td>
                       <td className="px-3 py-2.5">{inv.patient?.name ?? '-'}</td>
                       <td className="px-3 py-2.5 text-gray-500">{inv.category ?? '-'}</td>
@@ -167,6 +172,11 @@ function BillingInner() {
                       <td className="px-3 py-2.5 font-medium">{naira(inv.balanceDue)}</td>
                       <td className="px-3 py-2.5">
                         <span className="text-xs font-medium rounded-full px-2 py-0.5" style={{ color: m.color, backgroundColor: m.bg }}>{m.label}</span>
+                        {inv.reopenFlaggedAt && !inv.reopenAcknowledgedAt && (
+                          <span className="ml-1.5 text-xs font-medium rounded-full px-2 py-0.5 bg-red-50 text-red-600" title="Visit reopened while this invoice was paid or claimed">
+                            Reopened
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                         {inv.status !== 'PAID' && inv.status !== 'CANCELLED' && can(session?.role, 'invoice:pay') && (
