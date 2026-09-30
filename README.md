@@ -110,6 +110,13 @@ Open **<http://demo.localhost:3001>** - note the `demo.` subdomain. The bare
 `localhost:3001` is the apex (new-hospital sign-up only); a hospital workspace
 lives at `<slug>.localhost:3001`.
 
+The web dev server binds to `127.0.0.1` only (not `0.0.0.0`), since `next dev`
+on Windows falls under a critical unauthenticated RCE advisory
+(GHSA-p293-qw3h-jr36), fixed only in Next >=15.5.24 (tracked as the first
+Phase 2 item after this pre-launch fix pass). Binding to loopback keeps the
+dev server unreachable from the rest of the network in the meantime;
+`<slug>.localhost` still resolves to `127.0.0.1` as normal.
+
 | Role           | Email                | Password     |
 | -------------- | -------------------- | ------------ |
 | Hospital admin | `admin@demo.com`     | `Admin1234!` |
