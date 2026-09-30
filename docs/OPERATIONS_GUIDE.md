@@ -412,6 +412,15 @@ other real record. Helper script: `apps/api/prisma/dr-drill.ts`
 branch-from-point-in-time to a *new* branch, and only ever point a
 scratch/local environment at that new branch):
 
+**Safe handling of the production connection string:** running `dr-drill`
+against production means pointing `DATABASE_URL` at production from your
+local machine for the duration of the drill. Do this via a temporary,
+**uncommitted** override - e.g. `DATABASE_URL="<prod url>" pnpm dr-drill ...`
+inline on the command, or a gitignored `.env.production.local` you delete
+right after - never the tracked `.env`. Clear the variable / delete the file
+as soon as the drill step is done; don't leave a production credential
+sitting in a local shell session or file longer than necessary.
+
 1. Against the production database: `pnpm dr-drill plant`. Record the
    printed `id`, `label`, and `createdAt` timestamp somewhere durable
    (this runbook's drill log, below).
