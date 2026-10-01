@@ -29,6 +29,20 @@ export const encountersApi = {
     },
   ) => api.post(`/encounters/${visitId}/orders`, data).then((r) => r.data),
 
+  createAdmissionOrder: (
+    admissionId: string,
+    data: {
+      orderType: string
+      serviceItemId?: string
+      name?: string
+      unitPrice?: number
+      overrideReason?: string
+      quantity?: number
+      priority?: string
+      clinicalNote?: string
+    },
+  ) => api.post(`/admissions/${admissionId}/orders`, data).then((r) => r.data),
+
   updateOrder: (
     orderId: string,
     data: {

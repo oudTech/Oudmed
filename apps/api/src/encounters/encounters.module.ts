@@ -8,5 +8,6 @@ import { EncountersService } from './encounters.service';
   imports: [PrismaModule, BillingModule],
   controllers: [EncountersController],
   providers: [EncountersService],
+  exports: [EncountersService],
 })
 export class EncountersModule {}

@@ -10,6 +10,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { assertCan } from '../common/permissions';
 import { nextSequence } from '../common/sequence';
 import { BillingService } from '../billing/billing.service';
+import { BedChargesService } from './bed-charges.service';
 import {
   CreateAdmissionDto,
   CreateDepositDto,
@@ -50,6 +51,7 @@ export class AdmissionsService {
     private prisma: PrismaService,
     private audit: AuditService,
     private billing: BillingService,
+    private bedCharges: BedChargesService,
   ) {}
 
   async list(tenantId: string, q: ListAdmissionsQueryDto) {
@@ -218,10 +220,27 @@ export class AdmissionsService {
       if (admission.status !== AdmissionStatus.ADMITTED) {
         throw new BadRequestException('This admission is already closed');
       }
+      const dischargedAt = new Date();
+
+      // Final bed-charge reconciliation (F1b) runs BEFORE the ward-stay row
+      // closes below, so "which ward was open at this census instant" still
+      // resolves correctly for the very last night/block, and so a same-day
+      // stay's short-stay charge can still find its (still-open) ward.
+      const tenant = await tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { id: true, inpatientChargeRule: true, shortStayChargeMode: true },
+      });
+      await this.bedCharges.postBedCharges(
+        tx,
+        { id: admission.id, tenantId, patientId: admission.patientId, admittedAt: admission.admittedAt },
+        tenant!,
+        dischargedAt,
+        true,
+      );
+
       if (admission.bedId) {
         await tx.bed.update({ where: { id: admission.bedId }, data: { status: BedStatus.AVAILABLE } });
       }
-      const dischargedAt = new Date();
       await tx.admissionWardStay.updateMany({
         where: { admissionId: id, endedAt: null },
         data: { endedAt: dischargedAt },
@@ -265,19 +284,20 @@ export class AdmissionsService {
 
   /** Everything a ward-round screen needs for one admission: header info plus
    * whatever has been recorded against it so far. Vitals/complaints/diagnoses/
-   * prescriptions are already admissionId-capable (schema + DTOs); orders and
-   * notes against an admission are F1b work, alongside the charge-posting
-   * they also need. */
+   * prescriptions/orders are all admissionId-capable (schema + DTOs); SOAP
+   * notes against an admission remain a later phase (ClinicalNote/
+   * ClinicalNoteAddendum need their own schema work first - see F1b report). */
   async workspace(tenantId: string, id: string) {
     return this.prisma.forTenant(tenantId, async (tx) => {
       const admission = await tx.admission.findFirst({ where: { id }, include: ADMISSION_INCLUDE });
       if (!admission) throw new NotFoundException('Admission not found');
 
-      const [vitals, complaints, diagnoses, prescriptions, deposits] = await Promise.all([
+      const [vitals, complaints, diagnoses, prescriptions, orders, deposits] = await Promise.all([
         tx.vitalSigns.findMany({ where: { admissionId: id }, orderBy: { recordedAt: 'desc' } }),
         tx.complaint.findMany({ where: { admissionId: id }, orderBy: { recordedAt: 'desc' } }),
         tx.diagnosis.findMany({ where: { admissionId: id }, orderBy: { diagnosedAt: 'desc' } }),
         tx.prescription.findMany({ where: { admissionId: id }, include: { items: true }, orderBy: { prescribedAt: 'desc' } }),
+        tx.clinicalOrder.findMany({ where: { admissionId: id }, orderBy: { orderedAt: 'desc' } }),
         tx.admissionDeposit.findMany({ where: { admissionId: id }, orderBy: { receivedAt: 'desc' } }),
       ]);
 
@@ -291,6 +311,7 @@ export class AdmissionsService {
         complaints,
         diagnoses,
         prescriptions,
+        orders,
         deposits: deposits.map((d) => ({
           id: d.id,
           amount: d.amount.toString(),
@@ -343,6 +364,14 @@ export class AdmissionsService {
           isSupplementary: i.isSupplementary,
           totalAmount: i.totalAmount.toString(),
           lineCount: i.lines.length,
+          lines: i.lines.map((l) => ({
+            id: l.id,
+            category: l.category,
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice.toString(),
+            lineTotal: l.lineTotal.toString(),
+          })),
           claim: i.claim ? { id: i.claim.id, claimNumber: i.claim.claimNumber, status: i.claim.status } : null,
         })),
         deposits: deposits.map((d) => ({

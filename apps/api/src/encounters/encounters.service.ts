@@ -253,19 +253,44 @@ export class EncountersService {
     });
   }
 
-  async createOrder(actor: Actor, visitId: string, dto: CreateOrderDto) {
+  /**
+   * `target` is a bare visitId (every existing caller) or `{ admissionId }`
+   * for the inpatient workspace's own order creation (F1b) - the only two
+   * sources an order can have (F1 correction 1: the charge always follows
+   * whichever one this is, never the patient's live admission status).
+   */
+  async createOrder(actor: Actor, target: string | { admissionId: string }, dto: CreateOrderDto) {
     assertCan(actor.role, 'order:create');
+    const visitId = typeof target === 'string' ? target : undefined;
+    const admissionId = typeof target === 'string' ? undefined : target.admissionId;
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
-      const visit = await tx.visit.findFirst({
-        where: { id: visitId },
-        select: { id: true, patientId: true, status: true },
-      });
-      if (!visit) throw new NotFoundException('Visit not found');
-      if (visit.status === 'COMPLETED') {
-        throw new BadRequestException({
-          message: 'This visit is completed. Reopen it to add orders.',
-          code: 'VISIT_COMPLETED',
+      let patientId: string;
+      if (visitId) {
+        const visit = await tx.visit.findFirst({
+          where: { id: visitId },
+          select: { id: true, patientId: true, status: true },
         });
+        if (!visit) throw new NotFoundException('Visit not found');
+        if (visit.status === 'COMPLETED') {
+          throw new BadRequestException({
+            message: 'This visit is completed. Reopen it to add orders.',
+            code: 'VISIT_COMPLETED',
+          });
+        }
+        patientId = visit.patientId;
+      } else {
+        const admission = await tx.admission.findFirst({
+          where: { id: admissionId },
+          select: { id: true, patientId: true, status: true },
+        });
+        if (!admission) throw new NotFoundException('Admission not found');
+        if (admission.status !== 'ADMITTED') {
+          throw new BadRequestException({
+            message: 'This admission is closed. Reopen it to add orders.',
+            code: 'ADMISSION_CLOSED',
+          });
+        }
+        patientId = admission.patientId;
       }
 
       let name = dto.name?.trim();
@@ -282,8 +307,9 @@ export class EncountersService {
       const order = await tx.clinicalOrder.create({
         data: {
           tenantId: actor.tenantId,
-          patientId: visit.patientId,
-          visitId,
+          patientId,
+          visitId: visitId ?? null,
+          admissionId: admissionId ?? null,
           serviceItemId,
           orderType: dto.orderType,
           name,
@@ -298,9 +324,10 @@ export class EncountersService {
       // free-text (non-catalogue) order has nothing to resolve against, so -
       // same as an off-formulary drug - it always needs a reason on record,
       // even though the shipped UI never actually places one of these today.
+      const contextId = (visitId ?? admissionId)!;
       let unitPrice: Prisma.Decimal;
       if (serviceItemId && svc) {
-        unitPrice = await this.resolveOrderPrice(actor, visitId, order.id, name, svc.unitPrice, dto, can(actor.role, 'billing:manage'));
+        unitPrice = await this.resolveOrderPrice(actor, contextId, order.id, name, svc.unitPrice, dto, can(actor.role, 'billing:manage'));
       } else {
         if (!dto.overrideReason?.trim()) {
           throw new BadRequestException(`A reason is required to price the off-catalogue order "${name}"`);
@@ -309,20 +336,21 @@ export class EncountersService {
         await this.audit.record({
           tenantId: actor.tenantId, userId: actor.userId, action: 'OFF_CATALOGUE_ORDER',
           entityType: 'ClinicalOrder', entityId: order.id,
-          metadata: { name, price: Number(unitPrice), reason: dto.overrideReason, visitId },
+          metadata: { name, price: Number(unitPrice), reason: dto.overrideReason, visitId, admissionId },
         });
       }
 
-      // This order's source is the visit it was raised from (F1, corrected):
-      // it always charges that visit's invoice, even if the patient happens
-      // to be admitted right now. A patient's live admission status is not
-      // the order's source - only the inpatient workspace's own order
-      // creation (F1b) charges an admission directly.
-      const { lineId } = await this.billing.postChargeToVisit(tx, {
+      // This order's source - the visit or admission it was raised from
+      // (F1, corrected) - is where its charge always lands, even if the
+      // patient's live admission status would otherwise suggest somewhere
+      // else. The inpatient workspace's own order creation sets admissionId
+      // as that source directly, the same way its prescriptions already do.
+      const { lineId } = await this.billing.postCharge(tx, {
         tenantId: actor.tenantId,
         userId: actor.userId,
         visitId,
-        patientId: visit.patientId,
+        admissionId,
+        patientId,
         serviceItemId,
         orderId: order.id,
         description: name,
@@ -335,7 +363,7 @@ export class EncountersService {
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'CREATE_ORDER',
         entityType: 'ClinicalOrder', entityId: order.id,
-        metadata: { orderType: dto.orderType, name },
+        metadata: { orderType: dto.orderType, name, visitId, admissionId },
       });
       return { ...order, invoiceLineId: lineId };
     });
@@ -352,7 +380,7 @@ export class EncountersService {
    */
   private async resolveOrderPrice(
     actor: Actor,
-    visitId: string,
+    contextId: string,
     orderId: string,
     itemName: string,
     cataloguePriceDecimal: Prisma.Decimal,
@@ -370,7 +398,7 @@ export class EncountersService {
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'ORDER_PRICE_OVERRIDE',
         entityType: 'ClinicalOrder', entityId: orderId,
-        metadata: { itemName, cataloguePrice, overridePrice: requested, reason: dto.overrideReason, visitId },
+        metadata: { itemName, cataloguePrice, overridePrice: requested, reason: dto.overrideReason, contextId },
       });
       return new Prisma.Decimal(requested as number);
     }
@@ -382,7 +410,7 @@ export class EncountersService {
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'ORDER_PRICE_MISMATCH',
         entityType: 'ClinicalOrder', entityId: orderId,
-        metadata: { itemName, cataloguePrice, requestedPrice: requested, visitId },
+        metadata: { itemName, cataloguePrice, requestedPrice: requested, contextId },
       });
     }
 

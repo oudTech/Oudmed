@@ -894,13 +894,16 @@ model AdmissionWardStay {
 /// admission per night actually charged, so the cron and the discharge
 /// reconciliation can never double-post the same night.
 model BedDayCharge {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   tenantId      String
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
   admissionId   String
-  nightOf       DateTime // Lagos calendar date (UTC midnight) this charge covers
-  invoiceLineId String
-  createdAt     DateTime @default(now())
+  nightOf       DateTime // census instant (MIDNIGHT_CENSUS) or block-end instant (ROLLING_24H) this charge covers
+  // Null means "evaluated, legitimately free" (ShortStayChargeMode.NONE) -
+  // not "pending". A night/stay held for a missing ward rate gets no row at
+  // all, so the next run (cron, or discharge reconciliation) retries it.
+  invoiceLineId String?
+  createdAt     DateTime  @default(now())
 
   @@unique([admissionId, nightOf])
   @@index([tenantId])

@@ -786,6 +786,46 @@ the same A4 print component used for the final bill/discharge summary,
 labelled "Interim bill - stay in progress" vs. "Final bill" so a mid-stay
 printout is never mistaken for the closing statement.
 
+### F1b implementation notes
+
+- The day-counting logic shipped as a pure function, `planBedCharges()` in
+  `apps/api/src/admissions/bed-charges.ts`, deliberately separated from any
+  DB access so every worked example in this doc (section 6) is a direct unit
+  test (`bed-charges.spec.ts`), independent of wall-clock time. The DB-aware
+  wrapper, `BedChargesService` (`bed-charges.service.ts`), does the
+  idempotency check (`BedDayCharge`), resolves the right `AdmissionWardStay`
+  for each census instant, and posts the charge via `BillingService.postCharge`
+  - called by both the nightly cron and `AdmissionsService.discharge()`
+  (`isFinal: true`, run **before** the ward-stay row closes, so the very last
+  census point still resolves correctly). `BedDayCharge.invoiceLineId` became
+  nullable (migration `20261001010000_f1b_bed_charges`): a null row means
+  "evaluated, legitimately free" (`ShortStayChargeMode.NONE`), not "pending" -
+  a held night/stay (missing rate) gets no row at all, so the next run
+  retries it at whatever rate is current then.
+- **Orders from the inpatient workspace**: rather than a parallel
+  `AdmissionsService.createOrder`, `EncountersService.createOrder`'s second
+  parameter was generalised from a bare `visitId: string` to
+  `string | { admissionId: string }` - every existing call site (a bare
+  string) is unaffected, and `AdmissionsController` calls the same method
+  with `{ admissionId }`. The completed-admission guard mirrors the
+  completed-visit one exactly (`AdmissionStatus !== 'ADMITTED'` blocks new
+  orders, matching section 4's equivalence table).
+- **SOAP notes/addenda on an admission are still deferred**, not shipped in
+  F1b (the brief only asked for "charges and orders" in this sub-step).
+  Reading the actual schema while wiring orders turned up a second
+  discrepancy beyond section 3's original one: `ClinicalNote.admissionId`
+  has no unique constraint (needed for the same `upsert`-by-id pattern
+  `visitId` uses), and `ClinicalNoteAddendum` has no `admissionId` column at
+  all - it references a required `visitId` directly, not nullable. Both are
+  small, additive migrations, but they are schema work this sub-step's
+  explicit scope did not call for, so they are left for whichever phase
+  actually ships admission-side notes.
+- **Interim/final bill print**: one shared component
+  (`AdmissionBillPrintModal`), fed by `GET /admissions/:id/bill` (now
+  including each invoice's line items, not just a count), labelled "Interim
+  bill" while `AdmissionStatus === 'ADMITTED'` and "Final bill" once
+  discharged - exactly as this section specifies.
+
 ## 10. Reports
 
 - **Census / bed occupancy**: a new reports panel - beds occupied vs. total

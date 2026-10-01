@@ -4,6 +4,8 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { assertCan } from '../common/permissions';
 import { CurrentUser, AuthUser } from '../common/current-user.decorator';
 import { AdmissionsService } from './admissions.service';
+import { EncountersService } from '../encounters/encounters.service';
+import { CreateOrderDto } from '../encounters/dto/encounter.dto';
 import {
   CreateAdmissionDto,
   CreateDepositDto,
@@ -21,7 +23,10 @@ const actor = (u: AuthUser) => ({ tenantId: u.tenantId, userId: u.userId, role: 
 @UseGuards(JwtAuthGuard)
 @Controller('admissions')
 export class AdmissionsController {
-  constructor(private admissions: AdmissionsService) {}
+  constructor(
+    private admissions: AdmissionsService,
+    private encounters: EncountersService,
+  ) {}
 
   @Get()
   list(@CurrentUser() user: AuthUser, @Query() query: ListAdmissionsQueryDto) {
@@ -98,5 +103,10 @@ export class AdmissionsController {
   ) {
     assertCan(user.role, 'admission:deposit');
     return this.admissions.depositReceipt(user.tenantId, id, depositId);
+  }
+
+  @Post(':id/orders')
+  createOrder(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: CreateOrderDto) {
+    return this.encounters.createOrder(actor(user), { admissionId: id }, dto);
   }
 }

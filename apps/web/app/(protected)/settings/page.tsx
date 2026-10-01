@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { HospitalSettingsDTO, SubscriptionInvoiceDTO } from '@oudhealth/contracts'
-import { Button, Field, Input, Textarea } from '@/components/ui/kit'
+import { INPATIENT_CHARGE_RULES, SHORT_STAY_CHARGE_MODES } from '@oudhealth/contracts'
+import { Button, Field, Input, Select, Textarea } from '@/components/ui/kit'
 import { useToast } from '@/components/ui/feedback'
 import { can } from '@/lib/permissions'
 import { settingsApi } from '@/lib/settings'
@@ -60,6 +61,7 @@ function SettingsPageInner() {
             <ProfileSection s={q.data} onSaved={refresh} />
             <BrandingSection s={q.data} onSaved={refresh} />
             <DocumentsSection s={q.data} onSaved={refresh} />
+            <InpatientBillingSection s={q.data} onSaved={refresh} />
             <BillingSection />
           </>
         )}
@@ -209,6 +211,42 @@ function DocumentsSection({ s, onSaved }: { s: HospitalSettingsDTO; onSaved: (s:
         <Button loading={m.isPending} disabled={!form.invoicePrefix.trim() || !form.receiptPrefix.trim()} onClick={() => { setErr(''); m.mutate() }}>
           Save
         </Button>
+      </div>
+    </Card>
+  )
+}
+
+function InpatientBillingSection({ s, onSaved }: { s: HospitalSettingsDTO; onSaved: (s: HospitalSettingsDTO) => void }) {
+  const { form, set } = useSectionForm({
+    inpatientChargeRule: s.inpatientChargeRule, shortStayChargeMode: s.shortStayChargeMode,
+  })
+  const [err, setErr] = useState('')
+  const m = useMutation({
+    mutationFn: () => settingsApi.update(form),
+    onSuccess: onSaved,
+    onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not save.'),
+  })
+  const rule = INPATIENT_CHARGE_RULES.find((r) => r.value === form.inpatientChargeRule)
+  const mode = SHORT_STAY_CHARGE_MODES.find((m2) => m2.value === form.shortStayChargeMode)
+  return (
+    <Card title="Inpatient billing" subtitle="How bed-day charges are counted for admissions.">
+      <div className="grid sm:grid-cols-2 gap-4">
+        <Field label="Day-counting rule">
+          <Select value={form.inpatientChargeRule} onChange={(e) => set('inpatientChargeRule', e.target.value)}>
+            {INPATIENT_CHARGE_RULES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </Select>
+          {rule && <p className="text-xs text-gray-400 mt-1">{rule.hint}</p>}
+        </Field>
+        <Field label="Short stay (never crosses a midnight)">
+          <Select value={form.shortStayChargeMode} onChange={(e) => set('shortStayChargeMode', e.target.value)}>
+            {SHORT_STAY_CHARGE_MODES.map((m2) => <option key={m2.value} value={m2.value}>{m2.label}</option>)}
+          </Select>
+          {mode && <p className="text-xs text-gray-400 mt-1">{mode.hint}</p>}
+        </Field>
+      </div>
+      {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
+      <div className="mt-4 flex justify-end">
+        <Button loading={m.isPending} onClick={() => { setErr(''); m.mutate() }}>Save</Button>
       </div>
     </Card>
   )

@@ -20,6 +20,9 @@ import {
   AddVitalsModal,
   AddPrescriptionModal,
 } from '@/components/patients/clinicalModals'
+import { OrderModal } from '@/components/encounters/OrderModal'
+import { ORDER_STATUS_META, ORDER_TYPE_LABEL } from '@/lib/encounters'
+import { AdmissionBillPrintModal } from '@/components/patients/AdmissionBillPrintModal'
 
 const dt = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB') : '-')
 const d = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-GB') : '-')
@@ -39,6 +42,8 @@ export default function AdmissionWorkspacePage() {
   const [addVitals, setAddVitals] = useState(false)
   const [addDiagnosis, setAddDiagnosis] = useState(false)
   const [addRx, setAddRx] = useState(false)
+  const [addOrder, setAddOrder] = useState(false)
+  const [showBill, setShowBill] = useState(false)
   const [addingDeposit, setAddingDeposit] = useState(false)
   const [refunding, setRefunding] = useState<{ id: string; max: number } | null>(null)
   const [complaintText, setComplaintText] = useState('')
@@ -96,8 +101,11 @@ export default function AdmissionWorkspacePage() {
 
       <div className="flex-1 p-8 space-y-6 max-w-5xl">
         {canBilling && bill.data && (
-          <Card title="Running bill" action={
-            <Button variant="secondary" onClick={() => setAddingDeposit(true)}>+ Deposit</Button>
+          <Card title={a.status === 'ADMITTED' ? 'Running bill (interim)' : 'Running bill'} action={
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setShowBill(true)}>Print bill</Button>
+              <Button variant="secondary" onClick={() => setAddingDeposit(true)}>+ Deposit</Button>
+            </div>
           }>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
               <Stat label="Charged" value={naira(bill.data.totalCharged)} />
@@ -196,11 +204,41 @@ export default function AdmissionWorkspacePage() {
             </ul>
           )}
         </Card>
+
+        <Card title="Orders" action={can(role, 'order:create') && <Button variant="secondary" onClick={() => setAddOrder(true)}>+ Order investigation</Button>}>
+          {!ws.data.orders.length ? <Empty /> : (
+            <ul className="text-sm divide-y divide-gray-100">
+              {ws.data.orders.map((o: any) => {
+                const meta = ORDER_STATUS_META[o.status]
+                return (
+                  <li key={o.id} className="py-2 flex items-center justify-between">
+                    <span>
+                      {o.name}
+                      <span className="text-gray-400 text-xs"> · {ORDER_TYPE_LABEL[o.orderType]} · {dt(o.orderedAt)}</span>
+                    </span>
+                    {meta && (
+                      <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ color: meta.color, backgroundColor: meta.bg }}>
+                        {meta.label}
+                      </span>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </Card>
       </div>
 
       <AddVitalsModal patientId={a.patient.id} admissionId={id} open={addVitals} onClose={() => { setAddVitals(false); refresh() }} />
       <AddDiagnosisModal patientId={a.patient.id} admissionId={id} open={addDiagnosis} onClose={() => { setAddDiagnosis(false); refresh() }} />
       <AddPrescriptionModal patientId={a.patient.id} admissionId={id} open={addRx} onClose={() => { setAddRx(false); refresh() }} />
+      <OrderModal admissionId={id} open={addOrder} onClose={() => { setAddOrder(false); refresh() }} />
+      <AdmissionBillPrintModal
+        bill={bill.data ?? null}
+        patient={{ name: patientName(a.patient as any), patientNumber: a.patient.patientNumber }}
+        open={showBill}
+        onClose={() => setShowBill(false)}
+      />
       <AddDepositModal admissionId={id} open={addingDeposit} onClose={() => setAddingDeposit(false)} onDone={refresh} />
       <RefundDepositModal admissionId={id} deposit={refunding} onClose={() => setRefunding(null)} onDone={refresh} />
     </div>

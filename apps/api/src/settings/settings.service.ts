@@ -15,6 +15,7 @@ interface Actor {
 const PROFILE_FIELDS = [
   'name', 'address', 'phone', 'contactEmail', 'website', 'rcNumber', 'taxId',
   'primaryColor', 'invoicePrefix', 'receiptPrefix', 'documentFooter',
+  'inpatientChargeRule', 'shortStayChargeMode',
 ] as const;
 
 @Injectable()
@@ -44,6 +45,8 @@ export class SettingsService {
       invoicePrefix: t.invoicePrefix,
       receiptPrefix: t.receiptPrefix,
       documentFooter: t.documentFooter,
+      inpatientChargeRule: t.inpatientChargeRule,
+      shortStayChargeMode: t.shortStayChargeMode,
     };
   }
 
@@ -57,10 +60,12 @@ export class SettingsService {
     for (const f of PROFILE_FIELDS) {
       if (dto[f] !== undefined) data[f] = dto[f] === '' ? null : dto[f];
     }
-    // prefix / name must not be nulled
+    // prefix / name / enum settings must not be nulled
     if (data.invoicePrefix === null) delete data.invoicePrefix;
     if (data.receiptPrefix === null) delete data.receiptPrefix;
     if (data.name === null) delete data.name;
+    if (data.inpatientChargeRule === null) delete data.inpatientChargeRule;
+    if (data.shortStayChargeMode === null) delete data.shortStayChargeMode;
 
     if (Object.keys(data).length === 0) return this.shape(actor.tenantId);
 

@@ -90,16 +90,27 @@ export interface AdmissionDepositDTO {
   refundReason: string | null
 }
 
-/** F1a: the inpatient workspace read - admission header plus what has been
- * recorded against it so far. Orders/notes against an admission land in F1b. */
+/** The inpatient workspace read - admission header plus what has been
+ * recorded against it so far. SOAP notes against an admission are a later
+ * phase (F1b report). */
 export interface AdmissionWorkspaceDTO {
   admission: AdmissionDTO
   vitals: Record<string, unknown>[]
   complaints: Record<string, unknown>[]
   diagnoses: Record<string, unknown>[]
   prescriptions: Record<string, unknown>[]
+  orders: Record<string, unknown>[]
   deposits: AdmissionDepositDTO[]
   totalDeposited: string
+}
+
+export interface AdmissionBillLineDTO {
+  id: string
+  category: string | null
+  description: string
+  quantity: number
+  unitPrice: string
+  lineTotal: string
 }
 
 export interface AdmissionBillInvoiceDTO {
@@ -109,6 +120,7 @@ export interface AdmissionBillInvoiceDTO {
   isSupplementary: boolean
   totalAmount: string
   lineCount: number
+  lines: AdmissionBillLineDTO[]
   claim: { id: string; claimNumber: string; status: string } | null
 }
 
