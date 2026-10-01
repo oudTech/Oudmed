@@ -313,10 +313,15 @@ export class EncountersService {
         });
       }
 
-      const { lineId } = await this.billing.postChargeToVisit(tx, {
+      // A patient who is currently admitted has their charges routed to the
+      // running bill even when this order was raised from the ordinary
+      // encounter workspace, not the inpatient one (F1) - the order record
+      // itself stays visit-linked either way.
+      const admissionId = await this.billing.resolveBillingTarget(tx, visit.patientId);
+      const { lineId } = await this.billing.postCharge(tx, {
         tenantId: actor.tenantId,
         userId: actor.userId,
-        visitId,
+        ...(admissionId ? { admissionId } : { visitId }),
         patientId: visit.patientId,
         serviceItemId,
         orderId: order.id,

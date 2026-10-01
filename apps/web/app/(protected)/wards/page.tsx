@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { AdmissionDTO, BoardBedDTO, WardBoardDTO } from '@oudhealth/contracts'
 import { Modal, Field, Input, Select, Button } from '@/components/ui/kit'
-import { getWardBoard, getAdmissions, createWard, addBeds, updateBed } from '@/lib/hospital'
+import { getWardBoard, getAdmissions, createWard, updateWard, addBeds, updateBed } from '@/lib/hospital'
+import { naira } from '@/lib/billing'
 import { can } from '@/lib/permissions'
 import { NewAdmissionModal } from '@/components/schedule/NewAdmissionModal'
 import { AdmissionDrawer } from '@/components/schedule/AdmissionDrawer'
@@ -39,6 +40,7 @@ export default function WardsPage() {
   const [openAdmission, setOpenAdmission] = useState<AdmissionDTO | null>(null)
   const [newWard, setNewWard] = useState(false)
   const [bedMenu, setBedMenu] = useState<{ wardId: string; bed: BoardBedDTO } | null>(null)
+  const [editRateWard, setEditRateWard] = useState<WardBoardDTO | null>(null)
 
   const totals = (board.data ?? []).reduce(
     (acc, w) => ({
@@ -113,6 +115,7 @@ export default function WardsPage() {
               if (a) setOpenAdmission(a)
             }}
             onBedMenu={(bed) => setBedMenu({ wardId: w.id, bed })}
+            onEditRate={() => setEditRateWard(w)}
           />
         ))}
       </div>
@@ -142,6 +145,7 @@ export default function WardsPage() {
       </Modal>
 
       <NewWardModal open={newWard} onClose={() => setNewWard(false)} />
+      <EditRateModal ward={editRateWard} onClose={() => setEditRateWard(null)} />
       <NewAdmissionModal
         open={!!admitPrefill}
         onClose={() => setAdmitPrefill(null)}
@@ -159,6 +163,7 @@ function WardSection({
   onAvailableBed,
   onOccupiedBed,
   onBedMenu,
+  onEditRate,
 }: {
   ward: WardBoardDTO
   canManage: boolean
@@ -166,6 +171,7 @@ function WardSection({
   onAvailableBed: (bedId: string) => void
   onOccupiedBed: (admissionId: string) => void
   onBedMenu: (bed: BoardBedDTO) => void
+  onEditRate: () => void
 }) {
   const qc = useQueryClient()
   const add = useMutation({
@@ -180,13 +186,23 @@ function WardSection({
         <span className="text-xs text-gray-500">
           {ward.stats.occupied}/{ward.stats.total} occupied · {ward.stats.available} free
         </span>
+        {ward.dailyRate ? (
+          <span className="text-xs text-gray-500">{naira(ward.dailyRate)}/night</span>
+        ) : canManage ? (
+          <span className="text-xs text-amber-600">No rate set - cannot admit</span>
+        ) : null}
         {canManage && (
-          <button
-            onClick={() => add.mutate()}
-            className="text-xs text-[#0A89D3] hover:underline ml-auto"
-          >
-            + add bed
-          </button>
+          <>
+            <button onClick={onEditRate} className="text-xs text-[#0A89D3] hover:underline">
+              edit rate
+            </button>
+            <button
+              onClick={() => add.mutate()}
+              className="text-xs text-[#0A89D3] hover:underline ml-auto"
+            >
+              + add bed
+            </button>
+          </>
         )}
       </div>
       <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
@@ -250,6 +266,8 @@ function NewWardModal({ open, onClose }: { open: boolean; onClose: () => void })
   const [name, setName] = useState('')
   const [wardType, setWardType] = useState('GENERAL')
   const [bedCount, setBedCount] = useState(6)
+  const [dailyRate, setDailyRate] = useState('')
+  const [dayCaseRate, setDayCaseRate] = useState('')
   const [error, setError] = useState('')
 
   const key = String(open)
@@ -259,11 +277,18 @@ function NewWardModal({ open, onClose }: { open: boolean; onClose: () => void })
     setName('')
     setWardType('GENERAL')
     setBedCount(6)
+    setDailyRate('')
+    setDayCaseRate('')
     setError('')
   }
 
   const create = useMutation({
-    mutationFn: () => createWard({ name: name.trim(), wardType, bedCount }),
+    mutationFn: () =>
+      createWard({
+        name: name.trim(), wardType, bedCount,
+        dailyRate: dailyRate ? Number(dailyRate) : undefined,
+        dayCaseRate: dayCaseRate ? Number(dayCaseRate) : undefined,
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['wards'] })
       onClose()
@@ -295,11 +320,72 @@ function NewWardModal({ open, onClose }: { open: boolean; onClose: () => void })
             />
           </Field>
         </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="Daily rate (₦)" required>
+            <Input type="number" min={0} value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} placeholder="e.g. 15000" />
+          </Field>
+          <Field label="Day-case rate (₦, optional)">
+            <Input type="number" min={0} value={dayCaseRate} onChange={(e) => setDayCaseRate(e.target.value)} placeholder="e.g. 8000" />
+          </Field>
+        </div>
+        <p className="text-xs text-gray-400">
+          A ward needs a daily rate before it can accept an admission - it is never too late to set it from "edit rate" later.
+        </p>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button loading={create.isPending} disabled={name.trim().length < 2} onClick={() => create.mutate()}>
             Create ward
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function EditRateModal({ ward, onClose }: { ward: WardBoardDTO | null; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [dailyRate, setDailyRate] = useState('')
+  const [dayCaseRate, setDayCaseRate] = useState('')
+  const [error, setError] = useState('')
+
+  const key = ward?.id ?? ''
+  const [seen, setSeen] = useState(key)
+  if (key !== seen) {
+    setSeen(key)
+    setDailyRate(ward?.dailyRate ? String(Number(ward.dailyRate)) : '')
+    setDayCaseRate(ward?.dayCaseRate ? String(Number(ward.dayCaseRate)) : '')
+    setError('')
+  }
+
+  const save = useMutation({
+    mutationFn: () =>
+      updateWard(ward!.id, {
+        dailyRate: dailyRate ? Number(dailyRate) : undefined,
+        dayCaseRate: dayCaseRate ? Number(dayCaseRate) : undefined,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['wards'] })
+      onClose()
+    },
+    onError: (e: any) => setError(e?.response?.data?.message ?? 'Could not save the rate.'),
+  })
+
+  if (!ward) return null
+  return (
+    <Modal open={!!ward} onClose={onClose} title={`${ward.name} - rates`} width={400} align="center">
+      <div className="space-y-3">
+        <Field label="Daily rate (₦)" required>
+          <Input type="number" min={0} value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} autoFocus />
+        </Field>
+        <Field label="Day-case rate (₦, optional)">
+          <Input type="number" min={0} value={dayCaseRate} onChange={(e) => setDayCaseRate(e.target.value)} />
+        </Field>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={save.isPending} disabled={!dailyRate} onClick={() => save.mutate()}>
+            Save
           </Button>
         </div>
       </div>

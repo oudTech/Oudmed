@@ -138,7 +138,7 @@ export function AddComplaintModal({ patientId, open, onClose }: { patientId: str
 }
 
 /* ────────────── Diagnosis ────────────── */
-export function AddDiagnosisModal({ patientId, visitId, open, onClose }: { patientId: string; visitId?: string; open: boolean; onClose: () => void }) {
+export function AddDiagnosisModal({ patientId, visitId, admissionId, open, onClose }: { patientId: string; visitId?: string; admissionId?: string; open: boolean; onClose: () => void }) {
   const [d, setD] = useState({
     attendanceType: 'Consultation',
     certainty: 'PROVISIONAL',
@@ -146,7 +146,7 @@ export function AddDiagnosisModal({ patientId, visitId, open, onClose }: { patie
     code: '',
     notes: '',
   })
-  const m = useAdd(patientId, 'diagnoses', (data) => patientsApi.addDiagnosis(patientId, { ...data, visitId }), onClose)
+  const m = useAdd(patientId, 'diagnoses', (data) => patientsApi.addDiagnosis(patientId, { ...data, visitId, admissionId }), onClose)
   return (
     <Modal open={open} onClose={onClose} title="Add diagnosis" width={480} align="center">
       <div className="space-y-3">
@@ -200,11 +200,11 @@ const GLUCOSE_MAX_ERROR = 'Blood glucose must be in mmol/L (0-60). If your meter
 const GLUCOSE_HIGH_WARNING = 'Unusually high for mmol/L - if your meter reads in mg/dL, divide by 18.'
 const HEIGHT_WHOLE_ERROR = 'Height must be a whole number in cm.'
 
-export function AddVitalsModal({ patientId, visitId, open, onClose }: { patientId: string; visitId?: string; open: boolean; onClose: () => void }) {
+export function AddVitalsModal({ patientId, visitId, admissionId, open, onClose }: { patientId: string; visitId?: string; admissionId?: string; open: boolean; onClose: () => void }) {
   const [d, setD] = useState<Record<string, string>>({ avpu: '' })
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const s = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setD({ ...d, [k]: e.target.value })
-  const m = useAdd(patientId, 'vitals', (data) => patientsApi.addVitals(patientId, { ...data, visitId }), onClose)
+  const m = useAdd(patientId, 'vitals', (data) => patientsApi.addVitals(patientId, { ...data, visitId, admissionId }), onClose)
   const num = (v?: string) => (v ? Number(v) : undefined)
 
   const heightVal = num(d.heightCm)
@@ -357,12 +357,12 @@ function MedicineInput({
   )
 }
 
-export function AddPrescriptionModal({ patientId, visitId, open, onClose }: { patientId: string; visitId?: string; open: boolean; onClose: () => void }) {
+export function AddPrescriptionModal({ patientId, visitId, admissionId, open, onClose }: { patientId: string; visitId?: string; admissionId?: string; open: boolean; onClose: () => void }) {
   const [notes, setNotes] = useState('')
   const [items, setItems] = useState<RxItem[]>([])
   const [draft, setDraft] = useState<RxItem>(EMPTY_ITEM)
   const [confirm, setConfirm] = useState<{ matches: DrugSearchItemDTO[]; after: 'add' | 'save' } | null>(null)
-  const m = useAdd(patientId, 'prescriptions', (data) => patientsApi.addPrescription(patientId, { ...data, visitId }), () => {
+  const m = useAdd(patientId, 'prescriptions', (data) => patientsApi.addPrescription(patientId, { ...data, visitId, admissionId }), () => {
     setItems([]); setDraft(EMPTY_ITEM); setNotes(''); onClose()
   })
   const set = (k: keyof RxItem, v: string) => setDraft((it) => ({ ...it, [k]: v }))

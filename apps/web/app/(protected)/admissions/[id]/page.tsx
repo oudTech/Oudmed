@@ -1,0 +1,313 @@
+'use client'
+import { useState } from 'react'
+import Link from 'next/link'
+import { useParams } from 'next/navigation'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSession } from 'next-auth/react'
+import { Button, Field, Input, Select, Textarea, Modal } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { can } from '@/lib/permissions'
+import { patientsApi, patientName } from '@/lib/patients'
+import { naira } from '@/lib/billing'
+import {
+  getAdmissionWorkspace,
+  getAdmissionBill,
+  addAdmissionDeposit,
+  refundAdmissionDeposit,
+} from '@/lib/hospital'
+import {
+  AddDiagnosisModal,
+  AddVitalsModal,
+  AddPrescriptionModal,
+} from '@/components/patients/clinicalModals'
+
+const dt = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB') : '-')
+const d = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-GB') : '-')
+
+export default function AdmissionWorkspacePage() {
+  const { id } = useParams<{ id: string }>()
+  const { data: session } = useSession()
+  const role = session?.role
+  const qc = useQueryClient()
+  const toast = useToast()
+  const allowed = can(role, 'patient:read')
+
+  const ws = useQuery({ queryKey: ['admission-workspace', id], queryFn: () => getAdmissionWorkspace(id), enabled: allowed })
+  const canBilling = can(role, 'billing:manage')
+  const bill = useQuery({ queryKey: ['admission-bill', id], queryFn: () => getAdmissionBill(id), enabled: canBilling })
+
+  const [addVitals, setAddVitals] = useState(false)
+  const [addDiagnosis, setAddDiagnosis] = useState(false)
+  const [addRx, setAddRx] = useState(false)
+  const [addingDeposit, setAddingDeposit] = useState(false)
+  const [refunding, setRefunding] = useState<{ id: string; max: number } | null>(null)
+  const [complaintText, setComplaintText] = useState('')
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['admission-workspace', id] })
+    qc.invalidateQueries({ queryKey: ['admission-bill', id] })
+  }
+
+  const addComplaint = useMutation({
+    mutationFn: () => patientsApi.addComplaint(a!.patient.id, { description: complaintText.trim(), admissionId: id }),
+    onSuccess: () => { setComplaintText(''); refresh() },
+    onError: () => toast('Could not add the complaint.', 'error'),
+  })
+
+  if (!allowed) {
+    return (
+      <div className="p-8">
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">Admission</h1>
+        <p className="text-sm text-gray-500 border border-dashed border-gray-200 rounded-xl p-6">
+          The inpatient workspace is available to clinical and front-desk staff.
+        </p>
+      </div>
+    )
+  }
+  if (!ws.data) return <div className="p-8 text-sm text-gray-400">Loading…</div>
+
+  const a = ws.data.admission
+  const days = Math.max(1, Math.ceil((Date.now() - new Date(a.admittedAt).getTime()) / 86400000))
+
+  return (
+    <div className="flex flex-col h-full bg-[#F7F9FC] overflow-y-auto">
+      <div className="px-8 pt-7 pb-4 bg-white border-b border-[#D6DEE8]">
+        <Link href="/wards" className="text-sm text-gray-400 hover:text-gray-700">&larr; Wards &amp; beds</Link>
+        <div className="flex items-start justify-between mt-1">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">{patientName(a.patient as any)}</h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {a.admissionNumber} · {a.ward?.name ?? '-'} / {a.bed?.label ?? '-'} · day {days} ·
+              {' '}{a.status === 'ADMITTED' ? 'Admitted' : a.status} {dt(a.admittedAt)}
+              {a.attendingDoctor ? ` · Dr. ${a.attendingDoctor.fullName}` : ''}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-gray-400">Deposit held</p>
+            <p className="text-xl font-bold text-gray-900">{naira(ws.data.totalDeposited)}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 p-8 space-y-6 max-w-5xl">
+        {canBilling && bill.data && (
+          <Card title="Running bill" action={
+            <Button variant="secondary" onClick={() => setAddingDeposit(true)}>+ Deposit</Button>
+          }>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              <Stat label="Charged" value={naira(bill.data.totalCharged)} />
+              <Stat label="Paid" value={naira(bill.data.totalPaid)} />
+              <Stat label="Deposit held" value={naira(bill.data.totalDeposited)} />
+              <Stat label="Balance" value={naira(bill.data.balance)} tone={Number(bill.data.balance) > 0 ? '#DC2626' : '#047857'} />
+            </div>
+            {bill.data.deposits.length > 0 && (
+              <div className="border-t border-gray-100 pt-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Deposits</p>
+                <ul className="text-sm divide-y divide-gray-100">
+                  {bill.data.deposits.map((dep) => {
+                    const remaining = Number(dep.amount) - Number(dep.refundedAmount ?? 0)
+                    return (
+                      <li key={dep.id} className="py-2 flex items-center justify-between">
+                        <span>
+                          {naira(dep.amount)} · {dep.method} · {dep.receiptNumber ?? '-'} · {d(dep.receivedAt)}
+                          {dep.refundedAmount && (
+                            <span className="text-gray-400"> · refunded {naira(dep.refundedAmount)}</span>
+                          )}
+                        </span>
+                        {can(role, 'admission:deposit-refund') && remaining > 0 && (
+                          <button
+                            className="text-xs text-gray-400 hover:text-red-500"
+                            onClick={() => setRefunding({ id: dep.id, max: remaining })}
+                          >
+                            Refund
+                          </button>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            )}
+          </Card>
+        )}
+
+        <Card title="Complaints">
+          {can(role, 'complaint:record') && (
+            <div className="flex gap-2 mb-3">
+              <Textarea rows={2} value={complaintText} onChange={(e) => setComplaintText(e.target.value)} placeholder="Add a complaint" className="flex-1" />
+              <Button disabled={complaintText.trim().length < 2} loading={addComplaint.isPending} onClick={() => addComplaint.mutate()}>Add</Button>
+            </div>
+          )}
+          {!ws.data.complaints.length ? <Empty /> : (
+            <ul className="text-sm divide-y divide-gray-100">
+              {ws.data.complaints.map((c: any) => (
+                <li key={c.id} className="py-2">{c.description} <span className="text-gray-400 text-xs">· {dt(c.recordedAt)}</span></li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card title="Vital signs" action={can(role, 'vitals:record') && <Button variant="secondary" onClick={() => setAddVitals(true)}>+ Add vitals</Button>}>
+          {!ws.data.vitals.length ? <Empty /> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-gray-400"><tr>{['Date', 'Temp', 'Pulse', 'BP', 'SpO2', 'Weight'].map((h) => <th key={h} className="text-left font-medium py-1.5 pr-4">{h}</th>)}</tr></thead>
+                <tbody>
+                  {ws.data.vitals.map((v: any) => (
+                    <tr key={v.id} className="border-t border-gray-100">
+                      <td className="py-1.5 pr-4 text-gray-500">{dt(v.recordedAt)}</td>
+                      <td className="py-1.5 pr-4">{v.temperatureC ?? '-'}</td>
+                      <td className="py-1.5 pr-4">{v.pulseBpm ?? '-'}</td>
+                      <td className="py-1.5 pr-4">{v.systolicBp ?? '-'}/{v.diastolicBp ?? '-'}</td>
+                      <td className="py-1.5 pr-4">{v.spo2 ?? '-'}</td>
+                      <td className="py-1.5 pr-4">{v.weightKg ?? '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+
+        <Card title="Diagnoses" action={can(role, 'diagnosis:record') && <Button variant="secondary" onClick={() => setAddDiagnosis(true)}>+ Add diagnosis</Button>}>
+          {!ws.data.diagnoses.length ? <Empty /> : (
+            <ul className="text-sm divide-y divide-gray-100">
+              {ws.data.diagnoses.map((dg: any) => (
+                <li key={dg.id} className="py-2">{dg.description} <span className="text-gray-400 text-xs">· {dg.certainty} · {dt(dg.diagnosedAt)}</span></li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card title="Prescriptions" action={can(role, 'prescription:write') && <Button variant="secondary" onClick={() => setAddRx(true)}>+ New prescription</Button>}>
+          {!ws.data.prescriptions.length ? <Empty /> : (
+            <ul className="text-sm divide-y divide-gray-100">
+              {ws.data.prescriptions.map((rx: any) => (
+                <li key={rx.id} className="py-2">
+                  {rx.items.map((it: any) => it.drugName).join(', ')}
+                  <span className="text-gray-400 text-xs"> · {dt(rx.prescribedAt)} · {rx.dispenseStatus}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <AddVitalsModal patientId={a.patient.id} admissionId={id} open={addVitals} onClose={() => { setAddVitals(false); refresh() }} />
+      <AddDiagnosisModal patientId={a.patient.id} admissionId={id} open={addDiagnosis} onClose={() => { setAddDiagnosis(false); refresh() }} />
+      <AddPrescriptionModal patientId={a.patient.id} admissionId={id} open={addRx} onClose={() => { setAddRx(false); refresh() }} />
+      <AddDepositModal admissionId={id} open={addingDeposit} onClose={() => setAddingDeposit(false)} onDone={refresh} />
+      <RefundDepositModal admissionId={id} deposit={refunding} onClose={() => setRefunding(null)} onDone={refresh} />
+    </div>
+  )
+}
+
+function Card({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-bold text-gray-900">{title}</h2>
+        {action}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function Stat({ label, value, tone = '#111827' }: { label: string; value: React.ReactNode; tone?: string }) {
+  return (
+    <div className="rounded-xl bg-gray-50 px-3 py-2">
+      <p className="text-xs text-gray-400">{label}</p>
+      <p className="font-bold" style={{ color: tone }}>{value}</p>
+    </div>
+  )
+}
+
+function Empty() {
+  return <p className="text-sm text-gray-400">Nothing recorded yet.</p>
+}
+
+function AddDepositModal({ admissionId, open, onClose, onDone }: { admissionId: string; open: boolean; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [amount, setAmount] = useState('')
+  const [method, setMethod] = useState('CASH')
+  const [reference, setReference] = useState('')
+
+  const m = useMutation({
+    mutationFn: () => addAdmissionDeposit(admissionId, { amount: Number(amount), method, reference: reference || undefined }),
+    onSuccess: (res) => {
+      toast(`Deposit recorded - receipt ${res.receiptNumber}`, 'success')
+      setAmount(''); setReference(''); onClose(); onDone()
+    },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not record the deposit.', 'error'),
+  })
+
+  return (
+    <Modal open={open} onClose={onClose} title="Record a deposit" width={400} align="center">
+      <div className="space-y-3">
+        <Field label="Amount (₦)" required>
+          <Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+        </Field>
+        <Field label="Method">
+          <Select value={method} onChange={(e) => setMethod(e.target.value)}>
+            <option value="CASH">Cash</option>
+            <option value="CARD">Card</option>
+            <option value="TRANSFER">Transfer</option>
+          </Select>
+        </Field>
+        <Field label="Reference (optional)">
+          <Input value={reference} onChange={(e) => setReference(e.target.value)} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={m.isPending} disabled={!Number(amount)} onClick={() => m.mutate()}>Record deposit</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function RefundDepositModal({ admissionId, deposit, onClose, onDone }: { admissionId: string; deposit: { id: string; max: number } | null; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('')
+
+  const key = deposit?.id ?? ''
+  const [seen, setSeen] = useState(key)
+  if (key !== seen) {
+    setSeen(key)
+    setAmount(deposit ? String(deposit.max) : '')
+    setReason('')
+  }
+
+  const m = useMutation({
+    mutationFn: () => refundAdmissionDeposit(admissionId, deposit!.id, { amount: Number(amount), reason: reason.trim() }),
+    onSuccess: () => { toast('Refund recorded', 'success'); onClose(); onDone() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not record the refund.', 'error'),
+  })
+
+  if (!deposit) return null
+  return (
+    <Modal open={!!deposit} onClose={onClose} title="Refund deposit" width={400} align="center">
+      <div className="space-y-3">
+        <Field label={`Amount (₦, up to ${deposit.max})`} required>
+          <Input type="number" min={0} max={deposit.max} value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </Field>
+        <Field label="Reason" required>
+          <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="danger"
+            loading={m.isPending}
+            disabled={!Number(amount) || Number(amount) > deposit.max || reason.trim().length < 3}
+            onClick={() => m.mutate()}
+          >
+            Confirm refund
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}

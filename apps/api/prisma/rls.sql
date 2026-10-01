@@ -32,7 +32,8 @@ BEGIN
     'InsuranceClaim','InsuranceClaimLine','ClaimBatch','ClaimRemittance','ClaimRemittanceAllocation',
     'StoredFile','TenantSequence',
     'Visit','Admission','ServiceItem','Invoice','InvoiceLine','Payment',
-    'PrescriptionItem','Subscription','SubscriptionInvoice'
+    'PrescriptionItem','Subscription','SubscriptionInvoice',
+    'AdmissionWardStay','BedDayCharge','AdmissionDeposit'
   ]
   LOOP
     EXECUTE format('ALTER TABLE "%s" ENABLE ROW LEVEL SECURITY;', t);

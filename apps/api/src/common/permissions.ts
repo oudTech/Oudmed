@@ -19,6 +19,8 @@ export type Action =
   | 'admission:edit'
   | 'admission:transfer'
   | 'admission:discharge'
+  | 'admission:deposit'
+  | 'admission:deposit-refund'
   | 'ward:manage'
   | 'bed:set-status'
   | 'doctor:set-hours'
@@ -64,6 +66,11 @@ export const MATRIX: Record<Action, Role[]> = {
   'admission:edit': [R.NURSE, R.DOCTOR, R.HOSPITAL_ADMIN],
   'admission:transfer': [R.NURSE, R.HOSPITAL_ADMIN],
   'admission:discharge': [R.DOCTOR, R.NURSE, R.HOSPITAL_ADMIN],
+  // Deposit-taking mirrors billing:manage's own role set (money handling,
+  // not clinical). Refund is deliberately narrower - separation of duties -
+  // ACCOUNTANT/HOSPITAL_ADMIN only, not RECEPTIONIST (F1).
+  'admission:deposit': [R.RECEPTIONIST, R.ACCOUNTANT, R.HOSPITAL_ADMIN],
+  'admission:deposit-refund': [R.ACCOUNTANT, R.HOSPITAL_ADMIN],
   'ward:manage': [R.HOSPITAL_ADMIN],
   'bed:set-status': [R.NURSE, R.HOSPITAL_ADMIN],
   'doctor:set-hours': [R.HOSPITAL_ADMIN],

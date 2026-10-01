@@ -19,7 +19,8 @@ import { CreatePaymentDto } from './dto/create-payment.dto';
 export interface ChargeInput {
   tenantId: string;
   userId: string;
-  visitId: string;
+  visitId?: string;
+  admissionId?: string;
   patientId: string;
   description: string;
   quantity: number;
@@ -51,6 +52,12 @@ export class BillingService {
     private audit: AuditService,
     private files: FilesService,
   ) {}
+
+  /** Public wrapper so a deposit receipt (AdmissionsService) draws from the
+   * exact same receipt-number sequence/prefix a Payment receipt does (F1). */
+  async nextReceiptNumber(tx: Prisma.TransactionClient, tenantId: string): Promise<string> {
+    return this.nextNumber(tx, tenantId, 'RCP');
+  }
 
   private async nextNumber(tx: Prisma.TransactionClient, tenantId: string, kind: 'INV' | 'RCP') {
     // One indexed PK lookup for the configurable prefix; `nextSequence` then takes
@@ -123,7 +130,103 @@ export class BillingService {
 
   // ─────────────────────────── charge posting (unchanged callers) ───────────────────────────
 
-  async postChargeToVisit(tx: Prisma.TransactionClient, c: ChargeInput) {
+  /** Dispatcher (F1): a charge either targets a visit or an admission, never
+   * both. Existing callers that always had a visitId can keep calling
+   * `postChargeToVisit` directly; this is for call sites that now need to
+   * route to whichever context actually applies. */
+  async postCharge(tx: Prisma.TransactionClient, c: ChargeInput) {
+    if (c.admissionId) return this.postChargeToAdmission(tx, c as ChargeInput & { admissionId: string });
+    if (c.visitId) return this.postChargeToVisit(tx, c as ChargeInput & { visitId: string });
+    throw new BadRequestException('A charge needs either a visitId or an admissionId');
+  }
+
+  /** Which admission (if any) a patient's charge should route to right now -
+   * used when the caller recording the charge didn't itself know whether the
+   * patient is currently admitted (e.g. a prescription written from the
+   * general patient chart, not the inpatient workspace). An explicit
+   * admissionId/visitId already on the record always takes precedence over
+   * this - it is a fallback, not an override. */
+  async resolveBillingTarget(tx: Prisma.TransactionClient, patientId: string): Promise<string | null> {
+    const admission = await tx.admission.findFirst({
+      where: { patientId, status: 'ADMITTED' },
+      select: { id: true },
+    });
+    return admission?.id ?? null;
+  }
+
+  async postChargeToAdmission(tx: Prisma.TransactionClient, c: ChargeInput & { admissionId: string }) {
+    const unitPrice = new Prisma.Decimal(c.unitPrice as any);
+    const { gross, net } = lineNet(unitPrice, c.quantity, null);
+
+    // Same per-target serialization as postChargeToVisit, keyed on the
+    // admission instead so it never contends with an unrelated visit/admission.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${c.admissionId}, 0))`;
+
+    const invoice = await this.resolveOpenInvoiceForAdmission(tx, c);
+
+    const line = await tx.invoiceLine.create({
+      data: {
+        tenantId: c.tenantId,
+        invoiceId: invoice.id,
+        serviceItemId: c.serviceItemId ?? null,
+        orderId: c.orderId ?? null,
+        category: c.category,
+        description: c.description,
+        quantity: c.quantity,
+        unitPrice,
+        grossAmount: gross,
+        lineTotal: net,
+        providedById: c.userId,
+        providedAt: new Date(),
+      },
+    });
+    await this.recomputeInvoice(tx, invoice.id);
+    await this.audit.record({
+      tenantId: c.tenantId, userId: c.userId, action: 'CHARGE',
+      entityType: 'Invoice', entityId: invoice.id,
+      metadata: { category: c.category, description: c.description, lineTotal: net.toString(), admissionId: c.admissionId },
+    });
+    return { invoiceId: invoice.id, lineId: line.id };
+  }
+
+  /** The invoice a new charge for this admission should land on - identical
+   * logic to resolveOpenInvoiceForVisit, keyed on admissionId instead
+   * (section 2 of docs/features/F1-inpatient-billing.md). */
+  private async resolveOpenInvoiceForAdmission(tx: Prisma.TransactionClient, c: ChargeInput & { admissionId: string }) {
+    const invoices = await tx.invoice.findMany({
+      where: { admissionId: c.admissionId },
+      include: { payments: true, claim: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const primary = invoices.find((i) => !i.isSupplementary) ?? null;
+    if (primary && !this.isLocked(primary)) return primary;
+
+    const openSupplement = invoices.find(
+      (i) => i.isSupplementary && i.status !== InvoiceStatus.CANCELLED && !this.isLocked(i),
+    );
+    if (openSupplement) return openSupplement;
+
+    const admission = await tx.admission.findUnique({ where: { id: c.admissionId }, select: { payerType: true } });
+    return tx.invoice.create({
+      data: {
+        tenantId: c.tenantId,
+        patientId: c.patientId,
+        admissionId: c.admissionId,
+        invoiceNumber: await this.nextNumber(tx, c.tenantId, 'INV'),
+        category: c.category,
+        status: InvoiceStatus.UNPAID,
+        payerType: primary?.payerType ?? admission?.payerType ?? PayerType.CASH,
+        isSupplementary: !!primary,
+        supplementOfInvoiceId: primary?.id ?? null,
+        subtotal: D0(),
+        totalAmount: D0(),
+        createdById: c.userId,
+      },
+    });
+  }
+
+  async postChargeToVisit(tx: Prisma.TransactionClient, c: ChargeInput & { visitId: string }) {
     const unitPrice = new Prisma.Decimal(c.unitPrice as any);
     const { gross, net } = lineNet(unitPrice, c.quantity, null);
 
@@ -972,12 +1075,12 @@ export class BillingService {
     });
   }
 
-  /** Set on a visit's locked invoice(s) when the visit is reopened, so billing
-   * staff see a flag (FUNC-2) until they explicitly clear it - never cleared
-   * merely by viewing the invoice. */
-  async flagReopenedInvoices(tx: Prisma.TransactionClient, visitId: string) {
+  /** Set on a visit's or admission's locked invoice(s) when it is reopened, so
+   * billing staff see a flag (FUNC-2, generalised to admissions by F1) until
+   * they explicitly clear it - never cleared merely by viewing the invoice. */
+  async flagReopenedInvoices(tx: Prisma.TransactionClient, target: { visitId?: string; admissionId?: string }) {
     const invoices = await tx.invoice.findMany({
-      where: { visitId },
+      where: target.admissionId ? { admissionId: target.admissionId } : { visitId: target.visitId },
       include: { payments: true, claim: true },
     });
     const locked = invoices.filter((i) => this.isLocked(i));

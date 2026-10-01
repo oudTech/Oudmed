@@ -146,7 +146,27 @@ export class PharmacyService {
       // charge the delta only
       const billable = plan.filter((p) => p.delta > 0 && p.unitPrice > 0);
       if (billable.length) {
-        if (rx.visitId) {
+        // Precedence (F1): an admissionId already recorded on the prescription
+        // (written from the inpatient workspace) wins outright; otherwise, a
+        // patient who is currently admitted still routes here even if this
+        // prescription was written from the general patient chart with no
+        // visit/admission context at all - an admitted patient's charges
+        // belong on their running bill, not a stray standalone invoice.
+        const admissionId = rx.admissionId ?? (await this.billing.resolveBillingTarget(tx, rx.patientId));
+        if (admissionId) {
+          for (const p of billable) {
+            await this.billing.postCharge(tx, {
+              tenantId: actor.tenantId,
+              userId: actor.userId,
+              admissionId,
+              patientId: rx.patientId,
+              description: `${p.it.drugName}${p.it.strengthConc ? ` ${p.it.strengthConc}` : ''} x${p.delta}`,
+              quantity: p.delta,
+              unitPrice: p.unitPrice,
+              category: 'Pharmacy',
+            });
+          }
+        } else if (rx.visitId) {
           for (const p of billable) {
             await this.billing.postChargeToVisit(tx, {
               tenantId: actor.tenantId,

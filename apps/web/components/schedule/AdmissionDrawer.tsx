@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { AdmissionDTO } from '@oudhealth/contracts'
@@ -85,6 +86,11 @@ export function AdmissionDrawer({
 
         {mode === 'view' && (
           <div className="space-y-2">
+            {can(role, 'patient:read') && (
+              <Link href={`/admissions/${admission.id}`} className="block">
+                <Button variant="secondary" className="w-full">Open inpatient workspace</Button>
+              </Link>
+            )}
             {can(role, 'admission:transfer') && (
               <Button variant="secondary" className="w-full" onClick={() => { setError(''); setMode('transfer') }}>
                 Transfer bed

@@ -250,7 +250,7 @@ export class ScheduleService {
       // Flag any of this visit's invoices that are already locked (paid or
       // claimed) so billing staff see this was reopened, even though new
       // charges will land on a supplementary invoice rather than touching them.
-      await this.billing.flagReopenedInvoices(tx, id);
+      await this.billing.flagReopenedInvoices(tx, { visitId: id });
 
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'REOPEN_VISIT',

@@ -236,6 +236,11 @@ model Tenant {
   isActive       Boolean      @default(true)
   createdAt      DateTime     @default(now())
 
+  // ── Inpatient billing settings (F1) ──
+  inpatientChargeRule           InpatientChargeRule @default(MIDNIGHT_CENSUS)
+  shortStayChargeMode           ShortStayChargeMode @default(MINIMUM_FULL_DAY)
+  requireSettledBillAtDischarge Boolean             @default(false)
+
   users                User[]
   patients             Patient[]
   patientDocuments     PatientDocument[]
@@ -272,6 +277,20 @@ model Tenant {
   prescriptionItems    PrescriptionItem[]
   subscription         Subscription?
   subscriptionInvoices SubscriptionInvoice[]
+  admissionDeposits    AdmissionDeposit[]
+  admissionWardStays   AdmissionWardStay[]
+  bedDayCharges        BedDayCharge[]
+}
+
+enum InpatientChargeRule {
+  MIDNIGHT_CENSUS
+  ROLLING_24H
+}
+
+enum ShortStayChargeMode {
+  NONE
+  MINIMUM_FULL_DAY
+  DAY_CASE_RATE
 }
 
 enum SubscriptionStatus {
@@ -667,6 +686,8 @@ model InsuranceClaim {
   visit       Visit?            @relation(fields: [visitId], references: [id])
   invoiceId   String?           @unique
   invoice     Invoice?          @relation(fields: [invoiceId], references: [id])
+  admissionId String?
+  admission   Admission?        @relation(fields: [admissionId], references: [id])
   batchId     String?
   batch       ClaimBatch?       @relation(fields: [batchId], references: [id])
 
@@ -813,16 +834,19 @@ model UserDepartment {
 }
 
 model Ward {
-  id        String   @id @default(uuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  name      String
-  wardType  WardType @default(GENERAL)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  name        String
+  wardType    WardType @default(GENERAL)
+  dailyRate   Decimal? @db.Decimal(12, 2)
+  dayCaseRate Decimal? @db.Decimal(12, 2)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
 
   beds       Bed[]
   admissions Admission[]
+  wardStays  AdmissionWardStay[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -839,9 +863,71 @@ model Bed {
   createdAt DateTime  @default(now())
 
   admissions Admission[]
+  wardStays  AdmissionWardStay[]
 
   @@unique([wardId, label])
   @@index([tenantId])
+}
+
+/// Which ward/bed an admission occupied, and when - needed because
+/// Admission.wardId/bedId only reflect the current location. Exactly one row
+/// is open (endedAt null) per admission at any instant; day-charging (F1b)
+/// attributes a night/block to whichever row was open at the census instant.
+model AdmissionWardStay {
+  id          String    @id @default(uuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  admissionId String
+  admission   Admission @relation(fields: [admissionId], references: [id])
+  wardId      String
+  ward        Ward      @relation(fields: [wardId], references: [id])
+  bedId       String
+  bed         Bed       @relation(fields: [bedId], references: [id])
+  startedAt   DateTime
+  endedAt     DateTime?
+
+  @@index([tenantId])
+  @@index([admissionId])
+}
+
+/// Idempotency marker for the nightly bed-day charge job (F1b): one row per
+/// admission per night actually charged, so the cron and the discharge
+/// reconciliation can never double-post the same night.
+model BedDayCharge {
+  id            String   @id @default(uuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  admissionId   String
+  nightOf       DateTime // Lagos calendar date (UTC midnight) this charge covers
+  invoiceLineId String
+  createdAt     DateTime @default(now())
+
+  @@unique([admissionId, nightOf])
+  @@index([tenantId])
+}
+
+/// Cash held against an admission's eventual bill - never a Payment (see
+/// docs/features/F1-inpatient-billing.md section 5 for why). Converted into a
+/// real Payment only via an explicit apply-deposit action or at discharge.
+model AdmissionDeposit {
+  id             String    @id @default(uuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
+  admissionId    String
+  admission      Admission @relation(fields: [admissionId], references: [id])
+  amount         Decimal   @db.Decimal(12, 2)
+  method         String // CASH | CARD | TRANSFER
+  reference      String?
+  receiptNumber  String?
+  receivedById   String?
+  receivedAt     DateTime  @default(now())
+  refundedAmount Decimal?  @db.Decimal(12, 2)
+  refundedAt     DateTime?
+  refundedById   String?
+  refundReason   String?
+
+  @@index([tenantId])
+  @@index([admissionId])
 }
 
 /// A doctor's weekly working-hours template. Multiple rows per day allow split
@@ -988,6 +1074,7 @@ model Complaint {
   patientId    String
   patient      Patient         @relation(fields: [patientId], references: [id], onDelete: Cascade)
   visitId      String?
+  admissionId  String?
   description  String
   onsetNote    String?
   severity     String? // Mild | Moderate | Severe
@@ -1055,6 +1142,7 @@ model Prescription {
   patientId      String
   patient        Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade)
   visitId        String?
+  admissionId    String?
   status         PrescriptionStatus @default(ACTIVE)
   notes          String?
   prescribedById String?
@@ -1285,11 +1373,12 @@ model Visit {
   bookedById  String?
   createdAt   DateTime  @default(now())
 
-  invoices    Invoice[]
-  note        ClinicalNote?
-  noteAddenda ClinicalNoteAddendum[]
-  orders      ClinicalOrder[]
-  claims      InsuranceClaim[]
+  invoices             Invoice[]
+  note                 ClinicalNote?
+  noteAddenda          ClinicalNoteAddendum[]
+  orders               ClinicalOrder[]
+  claims               InsuranceClaim[]
+  originatedAdmissions Admission[]            @relation("AdmissionOriginVisit")
 
   @@index([tenantId])
   @@index([patientId])
@@ -1332,10 +1421,20 @@ model Admission {
   bookedById          String?
   createdAt           DateTime  @default(now())
 
+  originatingVisitId String?
+  originatingVisit   Visit?    @relation("AdmissionOriginVisit", fields: [originatingVisitId], references: [id])
+  reopenedAt         DateTime?
+
+  wardStays AdmissionWardStay[]
+  deposits  AdmissionDeposit[]
+  invoices  Invoice[]
+  claims    InsuranceClaim[]
+
   @@unique([tenantId, admissionNumber])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([patientId])
+  @@index([originatingVisitId])
 }
 
 model ServiceItem {
@@ -1362,6 +1461,8 @@ model Invoice {
   patient        Patient       @relation(fields: [patientId], references: [id])
   visitId        String?
   visit          Visit?        @relation(fields: [visitId], references: [id])
+  admissionId    String?
+  admission      Admission?    @relation(fields: [admissionId], references: [id])
   invoiceNumber  String
   category       String?       @default("Consultation") // Consultation | Pharmacy | Laboratory | Admission | Procedure
   status         InvoiceStatus @default(UNPAID)
@@ -1400,6 +1501,7 @@ model Invoice {
   @@index([tenantId])
   @@index([tenantId, createdAt])
   @@index([visitId])
+  @@index([admissionId])
 }
 
 model InvoiceLine {

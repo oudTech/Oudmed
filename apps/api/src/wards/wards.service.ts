@@ -65,6 +65,8 @@ export class WardsService {
           id: w.id,
           name: w.name,
           wardType: w.wardType,
+          dailyRate: w.dailyRate ? w.dailyRate.toString() : null,
+          dayCaseRate: w.dayCaseRate ? w.dayCaseRate.toString() : null,
           beds,
           stats: {
             total: beds.length,
@@ -83,7 +85,10 @@ export class WardsService {
       if (exists) throw new ConflictException('A ward with that name already exists');
 
       const ward = await tx.ward.create({
-        data: { tenantId: actor.tenantId, name: dto.name, wardType: dto.wardType },
+        data: {
+          tenantId: actor.tenantId, name: dto.name, wardType: dto.wardType,
+          dailyRate: dto.dailyRate, dayCaseRate: dto.dayCaseRate,
+        },
       });
       if (dto.bedCount && dto.bedCount > 0) {
         await tx.bed.createMany({

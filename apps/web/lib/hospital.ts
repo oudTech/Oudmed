@@ -8,6 +8,8 @@ import type {
   PatientDTO,
   PatientListItemDTO,
   AdmissionDTO,
+  AdmissionWorkspaceDTO,
+  AdmissionBillDTO,
   WardDTO,
   BedDTO,
   WardBoardDTO,
@@ -43,6 +45,21 @@ export const getAdmissions = (status?: string) =>
   api.get<AdmissionDTO[]>('/admissions', { params: { status } }).then((r) => r.data)
 
 export const getWardBoard = () => api.get<WardBoardDTO[]>('/wards').then((r) => r.data)
+
+export const getAdmissionWorkspace = (id: string) =>
+  api.get<AdmissionWorkspaceDTO>(`/admissions/${id}/workspace`).then((r) => r.data)
+
+export const getAdmissionBill = (id: string) =>
+  api.get<AdmissionBillDTO>(`/admissions/${id}/bill`).then((r) => r.data)
+
+export const addAdmissionDeposit = (id: string, data: { amount: number; method: string; reference?: string }) =>
+  api.post<{ id: string; receiptNumber: string }>(`/admissions/${id}/deposits`, data).then((r) => r.data)
+
+export const refundAdmissionDeposit = (id: string, depositId: string, data: { amount: number; reason: string }) =>
+  api.post(`/admissions/${id}/deposits/${depositId}/refund`, data).then((r) => r.data)
+
+export const getAdmissionDepositReceipt = (id: string, depositId: string) =>
+  api.get(`/admissions/${id}/deposits/${depositId}/receipt`).then((r) => r.data)
 
 export const getDoctorShifts = (doctorId: string) =>
   api.get<(DoctorShiftDTO & { id: string })[]>(`/directory/staff/${doctorId}/shifts`).then((r) => r.data)
@@ -130,8 +147,11 @@ export const transferAdmission = (id: string, bedId: string, reason?: string) =>
   api.post<AdmissionDTO>(`/admissions/${id}/transfer`, { bedId, reason }).then((r) => r.data)
 
 // ── ward / bed management ──
-export const createWard = (data: { name: string; wardType: string; bedCount?: number }) =>
+export const createWard = (data: { name: string; wardType: string; bedCount?: number; dailyRate?: number; dayCaseRate?: number }) =>
   api.post<WardBoardDTO[]>('/wards', data).then((r) => r.data)
+
+export const updateWard = (id: string, data: { name?: string; wardType?: string; isActive?: boolean; dailyRate?: number; dayCaseRate?: number }) =>
+  api.patch<WardBoardDTO[]>(`/wards/${id}`, data).then((r) => r.data)
 
 export const addBeds = (wardId: string, data: { count?: number; labels?: string[] }) =>
   api.post<WardBoardDTO[]>(`/wards/${wardId}/beds`, data).then((r) => r.data)

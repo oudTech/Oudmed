@@ -50,6 +50,8 @@ export interface WardBoardDTO {
   id: string
   name: string
   wardType: WardType
+  dailyRate: string | null
+  dayCaseRate: string | null
   beds: BoardBedDTO[]
   stats: { total: number; occupied: number; available: number }
 }
@@ -74,4 +76,48 @@ export interface AdmissionDTO {
   department: { id: string; name: string } | null
   ward: { id: string; name: string } | null
   bed: { id: string; label: string } | null
+}
+
+export interface AdmissionDepositDTO {
+  id: string
+  amount: string
+  method: string
+  reference: string | null
+  receiptNumber: string | null
+  receivedAt: string
+  refundedAmount: string | null
+  refundedAt: string | null
+  refundReason: string | null
+}
+
+/** F1a: the inpatient workspace read - admission header plus what has been
+ * recorded against it so far. Orders/notes against an admission land in F1b. */
+export interface AdmissionWorkspaceDTO {
+  admission: AdmissionDTO
+  vitals: Record<string, unknown>[]
+  complaints: Record<string, unknown>[]
+  diagnoses: Record<string, unknown>[]
+  prescriptions: Record<string, unknown>[]
+  deposits: AdmissionDepositDTO[]
+  totalDeposited: string
+}
+
+export interface AdmissionBillInvoiceDTO {
+  id: string
+  invoiceNumber: string
+  status: string
+  isSupplementary: boolean
+  totalAmount: string
+  lineCount: number
+  claim: { id: string; claimNumber: string; status: string } | null
+}
+
+export interface AdmissionBillDTO {
+  admission: AdmissionDTO
+  invoices: AdmissionBillInvoiceDTO[]
+  deposits: AdmissionDepositDTO[]
+  totalCharged: string
+  totalPaid: string
+  totalDeposited: string
+  balance: string
 }

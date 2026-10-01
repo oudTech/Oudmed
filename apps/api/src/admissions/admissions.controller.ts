@@ -6,8 +6,10 @@ import { CurrentUser, AuthUser } from '../common/current-user.decorator';
 import { AdmissionsService } from './admissions.service';
 import {
   CreateAdmissionDto,
+  CreateDepositDto,
   DischargeAdmissionDto,
   ListAdmissionsQueryDto,
+  RefundDepositDto,
   TransferAdmissionDto,
   UpdateAdmissionDto,
 } from './dto/admissions.dto';
@@ -59,5 +61,42 @@ export class AdmissionsController {
     @Body() dto: DischargeAdmissionDto,
   ) {
     return this.admissions.discharge(actor(user), id, dto);
+  }
+
+  @Get(':id/workspace')
+  workspace(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    assertCan(user.role, 'patient:read');
+    return this.admissions.workspace(user.tenantId, id);
+  }
+
+  @Get(':id/bill')
+  bill(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    assertCan(user.role, 'billing:manage');
+    return this.admissions.bill(user.tenantId, id);
+  }
+
+  @Post(':id/deposits')
+  addDeposit(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: CreateDepositDto) {
+    return this.admissions.addDeposit(actor(user), id, dto);
+  }
+
+  @Post(':id/deposits/:depositId/refund')
+  refundDeposit(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('depositId') depositId: string,
+    @Body() dto: RefundDepositDto,
+  ) {
+    return this.admissions.refundDeposit(actor(user), id, depositId, dto);
+  }
+
+  @Get(':id/deposits/:depositId/receipt')
+  depositReceipt(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('depositId') depositId: string,
+  ) {
+    assertCan(user.role, 'admission:deposit');
+    return this.admissions.depositReceipt(user.tenantId, id, depositId);
   }
 }

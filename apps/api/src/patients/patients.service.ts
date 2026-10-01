@@ -221,7 +221,11 @@ export class PatientsService {
         await Promise.all([
           tx.admission.findFirst({
             where: { patientId: id, status: 'ADMITTED' },
-            include: { ward: { select: { name: true } }, bed: { select: { label: true } } },
+            include: {
+              ward: { select: { name: true } },
+              bed: { select: { label: true } },
+              deposits: { select: { amount: true, refundedAmount: true } },
+            },
           }),
           tx.visit.count({ where: { patientId: id } }),
           tx.visit.findFirst({ where: { patientId: id }, orderBy: { startsAt: 'desc' } }),
@@ -252,6 +256,9 @@ export class PatientsService {
               ward: currentAdmission.ward?.name ?? null,
               bed: currentAdmission.bed?.label ?? null,
               admittedAt: currentAdmission.admittedAt,
+              depositHeld: currentAdmission.deposits
+                .reduce((sum, dep) => sum.add(dep.amount).sub(dep.refundedAmount ?? new Prisma.Decimal(0)), new Prisma.Decimal(0))
+                .toString(),
             }
           : null,
         counts: {

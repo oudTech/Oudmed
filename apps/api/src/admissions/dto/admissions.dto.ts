@@ -1,9 +1,11 @@
 import {
   IsDateString,
   IsEnum,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  Min,
   MaxLength,
 } from 'class-validator';
 import { AdmissionStatus, AdmissionType, PayerType } from '@prisma/client';
@@ -33,6 +35,18 @@ export class CreateAdmissionDto {
   @IsOptional() @IsString() @MaxLength(60) authCode?: string;
 
   @IsOptional() @IsDateString() expectedDischargeAt?: string;
+  @IsOptional() @IsUUID() originatingVisitId?: string;
+}
+
+export class CreateDepositDto {
+  @IsNumber() @Min(0.01) amount: number;
+  @IsString() @MaxLength(20) method: string; // CASH | CARD | TRANSFER
+  @IsOptional() @IsString() @MaxLength(120) reference?: string;
+}
+
+export class RefundDepositDto {
+  @IsNumber() @Min(0.01) amount: number;
+  @IsString() @MaxLength(300) reason: string;
 }
 
 export class TransferAdmissionDto {

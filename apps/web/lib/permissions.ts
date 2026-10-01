@@ -15,6 +15,8 @@ export type Action =
   | 'admission:edit'
   | 'admission:transfer'
   | 'admission:discharge'
+  | 'admission:deposit'
+  | 'admission:deposit-refund'
   | 'ward:manage'
   | 'bed:set-status'
   | 'doctor:set-hours'
@@ -55,6 +57,8 @@ export const MATRIX: Record<Action, string[]> = {
   'admission:edit': ['NURSE', 'DOCTOR', 'HOSPITAL_ADMIN'],
   'admission:transfer': ['NURSE', 'HOSPITAL_ADMIN'],
   'admission:discharge': ['DOCTOR', 'NURSE', 'HOSPITAL_ADMIN'],
+  'admission:deposit': ['RECEPTIONIST', 'ACCOUNTANT', 'HOSPITAL_ADMIN'],
+  'admission:deposit-refund': ['ACCOUNTANT', 'HOSPITAL_ADMIN'],
   'ward:manage': ['HOSPITAL_ADMIN'],
   'bed:set-status': ['NURSE', 'HOSPITAL_ADMIN'],
   'doctor:set-hours': ['HOSPITAL_ADMIN'],

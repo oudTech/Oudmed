@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsEnum,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Max,
@@ -18,12 +19,16 @@ export class CreateWardDto {
   @IsEnum(WardType) wardType: WardType;
   @IsOptional() @IsInt() @Min(0) @Max(200) bedCount?: number;
   @IsOptional() @IsString() @MaxLength(8) bedPrefix?: string;
+  @IsOptional() @IsNumber() @Min(0) dailyRate?: number;
+  @IsOptional() @IsNumber() @Min(0) dayCaseRate?: number;
 }
 
 export class UpdateWardDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(80) name?: string;
   @IsOptional() @IsEnum(WardType) wardType?: WardType;
   @IsOptional() @IsBoolean() isActive?: boolean;
+  @IsOptional() @IsNumber() @Min(0) dailyRate?: number;
+  @IsOptional() @IsNumber() @Min(0) dayCaseRate?: number;
 }
 
 export class AddBedsDto {

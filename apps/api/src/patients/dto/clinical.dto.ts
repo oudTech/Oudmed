@@ -22,6 +22,7 @@ export class CreateComplaintDto {
   @IsOptional() @IsString() @MaxLength(300) onsetNote?: string;
   @IsOptional() @IsString() @MaxLength(20) severity?: string; // Mild | Moderate | Severe
   @IsOptional() @IsUUID() visitId?: string;
+  @IsOptional() @IsUUID() admissionId?: string;
 }
 
 export class UpdateComplaintDto {
@@ -82,6 +83,7 @@ class RxItemDto {
 export class CreatePrescriptionDto {
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
   @IsOptional() @IsUUID() visitId?: string;
+  @IsOptional() @IsUUID() admissionId?: string;
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => RxItemDto)
   items: RxItemDto[];
 }

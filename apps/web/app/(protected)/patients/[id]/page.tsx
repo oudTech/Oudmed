@@ -261,10 +261,18 @@ function Overview({ p }: { p: PatientDTO }) {
         ]}
       />
       {p.currentAdmission && (
-        <div className="mt-2 bg-blue-50/60 border border-blue-100 rounded-lg px-4 py-3 text-sm">
-          <span className="font-semibold text-blue-900">Currently admitted</span> ·{' '}
-          {p.currentAdmission.admissionNumber} · {p.currentAdmission.ward} {p.currentAdmission.bed} ·
-          since {d(p.currentAdmission.admittedAt)}
+        <div className="mt-2 bg-blue-50/60 border border-blue-100 rounded-lg px-4 py-3 text-sm flex items-center justify-between gap-3">
+          <span>
+            <span className="font-semibold text-blue-900">Currently admitted</span> ·{' '}
+            {p.currentAdmission.admissionNumber} · {p.currentAdmission.ward} {p.currentAdmission.bed} ·
+            since {d(p.currentAdmission.admittedAt)}
+            {Number(p.currentAdmission.depositHeld) > 0 && (
+              <span> · deposit held {naira(p.currentAdmission.depositHeld)}</span>
+            )}
+          </span>
+          <Link href={`/admissions/${p.currentAdmission.id}`} className="text-blue-700 font-medium hover:underline whitespace-nowrap">
+            Open workspace
+          </Link>
         </div>
       )}
     </Card>

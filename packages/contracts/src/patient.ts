@@ -147,6 +147,7 @@ export interface PatientDTO {
     ward: string | null
     bed: string | null
     admittedAt: string
+    depositHeld: string
   } | null
   counts: {
     appointments: number

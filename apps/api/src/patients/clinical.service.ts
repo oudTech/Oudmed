@@ -67,7 +67,7 @@ export class ClinicalService {
         data: {
           tenantId: actor.tenantId, patientId,
           description: dto.description, onsetNote: dto.onsetNote,
-          severity: dto.severity, visitId: dto.visitId,
+          severity: dto.severity, visitId: dto.visitId, admissionId: dto.admissionId,
           recordedById: actor.userId,
         },
       });
@@ -264,10 +264,19 @@ export class ClinicalService {
           });
         }
       }
+      if (dto.admissionId) {
+        const admission = await tx.admission.findFirst({ where: { id: dto.admissionId }, select: { status: true } });
+        if (admission && admission.status !== 'ADMITTED') {
+          throw new BadRequestException({
+            message: 'This admission is closed. Reopen it to write a new prescription.',
+            code: 'ADMISSION_CLOSED',
+          });
+        }
+      }
       const row = await tx.prescription.create({
         data: {
           tenantId: actor.tenantId, patientId,
-          notes: dto.notes, visitId: dto.visitId,
+          notes: dto.notes, visitId: dto.visitId, admissionId: dto.admissionId,
           prescribedById: actor.userId,
           items: { create: dto.items.map((it) => ({ ...it, tenantId: actor.tenantId })) },
         },
