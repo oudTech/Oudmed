@@ -9,6 +9,7 @@ import {
 import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
 import { Sentry } from '../sentry';
+import type { AuthUser } from '../current-user.decorator';
 
 /**
  * Global catch-all filter.
@@ -37,13 +38,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
     res.setHeader('x-request-id', requestId);
 
     const where = `${req.method} ${req.originalUrl}`;
+    // Populated by the JWT strategy for authenticated routes; undefined for
+    // public ones (login, signup, health checks). Never includes email/name -
+    // only an opaque userId, tenantId, and role (PROD-5: debuggable across
+    // tenants without logging anything patient- or user-identifying).
+    const user = (req as Request & { user?: AuthUser }).user;
+    const actorTags = user ? { tenantId: user.tenantId, userId: user.userId, role: user.role } : {};
 
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const body = exception.getResponse();
       if (status >= 500) {
-        this.logger.error(`[${requestId}] ${where} -> ${status}`, exception.stack);
-        Sentry.captureException(exception, { extra: { requestId, where, status } });
+        this.logger.error(`[${requestId}]${this.actorSuffix(actorTags)} ${where} -> ${status}`, exception.stack);
+        Sentry.captureException(exception, { tags: { requestId, where, status, ...actorTags } });
       }
       res
         .status(status)
@@ -53,14 +60,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     const status = HttpStatus.INTERNAL_SERVER_ERROR;
     this.logger.error(
-      `[${requestId}] ${where} -> ${status} ${(exception as Error)?.message ?? exception}`,
+      `[${requestId}]${this.actorSuffix(actorTags)} ${where} -> ${status} ${(exception as Error)?.message ?? exception}`,
       (exception as Error)?.stack,
     );
-    Sentry.captureException(exception, { extra: { requestId, where, status } });
+    Sentry.captureException(exception, { tags: { requestId, where, status, ...actorTags } });
     res.status(status).json({
       statusCode: status,
       message: 'Internal server error',
       requestId,
     });
+  }
+
+  private actorSuffix(actor: { tenantId?: string; userId?: string; role?: string }): string {
+    if (!actor.tenantId) return '';
+    return ` [tenant=${actor.tenantId} user=${actor.userId} role=${actor.role}]`;
   }
 }

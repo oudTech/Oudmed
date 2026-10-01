@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -102,16 +103,30 @@ export class TenantsService {
     const tenant = await this.prisma.tenant.findFirst({
       where: {
         OR: [{ slug: identifier.toLowerCase() }, { customDomain: identifier.toLowerCase() }],
-        isActive: true,
       },
-      select: { id: true, name: true, slug: true, logoUrl: true, primaryColor: true },
+      select: { id: true, name: true, slug: true, logoUrl: true, primaryColor: true, isActive: true },
     });
-    if (!tenant) throw new NotFoundException('Workspace not found');
+    if (!tenant) {
+      throw new NotFoundException({ code: 'TENANT_NOT_FOUND', message: 'Workspace not found' });
+    }
+    // A suspended hospital is a real tenant the login page must not silently
+    // treat as "doesn't exist" (known issue #6) - the admin disabled it
+    // (platform-tenants.service.ts `suspend()`), and whoever is at the login
+    // page deserves a clear "contact support" message, not a dead end that
+    // looks like a typo in the URL. Nothing beyond the fact of suspension is
+    // returned - no name/logo - since this endpoint is unauthenticated.
+    if (!tenant.isActive) {
+      throw new ForbiddenException({
+        code: 'TENANT_SUSPENDED',
+        message: 'This hospital account is suspended. Contact support for help.',
+      });
+    }
     // This is called from the (unauthenticated) login page, so the stored
     // `/api/files/<id>` reference - which requires a session to load - must be
     // resolved to a real presigned URL here, the same way SettingsService does
     // for the authenticated app.
-    return { ...tenant, logoUrl: await this.files.presignRef(tenant.id, tenant.logoUrl, 600) };
+    const { isActive: _isActive, ...pub } = tenant;
+    return { ...pub, logoUrl: await this.files.presignRef(tenant.id, tenant.logoUrl, 600) };
   }
 
   private async generateSlug(name: string): Promise<string> {

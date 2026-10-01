@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
 import { assertCan, STATUS_ACTION } from '../common/permissions';
+import { startOfDayLagos, addDaysUtc } from '../common/lagos-time';
 import {
   CreateVisitDto,
   ListVisitsQueryDto,
@@ -356,15 +357,14 @@ function resolveEnd(startsAt: Date, endsAt?: string, durationMinutes?: number): 
 function minutesBetween(a: Date, b: Date): number {
   return Math.max(5, Math.round((b.getTime() - a.getTime()) / 60_000));
 }
+// Africa/Lagos wall-clock boundaries (PROD-4), not the server's own local
+// timezone - see common/lagos-time.ts for why a fixed +1h offset is correct
+// for Nigeria specifically.
 function startOfToday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return startOfDayLagos(new Date());
 }
 function endOfToday(from: Date): Date {
-  const d = new Date(from);
-  d.setHours(23, 59, 59, 999);
-  return d;
+  return new Date(addDaysUtc(startOfDayLagos(from), 1).getTime() - 1);
 }
 function appendNote(current: string | null, status: string, reason: string): string {
   const line = `[${status}] ${reason}`;

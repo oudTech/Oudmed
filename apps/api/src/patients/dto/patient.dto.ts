@@ -13,7 +13,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   BloodGroup,
   Genotype,
@@ -77,8 +77,11 @@ export class UpdatePatientDto extends PersonalFields {
   @IsOptional() @IsString() @MaxLength(1000) disabilities?: string;
   @IsOptional() @IsEnum(PregnancyStatus) pregnancyStatus?: PregnancyStatus;
   @IsOptional() @IsString() @MaxLength(1000) familyHistory?: string;
-  @IsOptional() @IsInt() @Min(20) @Max(280) heightCm?: number;
-  @IsOptional() @IsNumber() @Min(0) @Max(700) weightKg?: number;
+  // The registration wizard sends these as strings (see numericText() in
+  // @oudhealth/validation); the global ValidationPipe doesn't enable implicit
+  // conversion, so without @Type() these always failed IsInt/IsNumber (FUNC-4).
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'Height must be a whole number in cm' }) @Min(20) @Max(280) heightCm?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(700) weightKg?: number;
 
   // narrative clinical history (Medical background tab)
   @IsOptional() @IsString() @MaxLength(4000) historyPresentingComplaint?: string;

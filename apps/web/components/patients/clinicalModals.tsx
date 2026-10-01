@@ -196,11 +196,31 @@ export function AddDiagnosisModal({ patientId, visitId, open, onClose }: { patie
 }
 
 /* ────────────── Vital signs ────────────── */
+const GLUCOSE_MAX_ERROR = 'Blood glucose must be in mmol/L (0-60). If your meter shows mg/dL, divide by 18.'
+const GLUCOSE_HIGH_WARNING = 'Unusually high for mmol/L - if your meter reads in mg/dL, divide by 18.'
+const HEIGHT_WHOLE_ERROR = 'Height must be a whole number in cm.'
+
 export function AddVitalsModal({ patientId, visitId, open, onClose }: { patientId: string; visitId?: string; open: boolean; onClose: () => void }) {
   const [d, setD] = useState<Record<string, string>>({ avpu: '' })
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const s = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setD({ ...d, [k]: e.target.value })
   const m = useAdd(patientId, 'vitals', (data) => patientsApi.addVitals(patientId, { ...data, visitId }), onClose)
   const num = (v?: string) => (v ? Number(v) : undefined)
+
+  const heightVal = num(d.heightCm)
+  const heightError = heightVal !== undefined && !Number.isInteger(heightVal) ? HEIGHT_WHOLE_ERROR : undefined
+  const glucoseVal = num(d.bloodGlucose)
+  const glucoseError = glucoseVal !== undefined && glucoseVal > 60 ? GLUCOSE_MAX_ERROR : undefined
+  const glucoseWarning = glucoseVal !== undefined && glucoseVal > 25 && glucoseVal <= 60 ? GLUCOSE_HIGH_WARNING : undefined
+
+  function validate(): boolean {
+    const next: Record<string, string> = {}
+    if (heightError) next.heightCm = heightError
+    if (glucoseError) next.bloodGlucose = glucoseError
+    setFieldErrors(next)
+    return Object.keys(next).length === 0
+  }
+
   return (
     <Modal open={open} onClose={onClose} title="Record vital signs" width={560} align="center">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -211,8 +231,17 @@ export function AddVitalsModal({ patientId, visitId, open, onClose }: { patientI
         <Field label="Diastolic BP"><Input type="number" value={d.diastolicBp ?? ''} onChange={s('diastolicBp')} /></Field>
         <Field label="SpO₂ (%)"><Input type="number" value={d.spo2 ?? ''} onChange={s('spo2')} /></Field>
         <Field label="Weight (kg)"><Input type="number" step="0.1" value={d.weightKg ?? ''} onChange={s('weightKg')} /></Field>
-        <Field label="Height (cm)"><Input type="number" value={d.heightCm ?? ''} onChange={s('heightCm')} /></Field>
-        <Field label="Blood sugar (mmol/L)"><Input type="number" step="0.1" value={d.bloodGlucose ?? ''} onChange={s('bloodGlucose')} /></Field>
+        <Field label="Height (cm)" error={fieldErrors.heightCm}>
+          <Input type="number" step="1" value={d.heightCm ?? ''} onChange={s('heightCm')} />
+        </Field>
+        <div>
+          <Field label="Blood sugar (mmol/L)" error={fieldErrors.bloodGlucose}>
+            <Input type="number" step="0.1" value={d.bloodGlucose ?? ''} onChange={s('bloodGlucose')} />
+          </Field>
+          {!fieldErrors.bloodGlucose && glucoseWarning && (
+            <p className="text-xs text-amber-600 mt-1">{glucoseWarning}</p>
+          )}
+        </div>
         <Field label="Urine output (mL)"><Input type="number" value={d.urineOutputMl ?? ''} onChange={s('urineOutputMl')} /></Field>
         <Field label="AVPU">
           <Select value={d.avpu ?? ''} onChange={s('avpu')}>
@@ -227,12 +256,12 @@ export function AddVitalsModal({ patientId, visitId, open, onClose }: { patientI
           <Textarea rows={2} value={d.notes ?? ''} onChange={(e) => setD({ ...d, notes: e.target.value })} />
         </Field>
       </div>
-      {m.isError && <p className="text-sm text-red-600 mt-2">Could not save.</p>}
       <div className="flex justify-end gap-2 mt-4">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button
           loading={m.isPending}
-          onClick={() =>
+          onClick={() => {
+            if (!validate()) return
             m.mutate({
               temperatureC: num(d.temperatureC), pulseBpm: num(d.pulseBpm), respiratoryRate: num(d.respiratoryRate),
               systolicBp: num(d.systolicBp), diastolicBp: num(d.diastolicBp), spo2: num(d.spo2),
@@ -240,7 +269,7 @@ export function AddVitalsModal({ patientId, visitId, open, onClose }: { patientI
               urineOutputMl: num(d.urineOutputMl), avpu: d.avpu || undefined, painScore: num(d.painScore),
               notes: d.notes || undefined,
             })
-          }
+          }}
         >
           Save
         </Button>

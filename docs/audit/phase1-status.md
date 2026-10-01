@@ -13,12 +13,12 @@ read this before assuming status from chat history, which decays fast.
 | 3b | Clinical order price integrity (FUNC-1 sweep) | **Done.** Same pattern applied to `createOrder`. Full sweep of every charge-creation path recorded in `docs/audit/pricing-notes.md` - only these two were vulnerable. |
 | 3c | Off-formulary handling | **Done** (verified present, not just recalled): reason+audit required for off-formulary dispensing and free-text orders (`OFF_FORMULARY_DISPENSE` / `OFF_CATALOGUE_ORDER`); prescribing UI shows a "did you mean" confirmation before a typed drug can become off-formulary; dispensing UI requires a reason and labels off-formulary rows as not affecting stock; `GET /pharmacy/off-formulary-report` + a panel on the Inventory tab. |
 | 4 | Completed-visit / paid-invoice guard (FUNC-2) | **Done.** Reopen (`visit:reopen`, attending doctor or admin, reason, audited); orders/prescriptions/note-edits blocked on a completed visit, complaint/vitals/diagnosis stay available and labelled late; `ClinicalNoteAddendum` for late notes; supplementary invoices (`Invoice.isSupplementary`) when the primary is locked by a payment or claim; `updateInvoice`/`removeInvoiceLine` now also correctly block on an existing claim (a gap found while building this); claims generate per-invoice now; billing reopen-flag + explicit Acknowledge. |
+| Batch A | FUNC-3 (vitals validation), FUNC-4 (patient-reg coercion retest), production essentials (Sentry privacy/context, reset-email failure logging, Africa/Lagos day boundaries), known issue #6 (suspended hospital), known issue #5 (ledger date range) | **Done.** Weight was already `Decimal(5,2)` in both `Patient` and `VitalSigns` - no schema change needed; `heightCm` confirmed correctly `Int` (no sub-cm clinical need). Height/glucose field-level validation (API + UI). Sentry `sendDefaultPii: false` + `beforeSend` scrub + tenant/user/role tags only. Reset-email send failures now logged (response unchanged). New `common/lagos-time.ts` (fixed UTC+1, no DST) used by `reports.util.ts` and `schedule.service.ts`'s "today" default. `resolvePublic` now returns 403 `TENANT_SUSPENDED` instead of a generic 404 for a disabled hospital; login page shows a distinct "Account suspended" screen with a support CTA. Payment ledger gained a custom from/to range with `from <= to` validation (backend + UI), Lagos-aware. |
 
 ## Remaining, in order
 
 | Item | What | Status |
 |---|---|---|
-| Batch A | FUNC-3 (vitals), FUNC-4 (patient-reg coercion) + retest known issue #2, production essentials (Sentry context, reset-email failure logging, explicit Africa/Lagos boundaries), known issue #6 (suspended hospital), known issue #5 (ledger date range) | Not started |
 | 9 | Invoice line-edit UI (MISS-2), including supplementary-invoice and claim-lock behaviour | Not started |
 | 10 | Printable prescriptions and lab results (MISS-5) | Not started |
 | 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts | Not started |
@@ -31,5 +31,7 @@ the full 44-case usability test plan (Testers 1-4) passes on staging.
 
 ## New findings since the scope freeze
 
-See `docs/audit/backlog.md` - nothing Critical found so far, one Low item
-logged (BL-1, an orphaned env var from the image-hardening fix).
+See `docs/audit/backlog.md` - nothing Critical found so far, two Low items
+logged (BL-1, an orphaned env var from the image-hardening fix; BL-2, four
+more "today" boundary call sites that want the same Lagos-time fix Batch A
+applied to reports/schedule).

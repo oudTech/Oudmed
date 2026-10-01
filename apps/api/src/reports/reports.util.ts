@@ -1,4 +1,17 @@
+import { BadRequestException } from '@nestjs/common';
 import type { ReportGranularity } from '@oudhealth/contracts';
+import {
+  startOfDayLagos,
+  startOfWeekLagos,
+  startOfMonthLagos,
+  startOfYearLagos,
+  addDaysUtc,
+  addMonthsLagos,
+  addYearsLagos,
+  lagosYear,
+  lagosMonth,
+  lagosDate,
+} from '../common/lagos-time';
 
 export type BucketUnit = 'day' | 'week' | 'month' | 'year';
 
@@ -16,48 +29,27 @@ export interface ResolvedRange {
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function startOfDay(d: Date) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
-
-/** Monday as the first day of the week. */
-function startOfWeek(d: Date) {
-  const x = startOfDay(d);
-  const dow = (x.getDay() + 6) % 7;
-  x.setDate(x.getDate() - dow);
-  return x;
-}
-
-function startOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-
-function startOfYear(d: Date) {
-  return new Date(d.getFullYear(), 0, 1);
-}
+// All boundary math below is in Africa/Lagos wall-clock terms (PROD-4),
+// not the server process's own local timezone. See common/lagos-time.ts.
 
 function truncate(d: Date, unit: BucketUnit) {
-  if (unit === 'day') return startOfDay(d);
-  if (unit === 'week') return startOfWeek(d);
-  if (unit === 'month') return startOfMonth(d);
-  return startOfYear(d);
+  if (unit === 'day') return startOfDayLagos(d);
+  if (unit === 'week') return startOfWeekLagos(d);
+  if (unit === 'month') return startOfMonthLagos(d);
+  return startOfYearLagos(d);
 }
 
 function advance(d: Date, unit: BucketUnit) {
-  const x = new Date(d);
-  if (unit === 'day') x.setDate(x.getDate() + 1);
-  else if (unit === 'week') x.setDate(x.getDate() + 7);
-  else if (unit === 'month') x.setMonth(x.getMonth() + 1);
-  else x.setFullYear(x.getFullYear() + 1);
-  return x;
+  if (unit === 'day') return addDaysUtc(d, 1);
+  if (unit === 'week') return addDaysUtc(d, 7);
+  if (unit === 'month') return addMonthsLagos(d, 1);
+  return addYearsLagos(d, 1);
 }
 
 function labelFor(d: Date, unit: BucketUnit) {
-  if (unit === 'year') return String(d.getFullYear());
-  if (unit === 'month') return MONTHS[d.getMonth()];
-  return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  if (unit === 'year') return String(lagosYear(d));
+  if (unit === 'month') return MONTHS[lagosMonth(d)];
+  return `${lagosDate(d)} ${MONTHS[lagosMonth(d)]}`;
 }
 
 /** The natural bucket size for a [from, to) span shown as a time series. */
@@ -104,51 +96,45 @@ export function fillBuckets<T>(
 export function trendWindow(granularity: ReportGranularity): { from: Date; unit: BucketUnit } {
   const now = new Date();
   if (granularity === 'daily') {
-    const from = startOfDay(now);
-    from.setDate(from.getDate() - 29);
-    return { from, unit: 'day' };
+    return { from: addDaysUtc(startOfDayLagos(now), -29), unit: 'day' };
   }
   if (granularity === 'weekly') {
-    const from = startOfWeek(now);
-    from.setDate(from.getDate() - 7 * 11);
-    return { from, unit: 'week' };
+    return { from: addDaysUtc(startOfWeekLagos(now), -7 * 11), unit: 'week' };
   }
   if (granularity === 'yearly') {
-    return { from: new Date(now.getFullYear() - 4, 0, 1), unit: 'year' };
+    return { from: addYearsLagos(startOfYearLagos(now), -4), unit: 'year' };
   }
-  return { from: new Date(now.getFullYear(), now.getMonth() - 11, 1), unit: 'month' };
+  return { from: addMonthsLagos(startOfMonthLagos(now), -11), unit: 'month' };
 }
 
 export function resolveRange(preset?: string, from?: string, to?: string): ResolvedRange {
   const now = new Date();
   if (from && to) {
-    const f = startOfDay(new Date(from));
-    const t = startOfDay(new Date(to));
-    t.setDate(t.getDate() + 1); // make `to` exclusive of the whole day
+    const f = startOfDayLagos(new Date(from));
+    const tStart = startOfDayLagos(new Date(to));
+    if (f.getTime() > tStart.getTime()) {
+      throw new BadRequestException('"from" date must be on or before "to" date');
+    }
+    const t = addDaysUtc(tStart, 1); // make `to` exclusive of the whole Lagos day
     return { from: f, to: t, label: 'Custom range' };
   }
   switch (preset) {
     case 'last_month': {
-      const f = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const t = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { from: f, to: t, label: 'Last month' };
+      const thisMonth = startOfMonthLagos(now);
+      return { from: addMonthsLagos(thisMonth, -1), to: thisMonth, label: 'Last month' };
     }
     case 'last_30': {
-      const f = startOfDay(now);
-      f.setDate(f.getDate() - 29);
-      return { from: f, to: now, label: 'Last 30 days' };
+      return { from: addDaysUtc(startOfDayLagos(now), -29), to: now, label: 'Last 30 days' };
     }
     case 'last_90': {
-      const f = startOfDay(now);
-      f.setDate(f.getDate() - 89);
-      return { from: f, to: now, label: 'Last 90 days' };
+      return { from: addDaysUtc(startOfDayLagos(now), -89), to: now, label: 'Last 90 days' };
     }
     case 'this_year': {
-      return { from: startOfYear(now), to: now, label: 'This year' };
+      return { from: startOfYearLagos(now), to: now, label: 'This year' };
     }
     case 'this_month':
     default: {
-      return { from: startOfMonth(now), to: now, label: 'This month' };
+      return { from: startOfMonthLagos(now), to: now, label: 'This month' };
     }
   }
 }

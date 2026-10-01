@@ -48,8 +48,15 @@ export class CreateVitalsDto {
   @IsOptional() @IsInt() @Min(20) @Max(200) diastolicBp?: number;
   @IsOptional() @IsInt() @Min(50) @Max(100) spo2?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(700) weightKg?: number;
-  @IsOptional() @IsInt() @Min(20) @Max(280) heightCm?: number;
-  @IsOptional() @IsNumber() @Min(0) @Max(60) bloodGlucose?: number;
+  @IsOptional()
+  @IsInt({ message: 'Height must be a whole number in cm' })
+  @Min(20) @Max(280)
+  heightCm?: number;
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(60, { message: 'Blood glucose must be in mmol/L (0-60). If your meter shows mg/dL, divide by 18.' })
+  bloodGlucose?: number;
   @IsOptional() @IsInt() @Min(0) @Max(20000) urineOutputMl?: number;
   @IsOptional() @IsString() @MaxLength(2) avpu?: string; // A | V | P | U
   @IsOptional() @IsInt() @Min(0) @Max(10) painScore?: number;

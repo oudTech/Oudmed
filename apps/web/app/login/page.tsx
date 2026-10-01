@@ -24,8 +24,12 @@ function FindHospital() {
       // Verify the hospital actually exists before the address bar ever changes.
       await authApi.resolveTenant(s)
       window.location.href = tenantUrl(s, '/login')
-    } catch {
-      setError("We couldn't find a hospital at that address. Check it and try again.")
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.code === 'TENANT_SUSPENDED'
+          ? 'This hospital account is suspended. Contact support for help.'
+          : "We couldn't find a hospital at that address. Check it and try again.",
+      )
       setLoading(false)
     }
   }
@@ -87,6 +91,7 @@ function TenantLogin({ slug }: { slug: string }) {
   const params = useSearchParams()
   const [tenant, setTenant] = useState<TenantPublic | null>(null)
   const [unknownTenant, setUnknownTenant] = useState(false)
+  const [suspended, setSuspended] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(params?.get('reason') === 'expired' ? 'Your session expired. Please sign in again.' : '')
@@ -96,7 +101,10 @@ function TenantLogin({ slug }: { slug: string }) {
     authApi
       .resolveTenant(slug)
       .then(setTenant)
-      .catch(() => setUnknownTenant(true))
+      .catch((err) => {
+        if (err instanceof ApiError && err.code === 'TENANT_SUSPENDED') setSuspended(true)
+        else setUnknownTenant(true)
+      })
   }, [slug])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -124,6 +132,24 @@ function TenantLogin({ slug }: { slug: string }) {
       )
       setLoading(false)
     }
+  }
+
+  if (suspended) {
+    return (
+      <AuthShell>
+        <h1 className="text-2xl font-bold text-gray-900 text-center">Account suspended</h1>
+        <p className="text-sm text-gray-500 text-center mt-2">
+          This hospital&apos;s account has been suspended. Contact support for help getting it
+          reactivated.
+        </p>
+        <a
+          href="mailto:support@oudhealth.app?subject=Suspended%20hospital%20account"
+          className="block text-center mt-6 rounded-lg bg-primary py-2.5 text-sm font-medium text-white hover:opacity-90 transition"
+        >
+          Contact support
+        </a>
+      </AuthShell>
+    )
   }
 
   if (unknownTenant) {

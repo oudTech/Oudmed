@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   HttpException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomBytes, randomInt } from 'crypto';
@@ -13,6 +14,7 @@ import { EmailService } from '../email/email.service';
 import { FilesService } from '../storage/files.service';
 import { AuditService } from '../common/audit/audit.service';
 import { tenantUrl } from '../common/urls';
+import { Sentry } from '../common/sentry';
 import type {
   ForgotPasswordDto,
   LoginDto,
@@ -33,6 +35,8 @@ const codeExpiry = () => new Date(Date.now() + CODE_TTL_MS);
 
 @Injectable()
 export class AuthService {
+  private readonly log = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly tokens: TokensService,
@@ -253,7 +257,14 @@ export class AuthService {
           data: { userId: user.id, tokenHash: sha256(raw), expiresAt: new Date(Date.now() + RESET_TTL_MS) },
         });
         const link = `${tenantUrl(tenant.slug)}/reset-password?token=${encodeURIComponent(raw)}`;
-        await this.email.sendPasswordReset(user.email, user.fullName, link).catch(() => undefined);
+        // The response stays { ok: true } either way (never reveal whether an
+        // account exists) - but a send failure must not be invisible to us,
+        // or a locked-out user has no way to self-serve and we'd never know
+        // why (PROD-3). No email/address goes to the log line or Sentry.
+        await this.email.sendPasswordReset(user.email, user.fullName, link).catch((err) => {
+          this.log.error(`[tenant=${tenant.id} user=${user.id}] password-reset email send failed`, err?.stack ?? err);
+          Sentry.captureException(err, { tags: { tenantId: tenant.id, userId: user.id, where: 'forgotPassword' } });
+        });
         await this.audit.record({
           tenantId: tenant.id, userId: user.id,
           action: 'PASSWORD_RESET_REQUESTED', entityType: 'User', entityId: user.id,

@@ -17,9 +17,18 @@ export function PaymentLedger({
 }) {
   const [page, setPage] = useState(1)
   const [downloading, setDownloading] = useState(false)
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
+
+  const hasCustomRange = !!customFrom && !!customTo
+  // String compare is safe here: both inputs are HTML date values, always yyyy-mm-dd.
+  const rangeError = hasCustomRange && customFrom > customTo
+    ? '"From" date must be on or before "to" date.'
+    : null
+  const effectiveRange = hasCustomRange ? { from: customFrom, to: customTo } : range
 
   const params = {
-    ...range,
+    ...effectiveRange,
     departmentId: filter?.kind === 'department' ? filter.id : undefined,
     doctorId: filter?.kind === 'doctor' ? filter.id : undefined,
     page,
@@ -28,19 +37,27 @@ export function PaymentLedger({
   const list = useQuery({
     queryKey: ['report-payments', params],
     queryFn: () => reportsApi.payments(params),
+    enabled: !rangeError,
   })
 
   const download = async () => {
+    if (rangeError) return
     setDownloading(true)
     try {
       await reportsApi.downloadPaymentsCsv({
-        ...range,
+        ...effectiveRange,
         departmentId: params.departmentId,
         doctorId: params.doctorId,
       })
     } finally {
       setDownloading(false)
     }
+  }
+
+  const clearCustomRange = () => {
+    setCustomFrom('')
+    setCustomTo('')
+    setPage(1)
   }
 
   return (
@@ -53,7 +70,7 @@ export function PaymentLedger({
             {list.data && ` · ${formatNaira(list.data.totalAmount)} collected`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {filter && (
             <button
               onClick={() => { onClearFilter(); setPage(1) }}
@@ -62,9 +79,35 @@ export function PaymentLedger({
               {filter.label} &times;
             </button>
           )}
-          <Button variant="secondary" onClick={download} loading={downloading}>Export CSV</Button>
+          <div className="flex items-center gap-1.5 text-sm">
+            <label className="text-gray-500">From</label>
+            <input
+              type="date"
+              value={customFrom}
+              onChange={(e) => { setCustomFrom(e.target.value); setPage(1) }}
+              className="rounded-lg border border-gray-200 px-2 py-1.5"
+            />
+            <label className="text-gray-500">to</label>
+            <input
+              type="date"
+              value={customTo}
+              onChange={(e) => { setCustomTo(e.target.value); setPage(1) }}
+              className="rounded-lg border border-gray-200 px-2 py-1.5"
+            />
+            {hasCustomRange && (
+              <button onClick={clearCustomRange} className="text-gray-400 hover:text-gray-600" aria-label="Clear custom date range">
+                &times;
+              </button>
+            )}
+          </div>
+          <Button variant="secondary" onClick={download} loading={downloading} disabled={!!rangeError}>
+            Export CSV
+          </Button>
         </div>
       </div>
+      {rangeError && (
+        <p className="px-6 pb-3 text-sm text-red-600">{rangeError}</p>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm whitespace-nowrap">

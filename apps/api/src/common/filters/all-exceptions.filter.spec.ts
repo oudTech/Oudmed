@@ -4,7 +4,7 @@ import { AllExceptionsFilter } from './all-exceptions.filter';
 beforeAll(() => jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined));
 afterAll(() => jest.restoreAllMocks());
 
-function mockHost(reqHeaders: Record<string, unknown> = {}) {
+function mockHost(reqHeaders: Record<string, unknown> = {}, user?: Record<string, unknown>) {
   const res = {
     statusCode: 0,
     body: undefined as unknown,
@@ -13,7 +13,7 @@ function mockHost(reqHeaders: Record<string, unknown> = {}) {
     json(payload: unknown) { this.body = payload; return this; },
     setHeader(k: string, v: unknown) { this.headers[k] = v; },
   };
-  const req = { method: 'GET', originalUrl: '/api/x', headers: reqHeaders };
+  const req = { method: 'GET', originalUrl: '/api/x', headers: reqHeaders, user };
   const host = {
     switchToHttp: () => ({ getResponse: () => res, getRequest: () => req }),
   } as unknown as ArgumentsHost;
@@ -51,5 +51,30 @@ describe('AllExceptionsFilter', () => {
     filter.catch(new Error('boom'), host);
     expect(res.headers['x-request-id']).toBe('abc-123');
     expect((res.body as any).requestId).toBe('abc-123');
+  });
+
+  it('logs tenantId/userId/role when the request is authenticated (PROD-5), never email/name', () => {
+    const errorSpy = jest.spyOn(Logger.prototype, 'error');
+    errorSpy.mockClear();
+    const { host } = mockHost({}, {
+      tenantId: 'tenant-1', userId: 'user-1', role: 'DOCTOR',
+      email: 'should-not-appear@example.com', fullName: 'Should Not Appear',
+    });
+    filter.catch(new Error('boom'), host);
+    const logLine = errorSpy.mock.calls[0][0] as string;
+    expect(logLine).toContain('tenant=tenant-1');
+    expect(logLine).toContain('user=user-1');
+    expect(logLine).toContain('role=DOCTOR');
+    expect(logLine).not.toContain('should-not-appear@example.com');
+    expect(logLine).not.toContain('Should Not Appear');
+  });
+
+  it('omits the actor suffix entirely for an unauthenticated request', () => {
+    const errorSpy = jest.spyOn(Logger.prototype, 'error');
+    errorSpy.mockClear();
+    const { host } = mockHost();
+    filter.catch(new Error('boom'), host);
+    const logLine = errorSpy.mock.calls[0][0] as string;
+    expect(logLine).not.toContain('tenant=');
   });
 });
