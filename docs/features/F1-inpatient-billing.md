@@ -844,21 +844,74 @@ printout is never mistaken for the closing statement.
   with `{ admissionId }`. The completed-admission guard mirrors the
   completed-visit one exactly (`AdmissionStatus !== 'ADMITTED'` blocks new
   orders, matching section 4's equivalence table).
-- **SOAP notes/addenda on an admission are still deferred**, not shipped in
-  F1b (the brief only asked for "charges and orders" in this sub-step).
-  Reading the actual schema while wiring orders turned up a second
-  discrepancy beyond section 3's original one: `ClinicalNote.admissionId`
-  has no unique constraint (needed for the same `upsert`-by-id pattern
-  `visitId` uses), and `ClinicalNoteAddendum` has no `admissionId` column at
-  all - it references a required `visitId` directly, not nullable. Both are
-  small, additive migrations, but they are schema work this sub-step's
-  explicit scope did not call for, so they are left for whichever phase
-  actually ships admission-side notes.
+- **SOAP notes/addenda on an admission were deferred out of F1b's explicit
+  "charges and orders" scope, then moved back into F1c** once a clear
+  product requirement landed (daily ward-round notes, not an edge case) -
+  see the F1c implementation notes below for how they actually shipped,
+  which is not the single-upsertable-note shape a visit has.
 - **Interim/final bill print**: one shared component
   (`AdmissionBillPrintModal`), fed by `GET /admissions/:id/bill` (now
   including each invoice's line items, not just a count), labelled "Interim
   bill" while `AdmissionStatus === 'ADMITTED'` and "Final bill" once
   discharged - exactly as this section specifies.
+
+### F1c implementation notes
+
+- **Admission notes are many dated rows, not a single upsertable one.** The
+  design doc's section 4 table originally claimed "no change needed" for
+  notes on an admission, reasoning from a visit's one-note-per-encounter
+  shape. That was wrong for the real requirement (daily ward rounds): an
+  admission needed `ClinicalNote.admissionId` queryable but **not** unique
+  (many rows, each a new `create`, never an `upsert`), and
+  `ClinicalNoteAddendum` needed a way to target **one specific** note rather
+  than "the visit's only note" - so it gained a nullable `noteId` (+
+  `admissionId`, denormalised for simple workspace queries) alongside its
+  existing `visitId`, which stayed required-turned-optional but otherwise
+  untouched for every existing visit addendum. Migration
+  `20261001020000_f1c_deposits_notes`. The guard and addendum semantics
+  are otherwise exactly the FUNC-2 shape: blocked once closed unless
+  reopened (`admission:reopen`), addenda always allowed, author + timestamp
+  on every row.
+- **Deposit application needed its own pool, which the original design
+  missed.** Section 5's schema plan had `refundedAmount` but no
+  `appliedAmount` - meaning `apply-deposit` (converting credit into a real
+  `Payment`) had nothing to decrement, so a deposit's "available for refund"
+  balance would have stayed wrong (double-countable) the moment any of it
+  was applied. Added `AdmissionDeposit.appliedAmount`; every "available
+  credit" calculation everywhere in the codebase (`workspace()`, `bill()`,
+  `dischargeSummary()`, `refundDeposit()`, `applyDeposit()`, discharge's
+  auto-apply) now reads `amount - appliedAmount - refundedAmount` from the
+  same pool. `apply-deposit` and discharge's automatic step share one
+  allocator (`AdmissionsService.applyDepositInternal`): oldest deposit
+  first, and for each deposit, oldest unpaid/partial invoice first - the
+  same FEFO shape pharmacy stock draw-down already uses, just applied to
+  deposit credit - posting one real `Payment` per (deposit, invoice) pair
+  actually drawn from via a new `BillingService.postPaymentTx` (no
+  actor/permission check of its own; the caller's own action gate already
+  covers who may trigger it - `admission:discharge` for the automatic step).
+- **A second, independent gap found in the same area**: `refundDeposit()`
+  (built in F1a) generated a refund receipt number, recorded it in the
+  audit log, and returned it once - but never persisted it, so
+  `depositReceipt()` could not re-fetch a refund's own receipt later
+  (it silently redisplayed the original deposit-taken receipt number
+  instead). Added `AdmissionDeposit.refundReceiptNumber`, a field distinct
+  from the deposit-taken `receiptNumber`, migration
+  `20261001030000_f1c_deposit_refund_receipt`. Discharge's own refund step
+  (`refundDepositsInternal`) can refund **across more than one deposit** in
+  a single discharge event (if the remaining credit spans several), all
+  under one shared refund receipt number.
+- **Reopen never changes `AdmissionStatus`**, exactly as section 4
+  specified - `reopen()` only sets `reopenedAt` and calls the already-
+  generalised `flagReopenedInvoices(tx, { admissionId })`. The
+  closed-admission guard everywhere (notes, orders, prescriptions) checks
+  `status !== 'ADMITTED' && !reopenedAt`, so one reopen call permanently
+  lifts it for that admission - there is no "re-locking" action, the same
+  as a reopened visit has no path back to blocked either.
+- **Discharge summary** assembles diagnoses/prescriptions/notes plus the
+  final bill totals directly from `tx` inside `dischargeSummary()`'s own
+  transaction, rather than calling the already-transactional `bill()`
+  method from within another transaction (which would have opened a second,
+  wasteful, independently-tenant-scoped transaction).
 
 ## 10. Reports
 

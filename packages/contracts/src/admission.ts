@@ -70,6 +70,7 @@ export interface AdmissionDTO {
   expectedDischargeAt: string | null
   dischargedAt: string | null
   dischargeNotes: string | null
+  reopenedAt: string | null
   patient: VisitPatientDTO
   admittingDoctor: { id: string; fullName: string } | null
   attendingDoctor: { id: string; fullName: string } | null
@@ -85,14 +86,39 @@ export interface AdmissionDepositDTO {
   reference: string | null
   receiptNumber: string | null
   receivedAt: string
+  appliedAmount: string | null
   refundedAmount: string | null
   refundedAt: string | null
   refundReason: string | null
 }
 
+export interface AdmissionNoteAddendumDTO {
+  id: string
+  subjective: string | null
+  objective: string | null
+  assessment: string | null
+  plan: string | null
+  authorId: string | null
+  authorName: string | null
+  createdAt: string
+}
+
+/** One dated ward-round note on an admission - unlike a visit's single
+ * upsertable note, an admission has many of these over the stay. */
+export interface AdmissionNoteDTO {
+  id: string
+  subjective: string | null
+  objective: string | null
+  assessment: string | null
+  plan: string | null
+  authorId: string | null
+  authorName: string | null
+  createdAt: string
+  addenda: AdmissionNoteAddendumDTO[]
+}
+
 /** The inpatient workspace read - admission header plus what has been
- * recorded against it so far. SOAP notes against an admission are a later
- * phase (F1b report). */
+ * recorded against it so far. */
 export interface AdmissionWorkspaceDTO {
   admission: AdmissionDTO
   vitals: Record<string, unknown>[]
@@ -100,6 +126,7 @@ export interface AdmissionWorkspaceDTO {
   diagnoses: Record<string, unknown>[]
   prescriptions: Record<string, unknown>[]
   orders: Record<string, unknown>[]
+  notes: AdmissionNoteDTO[]
   deposits: AdmissionDepositDTO[]
   totalDeposited: string
 }
@@ -128,6 +155,17 @@ export interface AdmissionBillDTO {
   admission: AdmissionDTO
   invoices: AdmissionBillInvoiceDTO[]
   deposits: AdmissionDepositDTO[]
+  totalCharged: string
+  totalPaid: string
+  totalDeposited: string
+  balance: string
+}
+
+export interface DischargeSummaryDTO {
+  admission: AdmissionDTO
+  diagnoses: Record<string, unknown>[]
+  prescriptions: Record<string, unknown>[]
+  notes: Record<string, unknown>[]
   totalCharged: string
   totalPaid: string
   totalDeposited: string

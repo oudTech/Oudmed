@@ -219,6 +219,7 @@ function DocumentsSection({ s, onSaved }: { s: HospitalSettingsDTO; onSaved: (s:
 function InpatientBillingSection({ s, onSaved }: { s: HospitalSettingsDTO; onSaved: (s: HospitalSettingsDTO) => void }) {
   const { form, set } = useSectionForm({
     inpatientChargeRule: s.inpatientChargeRule, shortStayChargeMode: s.shortStayChargeMode,
+    requireSettledBillAtDischarge: s.requireSettledBillAtDischarge,
   })
   const [err, setErr] = useState('')
   const m = useMutation({
@@ -244,6 +245,21 @@ function InpatientBillingSection({ s, onSaved }: { s: HospitalSettingsDTO; onSav
           {mode && <p className="text-xs text-gray-400 mt-1">{mode.hint}</p>}
         </Field>
       </div>
+      <label className="flex items-start gap-2 mt-4 text-sm text-gray-700">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={form.requireSettledBillAtDischarge}
+          onChange={(e) => set('requireSettledBillAtDischarge', e.target.checked)}
+        />
+        <span>
+          Require a settled bill before discharge
+          <span className="block text-xs text-gray-400">
+            Off by default - discharge is never blocked by billing on its own. When on, a balance remaining after
+            deposit credit is auto-applied needs a Hospital Admin override with a reason to discharge anyway.
+          </span>
+        </span>
+      </label>
       {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
       <div className="mt-4 flex justify-end">
         <Button loading={m.isPending} onClick={() => { setErr(''); m.mutate() }}>Save</Button>

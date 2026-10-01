@@ -281,10 +281,10 @@ export class EncountersService {
       } else {
         const admission = await tx.admission.findFirst({
           where: { id: admissionId },
-          select: { id: true, patientId: true, status: true },
+          select: { id: true, patientId: true, status: true, reopenedAt: true },
         });
         if (!admission) throw new NotFoundException('Admission not found');
-        if (admission.status !== 'ADMITTED') {
+        if (admission.status !== 'ADMITTED' && !admission.reopenedAt) {
           throw new BadRequestException({
             message: 'This admission is closed. Reopen it to add orders.',
             code: 'ADMISSION_CLOSED',

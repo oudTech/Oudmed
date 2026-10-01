@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsHexColor, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsHexColor, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
@@ -17,4 +17,5 @@ export class UpdateSettingsDto {
   @Transform(trim) @IsOptional() @IsString() @MaxLength(500) documentFooter?: string;
   @IsOptional() @IsIn(['MIDNIGHT_CENSUS', 'ROLLING_24H']) inpatientChargeRule?: string;
   @IsOptional() @IsIn(['NONE', 'MINIMUM_FULL_DAY', 'DAY_CASE_RATE']) shortStayChargeMode?: string;
+  @IsOptional() @IsBoolean() requireSettledBillAtDischarge?: boolean;
 }

@@ -5,13 +5,15 @@ import { assertCan } from '../common/permissions';
 import { CurrentUser, AuthUser } from '../common/current-user.decorator';
 import { AdmissionsService } from './admissions.service';
 import { EncountersService } from '../encounters/encounters.service';
-import { CreateOrderDto } from '../encounters/dto/encounter.dto';
+import { CreateOrderDto, UpsertNoteDto, AddNoteAddendumDto } from '../encounters/dto/encounter.dto';
 import {
+  ApplyDepositDto,
   CreateAdmissionDto,
   CreateDepositDto,
   DischargeAdmissionDto,
   ListAdmissionsQueryDto,
   RefundDepositDto,
+  ReopenAdmissionDto,
   TransferAdmissionDto,
   UpdateAdmissionDto,
 } from './dto/admissions.dto';
@@ -108,5 +110,36 @@ export class AdmissionsController {
   @Post(':id/orders')
   createOrder(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: CreateOrderDto) {
     return this.encounters.createOrder(actor(user), { admissionId: id }, dto);
+  }
+
+  @Post(':id/apply-deposit')
+  applyDeposit(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: ApplyDepositDto) {
+    return this.admissions.applyDeposit(actor(user), id, dto);
+  }
+
+  @Post(':id/reopen')
+  reopen(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: ReopenAdmissionDto) {
+    return this.admissions.reopen(actor(user), id, dto);
+  }
+
+  @Post(':id/notes')
+  addNote(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: UpsertNoteDto) {
+    return this.admissions.addNote(actor(user), id, dto);
+  }
+
+  @Post(':id/notes/:noteId/addenda')
+  addNoteAddendum(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('noteId') noteId: string,
+    @Body() dto: AddNoteAddendumDto,
+  ) {
+    return this.admissions.addNoteAddendum(actor(user), id, noteId, dto);
+  }
+
+  @Get(':id/discharge-summary')
+  dischargeSummary(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    assertCan(user.role, 'patient:read');
+    return this.admissions.dischargeSummary(user.tenantId, id);
   }
 }

@@ -21,6 +21,8 @@ export type Action =
   | 'admission:discharge'
   | 'admission:deposit'
   | 'admission:deposit-refund'
+  | 'admission:discharge-unsettled'
+  | 'admission:reopen'
   | 'ward:manage'
   | 'bed:set-status'
   | 'doctor:set-hours'
@@ -71,6 +73,8 @@ export const MATRIX: Record<Action, Role[]> = {
   // ACCOUNTANT/HOSPITAL_ADMIN only, not RECEPTIONIST (F1).
   'admission:deposit': [R.RECEPTIONIST, R.ACCOUNTANT, R.HOSPITAL_ADMIN],
   'admission:deposit-refund': [R.ACCOUNTANT, R.HOSPITAL_ADMIN],
+  'admission:discharge-unsettled': [R.HOSPITAL_ADMIN],
+  'admission:reopen': [R.DOCTOR, R.HOSPITAL_ADMIN],
   'ward:manage': [R.HOSPITAL_ADMIN],
   'bed:set-status': [R.NURSE, R.HOSPITAL_ADMIN],
   'doctor:set-hours': [R.HOSPITAL_ADMIN],

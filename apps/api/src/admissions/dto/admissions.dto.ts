@@ -1,6 +1,7 @@
 import {
   IsDateString,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -40,7 +41,10 @@ export class CreateAdmissionDto {
 
 export class CreateDepositDto {
   @IsNumber() @Min(0.01) amount: number;
-  @IsString() @MaxLength(20) method: string; // CASH | CARD | TRANSFER
+  // Constrained to Payment.method's own enum values, not just any string - a
+  // deposit can become a real Payment (apply-deposit/discharge auto-apply),
+  // and that insert fails at the DB level if the value isn't one of these.
+  @IsIn(['CASH', 'CARD', 'TRANSFER']) method: string;
   @IsOptional() @IsString() @MaxLength(120) reference?: string;
 }
 
@@ -60,6 +64,25 @@ export class DischargeAdmissionDto {
   status?: AdmissionStatus; // DISCHARGED (default) | DECEASED | TRANSFERRED_OUT | ABSCONDED
 
   @IsOptional() @IsString() @MaxLength(2000) dischargeNotes?: string;
+
+  // Required only when Tenant.requireSettledBillAtDischarge is on and a
+  // balance remains after deposit credit is auto-applied - HOSPITAL_ADMIN
+  // only (admission:discharge-unsettled), audited.
+  @IsOptional() @IsString() @MaxLength(500) overrideReason?: string;
+
+  // Required only when deposit credit remains after auto-apply (the deposit
+  // was more than what was owed) - discharge cannot complete without
+  // recording how that remainder is being refunded.
+  @IsOptional() @IsString() @MaxLength(20) refundMethod?: string;
+  @IsOptional() @IsString() @MaxLength(120) refundReference?: string;
+}
+
+export class ApplyDepositDto {
+  @IsNumber() @Min(0.01) amount: number;
+}
+
+export class ReopenAdmissionDto {
+  @IsString() @MaxLength(500) reason: string;
 }
 
 export class UpdateAdmissionDto {

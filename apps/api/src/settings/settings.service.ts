@@ -15,7 +15,7 @@ interface Actor {
 const PROFILE_FIELDS = [
   'name', 'address', 'phone', 'contactEmail', 'website', 'rcNumber', 'taxId',
   'primaryColor', 'invoicePrefix', 'receiptPrefix', 'documentFooter',
-  'inpatientChargeRule', 'shortStayChargeMode',
+  'inpatientChargeRule', 'shortStayChargeMode', 'requireSettledBillAtDischarge',
 ] as const;
 
 @Injectable()
@@ -47,6 +47,7 @@ export class SettingsService {
       documentFooter: t.documentFooter,
       inpatientChargeRule: t.inpatientChargeRule,
       shortStayChargeMode: t.shortStayChargeMode,
+      requireSettledBillAtDischarge: t.requireSettledBillAtDischarge,
     };
   }
 

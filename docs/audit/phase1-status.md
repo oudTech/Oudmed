@@ -33,8 +33,8 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 | Item | What | Status |
 |---|---|---|
 | F1a | Schema/migrations, admission episode, deposits ledger (receipts + cash-report entries), inpatient workspace basics | Done |
-| F1b | Daily charges (both rules + short-stay setting), transfers, charges posted during the stay, interim bill | Done (notes/addenda on an admission deferred - see F1 doc's F1b implementation notes) |
-| F1c | Discharge (settlement setting, override), final bill, deposit application and refund, discharge summary | Not started |
+| F1b | Daily charges (both rules + short-stay setting), transfers, charges posted during the stay, interim bill | Done |
+| F1c | Discharge (settlement setting, override), final bill, deposit application and refund, discharge summary, admission reopen, admission ward-round notes | Done |
 | F1d | Admission claims (`generateForAdmission`, remittance generalisation, backfill verification), occupancy/inpatient revenue reports; add F1 usability cases to the test plan | Not started |
 | F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | Approved as designed. One report. Build after F1 (depends on `resolveBillingTarget`/`postCharge`). |
 | F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Approved as designed. One report. Independent of F1/F2. |
@@ -43,7 +43,7 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 
 | Item | What | Status |
 |---|---|---|
-| F1a-d | See table above | F1a+F1b done, F1c next |
+| F1a-d | See table above | F1a+F1b+F1c done, F1d next |
 | F2 | One report | Not started |
 | F3 | One report | Not started |
 | 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts; cover all new F1-F3 screens | Not started |

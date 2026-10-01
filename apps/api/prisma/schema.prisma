@@ -894,16 +894,16 @@ model AdmissionWardStay {
 /// admission per night actually charged, so the cron and the discharge
 /// reconciliation can never double-post the same night.
 model BedDayCharge {
-  id            String    @id @default(uuid())
+  id            String   @id @default(uuid())
   tenantId      String
-  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
   admissionId   String
   nightOf       DateTime // census instant (MIDNIGHT_CENSUS) or block-end instant (ROLLING_24H) this charge covers
   // Null means "evaluated, legitimately free" (ShortStayChargeMode.NONE) -
   // not "pending". A night/stay held for a missing ward rate gets no row at
   // all, so the next run (cron, or discharge reconciliation) retries it.
   invoiceLineId String?
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime @default(now())
 
   @@unique([admissionId, nightOf])
   @@index([tenantId])
@@ -913,21 +913,30 @@ model BedDayCharge {
 /// docs/features/F1-inpatient-billing.md section 5 for why). Converted into a
 /// real Payment only via an explicit apply-deposit action or at discharge.
 model AdmissionDeposit {
-  id             String    @id @default(uuid())
-  tenantId       String
-  tenant         Tenant    @relation(fields: [tenantId], references: [id])
-  admissionId    String
-  admission      Admission @relation(fields: [admissionId], references: [id])
-  amount         Decimal   @db.Decimal(12, 2)
-  method         String // CASH | CARD | TRANSFER
-  reference      String?
-  receiptNumber  String?
-  receivedById   String?
-  receivedAt     DateTime  @default(now())
-  refundedAmount Decimal?  @db.Decimal(12, 2)
-  refundedAt     DateTime?
-  refundedById   String?
-  refundReason   String?
+  id                  String    @id @default(uuid())
+  tenantId            String
+  tenant              Tenant    @relation(fields: [tenantId], references: [id])
+  admissionId         String
+  admission           Admission @relation(fields: [admissionId], references: [id])
+  amount              Decimal   @db.Decimal(12, 2)
+  method              String // CASH | CARD | TRANSFER
+  reference           String?
+  receiptNumber       String?
+  receivedById        String?
+  receivedAt          DateTime  @default(now())
+  // appliedAmount and refundedAmount both draw down the same pool - a
+  // deposit's remaining available credit is amount - appliedAmount -
+  // refundedAmount (F1c: apply-deposit/discharge auto-apply consume oldest
+  // deposits first, same FEFO-style allocation as pharmacy stock).
+  appliedAmount       Decimal?  @db.Decimal(12, 2)
+  refundedAmount      Decimal?  @db.Decimal(12, 2)
+  // Its own receipt number, distinct from the deposit-taken one above - a
+  // refund is a separate cash event with its own printable receipt, not a
+  // redisplay of the original.
+  refundReceiptNumber String?
+  refundedAt          DateTime?
+  refundedById        String?
+  refundReason        String?
 
   @@index([tenantId])
   @@index([admissionId])
@@ -1261,50 +1270,63 @@ model StockMovement {
   @@index([tenantId, type, createdAt])
 }
 
-/// The clinician's working note for one encounter (SOAP). One per visit.
+/// The clinician's working note (SOAP). Exactly one per visit (upsert by
+/// visitId, unique). An admission instead allows many, dated rows - one per
+/// ward round - each with its own author and timestamp (F1c); never upserted,
+/// always a new row.
 model ClinicalNote {
-  id          String   @id @default(uuid())
+  id          String                 @id @default(uuid())
   tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id])
   patientId   String
-  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  visitId     String?  @unique
-  visit       Visit?   @relation(fields: [visitId], references: [id])
+  patient     Patient                @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  visitId     String?                @unique
+  visit       Visit?                 @relation(fields: [visitId], references: [id])
   admissionId String?
   subjective  String?
   objective   String?
   assessment  String?
   plan        String?
   authorId    String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  addenda     ClinicalNoteAddendum[]
 
   @@index([tenantId])
   @@index([patientId])
+  @@index([admissionId])
 }
 
-/// A late addition to a visit's SOAP note, added after the visit was already
-/// completed (upsertNote itself is blocked once completed - see
-/// EncountersService.addNoteAddendum). Deliberately the same S/O/A/P shape as
-/// ClinicalNote so a future versioned-note-history model (MISS-4) can absorb
-/// these as entries in one timeline without a data-shape migration.
+/// A late correction to one specific ClinicalNote, added after it was
+/// already locked against edits - a visit's single note (completed visit;
+/// keyed by visitId, the original shape) or one of an admission's many dated
+/// ward-round notes (discharged/closed admission; keyed by noteId directly,
+/// since an admission has more than one note an addendum could belong to).
+/// Deliberately the same S/O/A/P shape as ClinicalNote so a future
+/// versioned-note-history model (MISS-4) can absorb these as entries in one
+/// timeline without a data-shape migration.
 model ClinicalNoteAddendum {
-  id         String   @id @default(uuid())
-  tenantId   String
-  tenant     Tenant   @relation(fields: [tenantId], references: [id])
-  patientId  String
-  patient    Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  visitId    String
-  visit      Visit    @relation(fields: [visitId], references: [id])
-  subjective String?
-  objective  String?
-  assessment String?
-  plan       String?
-  authorId   String?
-  createdAt  DateTime @default(now())
+  id          String        @id @default(uuid())
+  tenantId    String
+  tenant      Tenant        @relation(fields: [tenantId], references: [id])
+  patientId   String
+  patient     Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  visitId     String?
+  visit       Visit?        @relation(fields: [visitId], references: [id])
+  admissionId String?
+  noteId      String?
+  note        ClinicalNote? @relation(fields: [noteId], references: [id])
+  subjective  String?
+  objective   String?
+  assessment  String?
+  plan        String?
+  authorId    String?
+  createdAt   DateTime      @default(now())
 
   @@index([tenantId])
   @@index([visitId])
+  @@index([admissionId])
+  @@index([noteId])
 }
 
 /// A request for an investigation or procedure, plus its result once back.

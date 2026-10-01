@@ -265,8 +265,8 @@ export class ClinicalService {
         }
       }
       if (dto.admissionId) {
-        const admission = await tx.admission.findFirst({ where: { id: dto.admissionId }, select: { status: true } });
-        if (admission && admission.status !== 'ADMITTED') {
+        const admission = await tx.admission.findFirst({ where: { id: dto.admissionId }, select: { status: true, reopenedAt: true } });
+        if (admission && admission.status !== 'ADMITTED' && !admission.reopenedAt) {
           throw new BadRequestException({
             message: 'This admission is closed. Reopen it to write a new prescription.',
             code: 'ADMISSION_CLOSED',

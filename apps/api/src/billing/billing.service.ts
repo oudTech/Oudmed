@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { InvoiceStatus, PayerType, Prisma } from '@prisma/client';
+import { InvoiceStatus, PayerType, PaymentMethod, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { FilesService } from '../storage/files.service';
@@ -728,6 +728,52 @@ export class BillingService {
         balanceDue: updated ? updated.totalAmount.sub(paidSoFar.add(dto.amount)).toString() : '0',
       };
     });
+  }
+
+  /**
+   * Posts a real Payment directly against an invoice with no actor/permission
+   * check of its own - for system-triggered payment application (F1c:
+   * AdmissionsService.applyDeposit / discharge's own auto-apply step). The
+   * caller's own action gate (`admission:deposit`/`billing:manage` for an
+   * explicit apply, `admission:discharge` for discharge's automatic one)
+   * already covers who may trigger this; converting deposit credit into a
+   * real Payment is this exact method with no separate permission layered on.
+   */
+  async postPaymentTx(
+    tx: Prisma.TransactionClient,
+    input: {
+      tenantId: string;
+      invoiceId: string;
+      amount: Prisma.Decimal | number | string;
+      method: PaymentMethod;
+      payerType?: PayerType;
+      note?: string;
+      receivedById?: string | null;
+    },
+  ) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${input.invoiceId}, 0))`;
+    const invoice = await tx.invoice.findFirst({ where: { id: input.invoiceId }, include: { payments: true } });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    const paidSoFar = invoice.payments.filter((p) => !p.reversedAt).reduce((s, p) => s.add(p.amount), D0());
+    const balance = invoice.totalAmount.sub(paidSoFar);
+    const amount = new Prisma.Decimal(input.amount);
+    if (amount.gt(balance)) {
+      throw new BadRequestException(`Payment exceeds the balance due (${balance.toString()})`);
+    }
+    const payment = await tx.payment.create({
+      data: {
+        tenantId: input.tenantId,
+        invoiceId: input.invoiceId,
+        receiptNumber: await this.nextNumber(tx, input.tenantId, 'RCP'),
+        amount,
+        method: input.method,
+        payerType: input.payerType ?? invoice.payerType,
+        note: input.note,
+        receivedById: input.receivedById ?? null,
+      },
+    });
+    await this.recomputeInvoice(tx, input.invoiceId);
+    return { paymentId: payment.id, receiptNumber: payment.receiptNumber };
   }
 
   async reversePayment(actor: Actor, paymentId: string, dto: ReversePaymentDto) {

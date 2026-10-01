@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { AdmissionDTO } from '@oudhealth/contracts'
-import { Drawer, Button, Badge, Field, Select, Textarea } from '@/components/ui/kit'
+import { Drawer, Button, Badge, Field, Input, Select, Textarea } from '@/components/ui/kit'
 import { useToast } from '@/components/ui/feedback'
 import { dischargeAdmission, transferAdmission, getWardBoard } from '@/lib/hospital'
 import { can } from '@/lib/permissions'
@@ -36,6 +36,10 @@ export function AdmissionDrawer({
   const [notes, setNotes] = useState('')
   const [targetBed, setTargetBed] = useState('')
   const [error, setError] = useState('')
+  const [settlementIssue, setSettlementIssue] = useState<'UNSETTLED_BALANCE' | 'DEPOSIT_REFUND_REQUIRED' | null>(null)
+  const [overrideReason, setOverrideReason] = useState('')
+  const [refundMethod, setRefundMethod] = useState('CASH')
+  const [refundReference, setRefundReference] = useState('')
 
   const board = useQuery({ queryKey: ['wards'], queryFn: getWardBoard, enabled: mode === 'transfer' })
 
@@ -45,9 +49,23 @@ export function AdmissionDrawer({
   }
 
   const discharge = useMutation({
-    mutationFn: () => dischargeAdmission(admission!.id, { status: outcome, dischargeNotes: notes || undefined }),
+    mutationFn: () => dischargeAdmission(admission!.id, {
+      status: outcome,
+      dischargeNotes: notes || undefined,
+      overrideReason: settlementIssue === 'UNSETTLED_BALANCE' ? overrideReason : undefined,
+      refundMethod: settlementIssue === 'DEPOSIT_REFUND_REQUIRED' ? refundMethod : undefined,
+      refundReference: settlementIssue === 'DEPOSIT_REFUND_REQUIRED' ? (refundReference || undefined) : undefined,
+    }),
     onSuccess: () => { invalidate(); onClose() },
-    onError: (e: any) => setError(e?.response?.data?.message ?? 'Could not discharge.'),
+    onError: (e: any) => {
+      const code = e?.response?.data?.code
+      if (code === 'UNSETTLED_BALANCE' || code === 'DEPOSIT_REFUND_REQUIRED') {
+        setSettlementIssue(code)
+        setError(e?.response?.data?.message ?? 'This admission needs settling before it can be discharged.')
+      } else {
+        setError(e?.response?.data?.message ?? 'Could not discharge.')
+      }
+    },
   })
   const transfer = useMutation({
     mutationFn: () => transferAdmission(admission!.id, targetBed),
@@ -105,7 +123,13 @@ export function AdmissionDrawer({
               </Button>
             )}
             {can(role, 'admission:discharge') && (
-              <Button className="w-full" onClick={() => { setError(''); setMode('discharge') }}>
+              <Button
+                className="w-full"
+                onClick={() => {
+                  setError(''); setSettlementIssue(null); setOverrideReason(''); setRefundReference('')
+                  setMode('discharge')
+                }}
+              >
                 Discharge
               </Button>
             )}
@@ -127,9 +151,47 @@ export function AdmissionDrawer({
             <Field label="Discharge notes">
               <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </Field>
+
+            {settlementIssue === 'UNSETTLED_BALANCE' && (
+              can(role, 'admission:discharge-unsettled') ? (
+                <Field label="Reason for discharging with a balance owed" required>
+                  <Textarea rows={2} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} placeholder="e.g. family emergency, will settle later" />
+                </Field>
+              ) : (
+                <p className="text-xs text-amber-600">Only a Hospital Admin can discharge with a balance still owed.</p>
+              )
+            )}
+            {settlementIssue === 'DEPOSIT_REFUND_REQUIRED' && (
+              can(role, 'admission:deposit-refund') ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="Refund method">
+                    <Select value={refundMethod} onChange={(e) => setRefundMethod(e.target.value)}>
+                      <option value="CASH">Cash</option>
+                      <option value="CARD">Card</option>
+                      <option value="TRANSFER">Transfer</option>
+                    </Select>
+                  </Field>
+                  <Field label="Reference (optional)">
+                    <Input value={refundReference} onChange={(e) => setRefundReference(e.target.value)} />
+                  </Field>
+                </div>
+              ) : (
+                <p className="text-xs text-amber-600">Only an Accountant or Hospital Admin can record this refund.</p>
+              )
+            )}
+
             <div className="flex gap-2">
               <Button variant="secondary" className="flex-1" onClick={() => setMode('view')}>Back</Button>
-              <Button variant="danger" className="flex-1" loading={discharge.isPending} onClick={() => discharge.mutate()}>
+              <Button
+                variant="danger"
+                className="flex-1"
+                loading={discharge.isPending}
+                disabled={
+                  (settlementIssue === 'UNSETTLED_BALANCE' && (!can(role, 'admission:discharge-unsettled') || !overrideReason.trim())) ||
+                  (settlementIssue === 'DEPOSIT_REFUND_REQUIRED' && !can(role, 'admission:deposit-refund'))
+                }
+                onClick={() => discharge.mutate()}
+              >
                 Confirm discharge
               </Button>
             </div>

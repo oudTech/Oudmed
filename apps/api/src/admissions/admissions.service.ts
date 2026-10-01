@@ -1,27 +1,32 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AdmissionStatus, BedStatus, Prisma } from '@prisma/client';
+import { AdmissionStatus, BedStatus, PaymentMethod, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { assertCan } from '../common/permissions';
 import { nextSequence } from '../common/sequence';
 import { BillingService } from '../billing/billing.service';
 import { BedChargesService } from './bed-charges.service';
+import { UpsertNoteDto, AddNoteAddendumDto } from '../encounters/dto/encounter.dto';
 import {
+  ApplyDepositDto,
   CreateAdmissionDto,
   CreateDepositDto,
   DischargeAdmissionDto,
   ListAdmissionsQueryDto,
   RefundDepositDto,
+  ReopenAdmissionDto,
   TransferAdmissionDto,
   UpdateAdmissionDto,
 } from './dto/admissions.dto';
 
 const D0 = () => new Prisma.Decimal(0);
+const min = (a: Prisma.Decimal, b: Prisma.Decimal) => (a.lt(b) ? a : b);
 
 interface Actor {
   tenantId: string;
@@ -208,6 +213,12 @@ export class AdmissionsService {
     });
   }
 
+  /**
+   * Discharge: final bed-charge reconciliation, automatic deposit
+   * application against what's owed, the settlement gate/override, and a
+   * mandatory refund of any deposit credit left over - then closes the bed
+   * and ward-stay. See docs/features/F1-inpatient-billing.md section 8.
+   */
   async discharge({ tenantId, userId, role }: Actor, id: string, dto: DischargeAdmissionDto) {
     assertCan(role, 'admission:discharge');
     const status = dto.status ?? AdmissionStatus.DISCHARGED;
@@ -228,7 +239,10 @@ export class AdmissionsService {
       // stay's short-stay charge can still find its (still-open) ward.
       const tenant = await tx.tenant.findUnique({
         where: { id: tenantId },
-        select: { id: true, inpatientChargeRule: true, shortStayChargeMode: true },
+        select: {
+          id: true, inpatientChargeRule: true, shortStayChargeMode: true,
+          requireSettledBillAtDischarge: true,
+        },
       });
       await this.bedCharges.postBedCharges(
         tx,
@@ -237,6 +251,65 @@ export class AdmissionsService {
         dischargedAt,
         true,
       );
+
+      // Auto-apply available deposit credit against what's now owed - the
+      // one place this happens without a separate staff click, since
+      // "settle what's owed from the deposit on hand" is exactly what
+      // discharge is supposed to do. Only the balance left after this is
+      // subject to the settlement gate below.
+      const [invoices, deposits] = await Promise.all([
+        tx.invoice.findMany({ where: { admissionId: id }, include: { payments: true } }),
+        tx.admissionDeposit.findMany({ where: { admissionId: id } }),
+      ]);
+      const totalCharged = invoices.reduce((s, i) => s.add(i.totalAmount), D0());
+      const totalPaidBefore = invoices.reduce(
+        (s, i) => s.add(i.payments.filter((p) => !p.reversedAt).reduce((ps, p) => ps.add(p.amount), D0())),
+        D0(),
+      );
+      const owedBeforeApply = totalCharged.sub(totalPaidBefore);
+      const availableDeposit = deposits.reduce(
+        (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
+      );
+      const toApply = min(availableDeposit, owedBeforeApply.gt(0) ? owedBeforeApply : D0());
+      const applyResult = toApply.gt(0)
+        ? await this.applyDepositInternal(tx, { id: admission.id, tenantId }, toApply, userId)
+        : { applied: D0(), payments: [] as { paymentId: string; receiptNumber: string | null }[] };
+
+      const balanceAfterApply = owedBeforeApply.sub(applyResult.applied);
+      const depositRemaining = availableDeposit.sub(applyResult.applied);
+
+      if (balanceAfterApply.gt(0) && tenant!.requireSettledBillAtDischarge) {
+        if (!dto.overrideReason?.trim()) {
+          throw new BadRequestException({
+            message: `This admission has an outstanding balance of ${balanceAfterApply.toString()}. Settle it, or discharge anyway with a reason.`,
+            code: 'UNSETTLED_BALANCE',
+            balance: balanceAfterApply.toString(),
+          });
+        }
+        assertCan(role, 'admission:discharge-unsettled');
+        await this.audit.record({
+          tenantId, userId, action: 'DISCHARGE_UNSETTLED_OVERRIDE', entityType: 'Admission', entityId: id,
+          metadata: { balance: balanceAfterApply.toString(), reason: dto.overrideReason },
+        });
+      }
+
+      // Any deposit credit left over (deposited more than was owed) must be
+      // refunded as part of discharge, not left dangling for staff to
+      // remember separately afterward.
+      let refundReceiptNumber: string | null = null;
+      if (depositRemaining.gt(0)) {
+        if (!dto.refundMethod?.trim()) {
+          throw new BadRequestException({
+            message: `A deposit credit of ${depositRemaining.toString()} remains after settling this admission's bill. Record how it is being refunded before discharging.`,
+            code: 'DEPOSIT_REFUND_REQUIRED',
+            amount: depositRemaining.toString(),
+          });
+        }
+        assertCan(role, 'admission:deposit-refund');
+        refundReceiptNumber = await this.refundDepositsInternal(
+          tx, { id: admission.id, tenantId }, depositRemaining, userId, dto.refundMethod, dto.refundReference,
+        );
+      }
 
       if (admission.bedId) {
         await tx.bed.update({ where: { id: admission.bedId }, data: { status: BedStatus.AVAILABLE } });
@@ -252,6 +325,49 @@ export class AdmissionsService {
       });
       await this.audit.record({
         tenantId, userId, action: `DISCHARGE_${status}`, entityType: 'Admission', entityId: id,
+        metadata: {
+          depositApplied: applyResult.applied.toString(),
+          balanceAfterApply: balanceAfterApply.toString(),
+          depositRefunded: depositRemaining.gt(0) ? depositRemaining.toString() : '0',
+          refundReceiptNumber,
+        },
+      });
+      return updated;
+    });
+  }
+
+  /** Reopens a closed admission for a bounded clinical correction (a late
+   * lab result, a note that needs amending) - deliberately does NOT change
+   * AdmissionStatus back to ADMITTED, free a bed, or reopen a ward stay (the
+   * patient is not physically back in the hospital); it only lifts the
+   * closed-admission guard on new clinical entries, the same narrow purpose
+   * visit:reopen serves for an outpatient encounter. */
+  async reopen({ tenantId, userId, role }: Actor, id: string, dto: ReopenAdmissionDto) {
+    assertCan(role, 'admission:reopen');
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const admission = await tx.admission.findFirst({ where: { id } });
+      if (!admission) throw new NotFoundException('Admission not found');
+      if (admission.status === AdmissionStatus.ADMITTED) {
+        throw new BadRequestException('Only a closed admission can be reopened');
+      }
+      if (role === 'DOCTOR' && admission.attendingDoctorId !== userId) {
+        throw new ForbiddenException('Only the attending doctor or a Hospital Admin can reopen this admission');
+      }
+
+      const updated = await tx.admission.update({
+        where: { id },
+        data: { reopenedAt: new Date() },
+        include: ADMISSION_INCLUDE,
+      });
+
+      // Flag any of this admission's invoices that are already locked (paid
+      // or claimed) so billing staff see this was reopened, even though new
+      // charges will land on a supplementary invoice rather than touching them.
+      await this.billing.flagReopenedInvoices(tx, { admissionId: id });
+
+      await this.audit.record({
+        tenantId, userId, action: 'ADMISSION_REOPENED', entityType: 'Admission', entityId: id,
+        metadata: { reason: dto.reason },
       });
       return updated;
     });
@@ -283,26 +399,35 @@ export class AdmissionsService {
   // ─────────────────────────── inpatient workspace (F1a basics) ───────────────────────────
 
   /** Everything a ward-round screen needs for one admission: header info plus
-   * whatever has been recorded against it so far. Vitals/complaints/diagnoses/
-   * prescriptions/orders are all admissionId-capable (schema + DTOs); SOAP
-   * notes against an admission remain a later phase (ClinicalNote/
-   * ClinicalNoteAddendum need their own schema work first - see F1b report). */
+   * whatever has been recorded against it so far. Vitals/complaints/
+   * diagnoses/prescriptions/orders/notes are all admissionId-capable. */
   async workspace(tenantId: string, id: string) {
     return this.prisma.forTenant(tenantId, async (tx) => {
       const admission = await tx.admission.findFirst({ where: { id }, include: ADMISSION_INCLUDE });
       if (!admission) throw new NotFoundException('Admission not found');
 
-      const [vitals, complaints, diagnoses, prescriptions, orders, deposits] = await Promise.all([
+      const [vitals, complaints, diagnoses, prescriptions, orders, notes, deposits] = await Promise.all([
         tx.vitalSigns.findMany({ where: { admissionId: id }, orderBy: { recordedAt: 'desc' } }),
         tx.complaint.findMany({ where: { admissionId: id }, orderBy: { recordedAt: 'desc' } }),
         tx.diagnosis.findMany({ where: { admissionId: id }, orderBy: { diagnosedAt: 'desc' } }),
         tx.prescription.findMany({ where: { admissionId: id }, include: { items: true }, orderBy: { prescribedAt: 'desc' } }),
         tx.clinicalOrder.findMany({ where: { admissionId: id }, orderBy: { orderedAt: 'desc' } }),
+        tx.clinicalNote.findMany({ where: { admissionId: id }, include: { addenda: true }, orderBy: { createdAt: 'desc' } }),
         tx.admissionDeposit.findMany({ where: { admissionId: id }, orderBy: { receivedAt: 'desc' } }),
       ]);
 
+      const nameMap = await this.names(tx, [
+        ...notes.map((n) => n.authorId),
+        ...notes.flatMap((n) => n.addenda.map((a) => a.authorId)),
+      ]);
+      const notesOut = notes.map((n) => ({
+        ...n,
+        authorName: n.authorId ? nameMap.get(n.authorId) ?? null : null,
+        addenda: n.addenda.map((a) => ({ ...a, authorName: a.authorId ? nameMap.get(a.authorId) ?? null : null })),
+      }));
+
       const totalDeposited = deposits.reduce(
-        (s, d) => s.add(d.amount.sub(d.refundedAmount ?? D0())), D0(),
+        (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
       );
 
       return {
@@ -312,6 +437,7 @@ export class AdmissionsService {
         diagnoses,
         prescriptions,
         orders,
+        notes: notesOut,
         deposits: deposits.map((d) => ({
           id: d.id,
           amount: d.amount.toString(),
@@ -319,6 +445,7 @@ export class AdmissionsService {
           reference: d.reference,
           receiptNumber: d.receiptNumber,
           receivedAt: d.receivedAt,
+          appliedAmount: d.appliedAmount ? d.appliedAmount.toString() : null,
           refundedAmount: d.refundedAmount ? d.refundedAmount.toString() : null,
           refundedAt: d.refundedAt,
           refundReason: d.refundReason,
@@ -352,7 +479,9 @@ export class AdmissionsService {
         (s, i) => s.add(i.payments.filter((p) => !p.reversedAt).reduce((ps, p) => ps.add(p.amount), D0())),
         D0(),
       );
-      const totalDeposited = deposits.reduce((s, d) => s.add(d.amount.sub(d.refundedAmount ?? D0())), D0());
+      const totalDeposited = deposits.reduce(
+        (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
+      );
       const balance = totalCharged.sub(totalPaid).sub(totalDeposited);
 
       return {
@@ -380,6 +509,7 @@ export class AdmissionsService {
           method: d.method,
           receiptNumber: d.receiptNumber,
           receivedAt: d.receivedAt,
+          appliedAmount: d.appliedAmount ? d.appliedAmount.toString() : null,
           refundedAmount: d.refundedAmount ? d.refundedAmount.toString() : null,
           refundedAt: d.refundedAt,
         })),
@@ -414,15 +544,17 @@ export class AdmissionsService {
     });
   }
 
-  /** Refund (partial or full) of one deposit - a narrower permission than
-   * taking a deposit, deliberately (separation of duties). */
+  /** Refund (partial or full) of one named deposit - a narrower permission
+   * than taking a deposit, deliberately (separation of duties). Available
+   * balance is drawn from the same pool apply-deposit consumes. */
   async refundDeposit({ tenantId, userId, role }: Actor, id: string, depositId: string, dto: RefundDepositDto) {
     assertCan(role, 'admission:deposit-refund');
     return this.prisma.forTenant(tenantId, async (tx) => {
       const deposit = await tx.admissionDeposit.findFirst({ where: { id: depositId, admissionId: id } });
       if (!deposit) throw new NotFoundException('Deposit not found');
-      const already = deposit.refundedAmount ?? D0();
-      const remaining = deposit.amount.sub(already);
+      const alreadyApplied = deposit.appliedAmount ?? D0();
+      const alreadyRefunded = deposit.refundedAmount ?? D0();
+      const remaining = deposit.amount.sub(alreadyApplied).sub(alreadyRefunded);
       if (new Prisma.Decimal(dto.amount).gt(remaining)) {
         throw new BadRequestException(`Refund exceeds the remaining deposit balance (${remaining.toString()})`);
       }
@@ -430,7 +562,8 @@ export class AdmissionsService {
       await tx.admissionDeposit.update({
         where: { id: depositId },
         data: {
-          refundedAmount: already.add(dto.amount),
+          refundedAmount: alreadyRefunded.add(dto.amount),
+          refundReceiptNumber,
           refundedAt: new Date(),
           refundedById: userId,
           refundReason: dto.reason,
@@ -442,6 +575,146 @@ export class AdmissionsService {
       });
       return { ok: true, refundReceiptNumber };
     });
+  }
+
+  /** The explicit interim-settlement action: converts up to `amount` of
+   * available deposit credit into real Payment(s) against the admission's
+   * currently unpaid/partial invoices - revenue recognised at exactly the
+   * moment it is actually applied, not when the cash first came in. */
+  async applyDeposit({ tenantId, userId, role }: Actor, id: string, dto: ApplyDepositDto) {
+    assertCan(role, 'billing:manage');
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const admission = await tx.admission.findFirst({ where: { id }, select: { id: true } });
+      if (!admission) throw new NotFoundException('Admission not found');
+
+      const [invoices, deposits] = await Promise.all([
+        tx.invoice.findMany({ where: { admissionId: id, status: { in: ['UNPAID', 'PARTIAL'] } }, include: { payments: true } }),
+        tx.admissionDeposit.findMany({ where: { admissionId: id } }),
+      ]);
+      const owed = invoices.reduce(
+        (s, i) => s.add(i.totalAmount.sub(i.payments.filter((p) => !p.reversedAt).reduce((ps, p) => ps.add(p.amount), D0()))),
+        D0(),
+      );
+      const available = deposits.reduce(
+        (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
+      );
+      const amount = new Prisma.Decimal(dto.amount);
+      if (amount.gt(available)) {
+        throw new BadRequestException(`Exceeds available deposit credit (${available.toString()})`);
+      }
+      if (amount.gt(owed)) {
+        throw new BadRequestException(`Exceeds the amount owed on this admission (${owed.toString()})`);
+      }
+
+      const result = await this.applyDepositInternal(tx, { id, tenantId }, amount, userId);
+      await this.audit.record({
+        tenantId, userId, action: 'DEPOSIT_APPLIED', entityType: 'Admission', entityId: id,
+        metadata: { amount: result.applied.toString(), payments: result.payments },
+      });
+      return { applied: result.applied.toString(), payments: result.payments };
+    });
+  }
+
+  /** Shared by applyDeposit() and discharge()'s automatic step. Allocates
+   * `amount` across the admission's deposits (oldest received first) and,
+   * for each chunk, across its unpaid/partial invoices (oldest first),
+   * posting one real Payment per (deposit, invoice) pair actually drawn
+   * from - same FEFO-style allocation pharmacy stock draw-down already uses,
+   * applied here to deposit credit instead of drug batches. */
+  private async applyDepositInternal(
+    tx: Prisma.TransactionClient,
+    admission: { id: string; tenantId: string },
+    amount: Prisma.Decimal,
+    receivedById: string | null,
+  ): Promise<{ applied: Prisma.Decimal; payments: { paymentId: string; receiptNumber: string | null }[] }> {
+    if (amount.lte(0)) return { applied: D0(), payments: [] };
+
+    const deposits = await tx.admissionDeposit.findMany({
+      where: { admissionId: admission.id }, orderBy: { receivedAt: 'asc' },
+    });
+    const invoices = await tx.invoice.findMany({
+      where: { admissionId: admission.id, status: { in: ['UNPAID', 'PARTIAL'] } },
+      include: { payments: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const invoiceBalances = invoices.map((i) => ({
+      id: i.id,
+      balance: i.totalAmount.sub(i.payments.filter((p) => !p.reversedAt).reduce((s, p) => s.add(p.amount), D0())),
+    }));
+
+    let remaining = amount;
+    const payments: { paymentId: string; receiptNumber: string | null }[] = [];
+
+    for (const dep of deposits) {
+      if (remaining.lte(0)) break;
+      const appliedSoFar = dep.appliedAmount ?? D0();
+      const available = dep.amount.sub(appliedSoFar).sub(dep.refundedAmount ?? D0());
+      if (available.lte(0)) continue;
+      let fromThisDeposit = min(available, remaining);
+      let consumedFromThisDeposit = D0();
+
+      for (const inv of invoiceBalances) {
+        if (fromThisDeposit.lte(0)) break;
+        if (inv.balance.lte(0)) continue;
+        const chunk = min(inv.balance, fromThisDeposit);
+        if (chunk.lte(0)) continue;
+        const { paymentId, receiptNumber } = await this.billing.postPaymentTx(tx, {
+          tenantId: admission.tenantId, invoiceId: inv.id, amount: chunk, method: dep.method as PaymentMethod,
+          note: `Applied from deposit ${dep.receiptNumber ?? dep.id}`, receivedById,
+        });
+        payments.push({ paymentId, receiptNumber });
+        inv.balance = inv.balance.sub(chunk);
+        fromThisDeposit = fromThisDeposit.sub(chunk);
+        consumedFromThisDeposit = consumedFromThisDeposit.add(chunk);
+        remaining = remaining.sub(chunk);
+      }
+
+      if (consumedFromThisDeposit.gt(0)) {
+        await tx.admissionDeposit.update({
+          where: { id: dep.id },
+          data: { appliedAmount: appliedSoFar.add(consumedFromThisDeposit) },
+        });
+      }
+    }
+    return { applied: amount.sub(remaining), payments };
+  }
+
+  /** Refunds `amount` across the admission's deposits (oldest first), all
+   * under one refund receipt - used by discharge() when deposit credit
+   * remains after auto-apply and spans more than one deposit. */
+  private async refundDepositsInternal(
+    tx: Prisma.TransactionClient,
+    admission: { id: string; tenantId: string },
+    amount: Prisma.Decimal,
+    userId: string,
+    method: string,
+    reference: string | undefined,
+  ): Promise<string> {
+    const refundReceiptNumber = await this.billing.nextReceiptNumber(tx, admission.tenantId);
+    const deposits = await tx.admissionDeposit.findMany({
+      where: { admissionId: admission.id }, orderBy: { receivedAt: 'asc' },
+    });
+    let remaining = amount;
+    for (const dep of deposits) {
+      if (remaining.lte(0)) break;
+      const alreadyApplied = dep.appliedAmount ?? D0();
+      const alreadyRefunded = dep.refundedAmount ?? D0();
+      const available = dep.amount.sub(alreadyApplied).sub(alreadyRefunded);
+      if (available.lte(0)) continue;
+      const chunk = min(available, remaining);
+      await tx.admissionDeposit.update({
+        where: { id: dep.id },
+        data: {
+          refundedAmount: alreadyRefunded.add(chunk),
+          refundReceiptNumber,
+          refundedAt: new Date(),
+          refundedById: userId,
+          refundReason: `Refunded at discharge (reference: ${reference ?? method})`,
+        },
+      });
+      remaining = remaining.sub(chunk);
+    }
+    return refundReceiptNumber;
   }
 
   /** A printable receipt for one deposit or refund - headed differently for
@@ -456,7 +729,7 @@ export class AdmissionsService {
       const names = await this.names(tx, [deposit.receivedById, deposit.refundedById]);
       return {
         isRefund: !!deposit.refundedAt,
-        receiptNumber: deposit.refundedAt ? deposit.receiptNumber : deposit.receiptNumber,
+        receiptNumber: deposit.refundedAt ? deposit.refundReceiptNumber : deposit.receiptNumber,
         amount: deposit.refundedAt ? (deposit.refundedAmount ?? D0()).toString() : deposit.amount.toString(),
         method: deposit.method,
         reference: deposit.reference,
@@ -469,6 +742,105 @@ export class AdmissionsService {
           name: `${deposit.admission.patient.firstName} ${deposit.admission.patient.lastName}`.trim(),
           patientNumber: deposit.admission.patient.patientNumber,
         },
+      };
+    });
+  }
+
+  // ─────────────────────────── admission notes (F1c) ───────────────────────────
+
+  /** A new, dated ward-round note - always a new row, never an upsert
+   * (unlike a visit's single SOAP note): an admission spans many rounds,
+   * each with its own author and timestamp. Blocked once closed, unless
+   * reopened (admission:reopen) - same guard shape as orders/prescriptions. */
+  async addNote({ tenantId, userId, role }: Actor, id: string, dto: UpsertNoteDto) {
+    assertCan(role, 'note:write');
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const admission = await tx.admission.findFirst({
+        where: { id }, select: { id: true, patientId: true, status: true, reopenedAt: true },
+      });
+      if (!admission) throw new NotFoundException('Admission not found');
+      if (admission.status !== AdmissionStatus.ADMITTED && !admission.reopenedAt) {
+        throw new BadRequestException({
+          message: 'This admission is closed. Reopen it to add a note.',
+          code: 'ADMISSION_CLOSED',
+        });
+      }
+      const row = await tx.clinicalNote.create({
+        data: {
+          tenantId, patientId: admission.patientId, admissionId: id,
+          subjective: dto.subjective, objective: dto.objective, assessment: dto.assessment, plan: dto.plan,
+          authorId: userId,
+        },
+      });
+      await this.audit.record({
+        tenantId, userId, action: 'SAVE_NOTE', entityType: 'Admission', entityId: id,
+        metadata: { noteId: row.id },
+      });
+      return row;
+    });
+  }
+
+  /** A late correction to one specific dated note, after the admission was
+   * already closed (addNote itself is blocked once closed, unless
+   * reopened). Never blocked by completion - the same append-only shape
+   * FUNC-2 already gives a visit's note. */
+  async addNoteAddendum({ tenantId, userId, role }: Actor, id: string, noteId: string, dto: AddNoteAddendumDto) {
+    assertCan(role, 'note:write');
+    if (!dto.subjective && !dto.objective && !dto.assessment && !dto.plan) {
+      throw new BadRequestException('An addendum needs at least one field filled in');
+    }
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const note = await tx.clinicalNote.findFirst({ where: { id: noteId, admissionId: id } });
+      if (!note) throw new NotFoundException('Note not found');
+      const row = await tx.clinicalNoteAddendum.create({
+        data: {
+          tenantId, patientId: note.patientId, admissionId: id, noteId,
+          subjective: dto.subjective, objective: dto.objective, assessment: dto.assessment, plan: dto.plan,
+          authorId: userId,
+        },
+      });
+      await this.audit.record({
+        tenantId, userId, action: 'ADD_NOTE_ADDENDUM', entityType: 'Admission', entityId: id,
+        metadata: { noteId, addendumId: row.id },
+      });
+      return row;
+    });
+  }
+
+  /** A printable discharge summary, assembled entirely from what was already
+   * recorded during the stay - no new data collected. */
+  async dischargeSummary(tenantId: string, id: string) {
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const admission = await tx.admission.findFirst({ where: { id }, include: ADMISSION_INCLUDE });
+      if (!admission) throw new NotFoundException('Admission not found');
+
+      const [diagnoses, prescriptions, notes, invoices, deposits] = await Promise.all([
+        tx.diagnosis.findMany({ where: { admissionId: id }, orderBy: { diagnosedAt: 'asc' } }),
+        tx.prescription.findMany({ where: { admissionId: id }, include: { items: true }, orderBy: { prescribedAt: 'asc' } }),
+        tx.clinicalNote.findMany({ where: { admissionId: id }, orderBy: { createdAt: 'asc' } }),
+        tx.invoice.findMany({ where: { admissionId: id }, include: { payments: true } }),
+        tx.admissionDeposit.findMany({ where: { admissionId: id } }),
+      ]);
+
+      const totalCharged = invoices.reduce((s, i) => s.add(i.totalAmount), D0());
+      const totalPaid = invoices.reduce(
+        (s, i) => s.add(i.payments.filter((p) => !p.reversedAt).reduce((ps, p) => ps.add(p.amount), D0())),
+        D0(),
+      );
+      const totalDeposited = deposits.reduce(
+        (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
+      );
+      const balance = totalCharged.sub(totalPaid).sub(totalDeposited);
+
+      return {
+        admission,
+        diagnoses,
+        prescriptions,
+        notes,
+        totalCharged: totalCharged.toString(),
+        totalPaid: totalPaid.toString(),
+        totalDeposited: totalDeposited.toString(),
+        balance: balance.toString(),
       };
     });
   }

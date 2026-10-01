@@ -10,6 +10,7 @@ import type {
   AdmissionDTO,
   AdmissionWorkspaceDTO,
   AdmissionBillDTO,
+  DischargeSummaryDTO,
   WardDTO,
   BedDTO,
   WardBoardDTO,
@@ -140,11 +141,40 @@ export interface AdmitInput {
 export const admitPatient = (data: AdmitInput) =>
   api.post<AdmissionDTO>('/admissions', data).then((r) => r.data)
 
-export const dischargeAdmission = (id: string, data: { status?: string; dischargeNotes?: string }) =>
+export interface DischargeInput {
+  status?: string
+  dischargeNotes?: string
+  overrideReason?: string
+  refundMethod?: string
+  refundReference?: string
+}
+export const dischargeAdmission = (id: string, data: DischargeInput) =>
   api.post<AdmissionDTO>(`/admissions/${id}/discharge`, data).then((r) => r.data)
 
 export const transferAdmission = (id: string, bedId: string, reason?: string) =>
   api.post<AdmissionDTO>(`/admissions/${id}/transfer`, { bedId, reason }).then((r) => r.data)
+
+export const reopenAdmission = (id: string, reason: string) =>
+  api.post<AdmissionDTO>(`/admissions/${id}/reopen`, { reason }).then((r) => r.data)
+
+export const applyAdmissionDeposit = (id: string, amount: number) =>
+  api.post<{ applied: string; payments: { paymentId: string; receiptNumber: string | null }[] }>(
+    `/admissions/${id}/apply-deposit`, { amount },
+  ).then((r) => r.data)
+
+export const addAdmissionNote = (
+  id: string,
+  data: { subjective?: string; objective?: string; assessment?: string; plan?: string },
+) => api.post(`/admissions/${id}/notes`, data).then((r) => r.data)
+
+export const addAdmissionNoteAddendum = (
+  id: string,
+  noteId: string,
+  data: { subjective?: string; objective?: string; assessment?: string; plan?: string },
+) => api.post(`/admissions/${id}/notes/${noteId}/addenda`, data).then((r) => r.data)
+
+export const getDischargeSummary = (id: string) =>
+  api.get<DischargeSummaryDTO>(`/admissions/${id}/discharge-summary`).then((r) => r.data)
 
 // ── ward / bed management ──
 export const createWard = (data: { name: string; wardType: string; bedCount?: number; dailyRate?: number; dayCaseRate?: number }) =>

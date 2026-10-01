@@ -14,6 +14,10 @@ import {
   getAdmissionBill,
   addAdmissionDeposit,
   refundAdmissionDeposit,
+  applyAdmissionDeposit,
+  reopenAdmission,
+  addAdmissionNote,
+  addAdmissionNoteAddendum,
 } from '@/lib/hospital'
 import {
   AddDiagnosisModal,
@@ -23,6 +27,7 @@ import {
 import { OrderModal } from '@/components/encounters/OrderModal'
 import { ORDER_STATUS_META, ORDER_TYPE_LABEL } from '@/lib/encounters'
 import { AdmissionBillPrintModal } from '@/components/patients/AdmissionBillPrintModal'
+import { DischargeSummaryPrintModal } from '@/components/patients/DischargeSummaryPrintModal'
 
 const dt = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB') : '-')
 const d = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-GB') : '-')
@@ -45,8 +50,13 @@ export default function AdmissionWorkspacePage() {
   const [addOrder, setAddOrder] = useState(false)
   const [showBill, setShowBill] = useState(false)
   const [addingDeposit, setAddingDeposit] = useState(false)
+  const [applyingDeposit, setApplyingDeposit] = useState(false)
   const [refunding, setRefunding] = useState<{ id: string; max: number } | null>(null)
   const [complaintText, setComplaintText] = useState('')
+  const [addingNote, setAddingNote] = useState(false)
+  const [addendumFor, setAddendumFor] = useState<string | null>(null)
+  const [reopening, setReopening] = useState(false)
+  const [showDischargeSummary, setShowDischargeSummary] = useState(false)
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['admission-workspace', id] })
@@ -90,8 +100,21 @@ export default function AdmissionWorkspacePage() {
           <div className="text-right">
             <p className="text-xs text-gray-400">Deposit held</p>
             <p className="text-xl font-bold text-gray-900">{naira(ws.data.totalDeposited)}</p>
+            {a.status !== 'ADMITTED' && (
+              <div className="mt-2 flex gap-2 justify-end">
+                <Button variant="secondary" onClick={() => setShowDischargeSummary(true)}>Discharge summary</Button>
+                {can(role, 'admission:reopen') && (
+                  <Button variant="secondary" onClick={() => setReopening(true)}>Reopen</Button>
+                )}
+              </div>
+            )}
           </div>
         </div>
+        {a.reopenedAt && (
+          <div className="mt-3 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-sm text-blue-800">
+            Reopened {dt(a.reopenedAt)} for a late correction - this does not readmit the patient.
+          </div>
+        )}
         {a.status === 'ADMITTED' && !a.ward?.dailyRate && (
           <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
             Ward rate not set - bed charges on hold. Once a rate is set for {a.ward?.name ?? 'this ward'}, every missed night posts automatically.
@@ -104,6 +127,9 @@ export default function AdmissionWorkspacePage() {
           <Card title={a.status === 'ADMITTED' ? 'Running bill (interim)' : 'Running bill'} action={
             <div className="flex gap-2">
               <Button variant="secondary" onClick={() => setShowBill(true)}>Print bill</Button>
+              {Number(bill.data.totalDeposited) > 0 && Number(bill.data.balance) > 0 && (
+                <Button variant="secondary" onClick={() => setApplyingDeposit(true)}>Apply deposit</Button>
+              )}
               <Button variant="secondary" onClick={() => setAddingDeposit(true)}>+ Deposit</Button>
             </div>
           }>
@@ -227,6 +253,42 @@ export default function AdmissionWorkspacePage() {
             </ul>
           )}
         </Card>
+
+        <Card title="Ward-round notes" action={can(role, 'note:write') && (a.status === 'ADMITTED' || a.reopenedAt) && (
+          <Button variant="secondary" onClick={() => setAddingNote(true)}>+ Add note</Button>
+        )}>
+          {!ws.data.notes.length ? <Empty /> : (
+            <ul className="space-y-3">
+              {ws.data.notes.map((n) => (
+                <li key={n.id} className="border border-gray-100 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold text-gray-500">{n.authorName ?? 'Unknown'} · {dt(n.createdAt)}</span>
+                    {can(role, 'note:write') && (
+                      <button className="text-xs text-primary hover:underline" onClick={() => setAddendumFor(n.id)}>+ Addendum</button>
+                    )}
+                  </div>
+                  <div className="text-sm text-gray-700 space-y-0.5">
+                    {n.subjective && <p><span className="font-medium">S:</span> {n.subjective}</p>}
+                    {n.objective && <p><span className="font-medium">O:</span> {n.objective}</p>}
+                    {n.assessment && <p><span className="font-medium">A:</span> {n.assessment}</p>}
+                    {n.plan && <p><span className="font-medium">P:</span> {n.plan}</p>}
+                  </div>
+                  {n.addenda.length > 0 && (
+                    <ul className="mt-2 pt-2 border-t border-gray-100 space-y-1">
+                      {n.addenda.map((ad) => (
+                        <li key={ad.id} className="text-xs text-gray-500">
+                          <span className="font-semibold">Addendum</span> · {ad.authorName ?? 'Unknown'} · {dt(ad.createdAt)}
+                          {ad.plan && <span> - {ad.plan}</span>}
+                          {ad.assessment && <span> - {ad.assessment}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
       </div>
 
       <AddVitalsModal patientId={a.patient.id} admissionId={id} open={addVitals} onClose={() => { setAddVitals(false); refresh() }} />
@@ -241,6 +303,17 @@ export default function AdmissionWorkspacePage() {
       />
       <AddDepositModal admissionId={id} open={addingDeposit} onClose={() => setAddingDeposit(false)} onDone={refresh} />
       <RefundDepositModal admissionId={id} deposit={refunding} onClose={() => setRefunding(null)} onDone={refresh} />
+      <ApplyDepositModal
+        admissionId={id}
+        max={bill.data ? Math.min(Number(bill.data.totalDeposited), Number(bill.data.balance)) : 0}
+        open={applyingDeposit}
+        onClose={() => setApplyingDeposit(false)}
+        onDone={refresh}
+      />
+      <AddNoteModal admissionId={id} open={addingNote} onClose={() => setAddingNote(false)} onDone={refresh} />
+      <AddNoteAddendumModal admissionId={id} noteId={addendumFor} onClose={() => setAddendumFor(null)} onDone={refresh} />
+      <ReopenModal admissionId={id} open={reopening} onClose={() => setReopening(false)} onDone={refresh} />
+      <DischargeSummaryPrintModal admissionId={id} open={showDischargeSummary} onClose={() => setShowDischargeSummary(false)} />
     </div>
   )
 }
@@ -349,6 +422,135 @@ function RefundDepositModal({ admissionId, deposit, onClose, onDone }: { admissi
           >
             Confirm refund
           </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function ApplyDepositModal({ admissionId, max, open, onClose, onDone }: { admissionId: string; max: number; open: boolean; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [amount, setAmount] = useState('')
+
+  const key = `${open}-${max}`
+  const [seen, setSeen] = useState(key)
+  if (key !== seen) { setSeen(key); setAmount(max > 0 ? String(max) : '') }
+
+  const m = useMutation({
+    mutationFn: () => applyAdmissionDeposit(admissionId, Number(amount)),
+    onSuccess: () => { toast('Deposit applied to the bill', 'success'); onClose(); onDone() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not apply the deposit.', 'error'),
+  })
+
+  return (
+    <Modal open={open} onClose={onClose} title="Apply deposit to the bill" width={400} align="center">
+      <div className="space-y-3">
+        <Field label={`Amount (₦, up to ${max})`} required>
+          <Input type="number" min={0} max={max} value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+        </Field>
+        <p className="text-xs text-gray-400">Converts deposit credit into a real payment against the amount owed - this is recognised as revenue now, not when the deposit was first taken.</p>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={m.isPending} disabled={!Number(amount) || Number(amount) > max} onClick={() => m.mutate()}>Apply</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function AddNoteModal({ admissionId, open, onClose, onDone }: { admissionId: string; open: boolean; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [d, setD] = useState({ subjective: '', objective: '', assessment: '', plan: '' })
+
+  const key = String(open)
+  const [seen, setSeen] = useState(key)
+  if (key !== seen) { setSeen(key); setD({ subjective: '', objective: '', assessment: '', plan: '' }) }
+
+  const m = useMutation({
+    mutationFn: () => addAdmissionNote(admissionId, {
+      subjective: d.subjective || undefined, objective: d.objective || undefined,
+      assessment: d.assessment || undefined, plan: d.plan || undefined,
+    }),
+    onSuccess: () => { onClose(); onDone() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not save the note.', 'error'),
+  })
+  const empty = !d.subjective.trim() && !d.objective.trim() && !d.assessment.trim() && !d.plan.trim()
+
+  return (
+    <Modal open={open} onClose={onClose} title="Ward-round note" width={520} align="center">
+      <div className="space-y-3">
+        <Field label="Subjective"><Textarea rows={2} value={d.subjective} onChange={(e) => setD({ ...d, subjective: e.target.value })} /></Field>
+        <Field label="Objective"><Textarea rows={2} value={d.objective} onChange={(e) => setD({ ...d, objective: e.target.value })} /></Field>
+        <Field label="Assessment"><Textarea rows={2} value={d.assessment} onChange={(e) => setD({ ...d, assessment: e.target.value })} /></Field>
+        <Field label="Plan"><Textarea rows={2} value={d.plan} onChange={(e) => setD({ ...d, plan: e.target.value })} /></Field>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={m.isPending} disabled={empty} onClick={() => m.mutate()}>Save note</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function AddNoteAddendumModal({ admissionId, noteId, onClose, onDone }: { admissionId: string; noteId: string | null; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [d, setD] = useState({ subjective: '', objective: '', assessment: '', plan: '' })
+
+  const key = noteId ?? ''
+  const [seen, setSeen] = useState(key)
+  if (key !== seen) { setSeen(key); setD({ subjective: '', objective: '', assessment: '', plan: '' }) }
+
+  const m = useMutation({
+    mutationFn: () => addAdmissionNoteAddendum(admissionId, noteId!, {
+      subjective: d.subjective || undefined, objective: d.objective || undefined,
+      assessment: d.assessment || undefined, plan: d.plan || undefined,
+    }),
+    onSuccess: () => { onClose(); onDone() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not save the addendum.', 'error'),
+  })
+  const empty = !d.subjective.trim() && !d.objective.trim() && !d.assessment.trim() && !d.plan.trim()
+
+  if (!noteId) return null
+  return (
+    <Modal open={!!noteId} onClose={onClose} title="Add addendum" width={520} align="center">
+      <div className="space-y-3">
+        <p className="text-xs text-gray-400">A late correction to this note - the original stays unchanged.</p>
+        <Field label="Subjective"><Textarea rows={2} value={d.subjective} onChange={(e) => setD({ ...d, subjective: e.target.value })} /></Field>
+        <Field label="Objective"><Textarea rows={2} value={d.objective} onChange={(e) => setD({ ...d, objective: e.target.value })} /></Field>
+        <Field label="Assessment"><Textarea rows={2} value={d.assessment} onChange={(e) => setD({ ...d, assessment: e.target.value })} /></Field>
+        <Field label="Plan"><Textarea rows={2} value={d.plan} onChange={(e) => setD({ ...d, plan: e.target.value })} /></Field>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={m.isPending} disabled={empty} onClick={() => m.mutate()}>Save addendum</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function ReopenModal({ admissionId, open, onClose, onDone }: { admissionId: string; open: boolean; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [reason, setReason] = useState('')
+
+  const m = useMutation({
+    mutationFn: () => reopenAdmission(admissionId, reason.trim()),
+    onSuccess: () => { toast('Admission reopened', 'success'); setReason(''); onClose(); onDone() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not reopen the admission.', 'error'),
+  })
+
+  return (
+    <Modal open={open} onClose={onClose} title="Reopen admission" width={440} align="center">
+      <div className="space-y-3">
+        <p className="text-sm text-gray-500">
+          Lifts the closed-admission guard for a bounded correction (a late lab result, a note that needs
+          amending). This does not readmit the patient, free a bed or reopen the ward stay.
+        </p>
+        <Field label="Reason" required>
+          <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why this admission needs reopening" />
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={m.isPending} disabled={reason.trim().length < 3} onClick={() => m.mutate()}>Reopen</Button>
         </div>
       </div>
     </Modal>
