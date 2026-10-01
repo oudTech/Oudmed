@@ -129,6 +129,21 @@ export interface AdmissionWorkspaceDTO {
   notes: AdmissionNoteDTO[]
   deposits: AdmissionDepositDTO[]
   totalDeposited: string
+  /** Deposit credit already earmarked as a pending refund - not available
+   * to spend against a new charge, and never blocks discharge (F1c). */
+  pendingRefund: string | null
+}
+
+/** A deposit refund still owed to a patient, not yet paid out - shown on
+ * the admission and on the tenant-wide "refunds due" list for billing. */
+export interface AdmissionPendingRefundDTO {
+  id: string
+  amount: string
+  reason: string | null
+  requestedAt: string
+  admissionId: string
+  admissionNumber: string
+  patient: { id: string; patientNumber: string; name: string }
 }
 
 export interface AdmissionBillLineDTO {
@@ -158,6 +173,7 @@ export interface AdmissionBillDTO {
   totalCharged: string
   totalPaid: string
   totalDeposited: string
+  pendingRefund: string | null
   balance: string
 }
 
@@ -169,5 +185,6 @@ export interface DischargeSummaryDTO {
   totalCharged: string
   totalPaid: string
   totalDeposited: string
+  pendingRefund: string | null
   balance: string
 }

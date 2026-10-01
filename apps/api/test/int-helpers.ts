@@ -102,6 +102,7 @@ export async function destroyTenant(tenantId: string) {
   await p.tenantSequence.deleteMany({ where: { tenantId } });
   await p.drug.deleteMany({ where: { tenantId } });
   await p.visit.deleteMany({ where: { tenantId } });
+  await p.admissionRefund.deleteMany({ where: { tenantId } });
   await p.admissionDeposit.deleteMany({ where: { tenantId } });
   await p.admissionWardStay.deleteMany({ where: { tenantId } });
   await p.bedDayCharge.deleteMany({ where: { tenantId } });

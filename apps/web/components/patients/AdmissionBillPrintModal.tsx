@@ -121,6 +121,7 @@ export function AdmissionBillPrintModal({
               <Row label="Total charged" value={naira(b.totalCharged)} />
               <Row label="Total paid" value={naira(b.totalPaid)} />
               <Row label="Deposit held" value={naira(b.totalDeposited)} />
+              {b.pendingRefund && <Row label="Refund pending" value={naira(b.pendingRefund)} />}
               <Row label="Balance" value={naira(b.balance)} bold />
             </div>
 

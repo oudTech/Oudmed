@@ -70,15 +70,20 @@ export class DischargeAdmissionDto {
   // only (admission:discharge-unsettled), audited.
   @IsOptional() @IsString() @MaxLength(500) overrideReason?: string;
 
-  // Required only when deposit credit remains after auto-apply (the deposit
-  // was more than what was owed) - discharge cannot complete without
-  // recording how that remainder is being refunded.
-  @IsOptional() @IsString() @MaxLength(20) refundMethod?: string;
+  // Optional: if deposit credit remains after auto-apply, discharge still
+  // completes regardless (it is never blocked on a refund) - but giving
+  // these pays it out immediately instead of leaving it a pending refund.
+  @IsOptional() @IsIn(['CASH', 'CARD', 'TRANSFER']) refundMethod?: string;
   @IsOptional() @IsString() @MaxLength(120) refundReference?: string;
 }
 
 export class ApplyDepositDto {
   @IsNumber() @Min(0.01) amount: number;
+}
+
+export class PayRefundDto {
+  @IsIn(['CASH', 'CARD', 'TRANSFER']) method: string;
+  @IsOptional() @IsString() @MaxLength(120) reference?: string;
 }
 
 export class ReopenAdmissionDto {

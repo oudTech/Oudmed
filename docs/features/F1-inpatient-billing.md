@@ -770,31 +770,96 @@ Discharge first runs the final night's reconciliation (section 6), then
 amountOwed)` - this is the one place deposit application happens without a
 separate staff click, since "settle what's owed from the deposit on hand"
 is exactly what discharge is supposed to do. Only the balance left *after*
-that automatic application is subject to the gate below.
+that automatic application is subject to the gate below. **`amountOwed`
+here means the patient's own payable amount, not the invoice's raw
+balance** - for an HMO admission this excludes whatever is still expected
+from the HMO (see "Deposits and HMO cover" below) - so the gate, like
+apply-deposit itself, is never evaluated against money the HMO, not the
+patient, is expected to pay.
 
 `Tenant.requireSettledBillAtDischarge` (section 6) - default **off**, so
 F1 never blocks a clinical discharge by default (a hospital should not be
 forced to choose this feature to keep discharging patients the way they do
 today). When on: `discharge()` is blocked if the post-deposit-application
-balance (section 5) is greater than zero, with a clear message naming the
-amount owed. **Override**: a Hospital Admin can discharge anyway with
+patient-payable balance is greater than zero, with a clear message naming
+the amount owed. **Override**: a Hospital Admin can discharge anyway with
 `admission:discharge-unsettled` (new permission, HOSPITAL_ADMIN only) +
 a required reason, audited (`DISCHARGE_UNSETTLED_OVERRIDE`, metadata:
 balance, reason) - the same override-with-reason shape used throughout this
 codebase (FUNC-1 off-formulary, item 9 line edits).
 
-### Deposit refund at discharge
+### Deposits and HMO cover
 
-If, after automatic application, deposit credit remains (the bill came in
-lower than what was deposited), discharge requires recording the refund
-(method + reference) before it completes - same inline reason/amount flow
-as the deposit-refund endpoint (section 5, same `admission:deposit-refund`
-permission), surfaced as a mandatory step in the discharge screen rather
-than something staff have to remember to do separately afterward. Because
-application is always capped at what was actually owed (section 5), this
-refund is always a plain `AdmissionDeposit` refund, never a `Payment`
-reversal, and issues its own printable receipt like any other deposit
-refund.
+**A deposit is applied only to the patient-payable portion of the balance -
+co-pay, excluded or uncovered items - never to the amount still expected
+from the HMO.** This applies everywhere a deposit is converted into a real
+Payment: the explicit `apply-deposit` endpoint and discharge's automatic
+step both resolve the patient's own share via `AdmissionsService
+.patientPayableBalance()` before capping the amount, rather than using the
+invoice's raw outstanding balance.
+
+**How the split is determined today** (there is no persisted per-line or
+per-invoice patient/HMO split anywhere in the schema - confirmed by reading
+`Invoice`/`InvoiceLine`/`Admission` directly - so this reuses the one real
+primitive that already exists, `InsuranceProvider.defaultCoPayPct`, the same
+one `claims.service.ts generate()` already uses to split a claim):
+
+1. Not an HMO admission (`payerType !== 'HMO'`) - the whole balance is the
+   patient's, exactly as today.
+2. An admission claim already exists (F1d's `generateForAdmission`) -
+   whatever the HMO still has outstanding on it
+   (`claimedAmount - paidAmount - writeOffAmount`) is reserved; the rest of
+   the balance is the patient's.
+3. No claim yet (the common case before F1d ships, and mid-stay even after)
+   - estimate the patient's share via the patient's own linked
+   `InsuranceProvider.defaultCoPayPct` (falling back to a name match on
+   `hmoName`, the same resolution order `generate()` uses), applied to the
+   current balance. This is an estimate, not a reservation - it can only
+   ever be checked against a real claim once one exists.
+
+**If an HMO later rejects part of a claim (or pays less than claimed and
+the hospital does not write off the shortfall), the patient portion grows -
+by construction, not a special case.** Once a claim reaches a resolved
+status (`PAID`/`REJECTED`/`WRITTEN_OFF`/`CANCELLED`), "still expected from
+the HMO" becomes zero for that claim; whatever of `claimedAmount` was never
+actually paid, and was not separately written off, simply falls out of the
+`balance - hmoStillExpected` subtraction and becomes ordinary patient-
+payable balance - the same balance a deposit or a fresh payment can cover
+like any other. No reconciliation step is needed to "move" the money across
+a boundary; the boundary is recomputed fresh every time `patientPayableBalance()`
+runs, from the claim's current state.
+
+### Deposit refund at discharge - corrected: never blocks
+
+**Original design, corrected after review**: discharge was first specified
+to *require* recording the refund (method + reference) before it could
+complete whenever credit remained. That was wrong - a cash-handling step
+must never be allowed to hold up a clinical discharge, the same principle
+that already governs the settlement gate above (off by default, override
+available) and the ward-rate hold (section 6). Billing/cashier availability,
+a patient who has already left, or simply "deal with it later today" are
+all ordinary reasons the refund cannot happen at the exact moment of
+discharge.
+
+**Corrected behaviour**: if credit remains after automatic application,
+discharge records a **pending refund** (`AdmissionRefund`: amount,
+admission, requested-by, reason) and completes regardless - the refund
+shows on the admission itself and on a tenant-wide "refunds due" list for
+billing/cashier (`GET /admissions/refunds/due`, `admission:deposit-refund`).
+Paying it out later (`POST /admissions/:id/refunds/:refundId/pay`) draws
+down the admission's deposits exactly as an immediate refund would (same
+`refundDepositsInternal` allocator, oldest deposit first) and issues the
+same printable receipt and cash-ledger entry an immediate refund would -
+nothing about the cash-handling mechanics changed, only when it is allowed
+to happen. If refund details *are* given inline at the moment of discharge
+(the common case when a cashier is right there), it still pays out
+immediately within the same transaction - a pending `AdmissionRefund` row
+is created either way, but is marked `PAID` at once rather than left
+`PENDING`, so the audit trail is identical in shape regardless of timing.
+A refund can only ever be paid once (`payRefund` rejects a refund already
+`PAID`) and a pending refund is excluded from "deposits held" on both the
+admission and the tenant-wide KPI (section 10) - it is owed to the patient,
+not available credit - with its own separate "Refunds owed" liability line.
 
 ### Discharge summary
 

@@ -75,6 +75,26 @@ describe('AdmissionsService discharge settlement (integration - F1c)', () => {
     return { admission, patient };
   }
 
+  async function admitHmoPatientWithCharge(amount: number, coPayPct: number) {
+    const provider = await ownerPrisma.insuranceProvider.create({
+      data: { tenantId, name: `HMO ${Math.random().toString(36).slice(2, 8)}`, defaultCoPayPct: coPayPct },
+    });
+    const { ward, bed } = await makeWard(15000);
+    const patient = await makePatient(tenantId, {
+      payerType: 'HMO', hmoName: provider.name, insuranceProviderId: provider.id,
+    });
+    const admission = await admissions.admit(nurseActor, {
+      patientId: patient.id, wardId: ward.id, bedId: bed.id, admissionType: 'ELECTIVE', payerType: 'HMO', hmoName: provider.name,
+    } as any);
+    await prisma.forTenant(tenantId, (tx) =>
+      billing.postCharge(tx, {
+        tenantId, userId: nurseActor.userId, admissionId: admission.id, patientId: patient.id,
+        description: 'Ward charge', quantity: 1, unitPrice: amount, category: 'Inpatient',
+      }),
+    );
+    return { admission, patient, provider };
+  }
+
   it('discharge with an outstanding balance succeeds by default (gate is off)', async () => {
     const { admission } = await admitWithCharge(30000);
     const discharged = await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
@@ -120,13 +140,9 @@ describe('AdmissionsService discharge settlement (integration - F1c)', () => {
     expect(bill.balance).toBe('20000'); // 30000 - 10000
   });
 
-  it('deposit larger than the balance requires a refund method before discharge completes', async () => {
+  it('deposit larger than the balance: refund details given inline pay it out immediately at discharge', async () => {
     const { admission } = await admitWithCharge(20000);
     await admissions.addDeposit(receptionActor, admission.id, { amount: 50000, method: 'CASH' } as any);
-
-    await expect(
-      admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any),
-    ).rejects.toThrow(/deposit credit of 30000 remains/);
 
     const discharged = await admissions.discharge(adminActor, admission.id, {
       status: 'DISCHARGED', refundMethod: 'CASH', refundReference: 'overpaid',
@@ -137,11 +153,50 @@ describe('AdmissionsService discharge settlement (integration - F1c)', () => {
     expect(bill.totalPaid).toBe('20000'); // exactly the amount owed, applied
     expect(bill.totalDeposited).toBe('0'); // the rest refunded
     expect(bill.balance).toBe('0');
+    expect(bill.pendingRefund).toBeNull(); // paid immediately, never left pending
 
     const deposit = await ownerPrisma.admissionDeposit.findFirst({ where: { admissionId: admission.id } });
     expect(Number(deposit!.appliedAmount)).toBe(20000);
     expect(Number(deposit!.refundedAmount)).toBe(30000);
     expect(deposit!.refundReceiptNumber).toBeTruthy();
+  });
+
+  it('F1c correction: discharge never blocks on a refund - it is recorded pending, then paid out later with no double refund', async () => {
+    const { admission } = await admitWithCharge(20000);
+    await admissions.addDeposit(receptionActor, admission.id, { amount: 50000, method: 'CASH' } as any);
+
+    // no refundMethod given - discharge must still complete
+    const discharged = await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
+    expect(discharged.status).toBe('DISCHARGED');
+
+    const billBefore = await admissions.bill(tenantId, admission.id);
+    expect(billBefore.totalPaid).toBe('20000'); // still auto-applied
+    expect(billBefore.pendingRefund).toBe('30000');
+
+    const due = await admissions.listPendingRefunds(tenantId);
+    const refund = due.find((r) => r.admissionId === admission.id)!;
+    expect(refund).toBeDefined();
+    expect(refund.amount).toBe('30000');
+
+    const { receiptNumber } = await admissions.payRefund(accountantActor, admission.id, refund.id, {
+      method: 'CASH', reference: 'payout',
+    } as any);
+    expect(receiptNumber).toBeTruthy();
+
+    const billAfter = await admissions.bill(tenantId, admission.id);
+    expect(billAfter.pendingRefund).toBeNull();
+    expect(billAfter.totalDeposited).toBe('0');
+
+    const deposit = await ownerPrisma.admissionDeposit.findFirst({ where: { admissionId: admission.id } });
+    expect(Number(deposit!.refundedAmount)).toBe(30000); // paid exactly once
+
+    // paying the same refund again is rejected - no double refund
+    await expect(
+      admissions.payRefund(accountantActor, admission.id, refund.id, { method: 'CASH' } as any),
+    ).rejects.toThrow(/already been paid/);
+
+    const dueAfter = await admissions.listPendingRefunds(tenantId);
+    expect(dueAfter.find((r) => r.id === refund.id)).toBeUndefined();
   });
 
   it('applyDeposit(): splits one request across multiple deposits, oldest first', async () => {
@@ -197,5 +252,65 @@ describe('AdmissionsService discharge settlement (integration - F1c)', () => {
     expect(after.isRefund).toBe(true);
     expect(after.receiptNumber).toBe(refundReceiptNumber);
     expect(after.amount).toBe('5000');
+  });
+
+  it('F1c correction: a deposit is applied only to the patient-payable (co-pay) share, never the HMO-expected portion', async () => {
+    // 80000 billed, patient's own co-pay is 20% = 16000 (the rest, 64000,
+    // is the HMO's expected share). A 50000 deposit must apply only up to
+    // the patient's 16000, no more.
+    const { admission } = await admitHmoPatientWithCharge(80000, 20);
+    await admissions.addDeposit(receptionActor, admission.id, { amount: 50000, method: 'CASH' } as any);
+
+    const discharged = await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
+    expect(discharged.status).toBe('DISCHARGED');
+
+    const bill = await admissions.bill(tenantId, admission.id);
+    expect(bill.totalPaid).toBe('16000'); // only the patient's 20% share
+    expect(bill.pendingRefund).toBe('34000'); // 50000 - 16000, never blocks discharge
+    // the invoice's own full balance (80000 - 16000 = 64000) is untouched -
+    // the HMO's 64000 share is still expected via a claim, not the deposit
+    expect(bill.balance).toBe('64000');
+  });
+
+  it('F1c correction: applyDeposit() rejects an amount beyond the patient-payable share even when more deposit is available', async () => {
+    const { admission } = await admitHmoPatientWithCharge(80000, 20);
+    await admissions.addDeposit(receptionActor, admission.id, { amount: 50000, method: 'CASH' } as any);
+
+    await expect(
+      admissions.applyDeposit(accountantActor, admission.id, { amount: 20000 } as any),
+    ).rejects.toThrow(/patient-payable amount owed/);
+
+    const result = await admissions.applyDeposit(accountantActor, admission.id, { amount: 16000 } as any);
+    expect(result.applied).toBe('16000');
+  });
+
+  it('F1c correction: once an HMO claim resolves without paying in full, the unwritten-off remainder becomes patient-payable', async () => {
+    const { admission, patient, provider } = await admitHmoPatientWithCharge(80000, 20);
+    const invoice = await ownerPrisma.invoice.findFirst({ where: { admissionId: admission.id } });
+    const claim = await ownerPrisma.insuranceClaim.create({
+      data: {
+        tenantId, providerId: provider.id, patientId: patient.id, admissionId: admission.id,
+        claimNumber: 'CLM-TEST-1', memberName: 'Test Patient', memberNumber: 'MEM-1',
+        serviceDate: new Date(), claimedAmount: 64000, status: 'SUBMITTED',
+      },
+    });
+    void invoice;
+
+    // still SUBMITTED, nothing paid or written off - the full 64000 is still
+    // "expected", so the patient-payable share stays at the original 16000
+    await admissions.addDeposit(receptionActor, admission.id, { amount: 50000, method: 'CASH' } as any);
+    const r1 = await admissions.applyDeposit(accountantActor, admission.id, { amount: 16000 } as any);
+    expect(r1.applied).toBe('16000');
+
+    // HMO rejects the claim outright and the hospital does not write it off -
+    // that 64000 is no longer "expected from the HMO", so it becomes
+    // patient-payable like any other balance, and a further payment can cover it
+    await ownerPrisma.insuranceClaim.update({ where: { id: claim.id }, data: { status: 'REJECTED' } });
+    const r2 = await admissions.applyDeposit(accountantActor, admission.id, { amount: 34000 } as any);
+    expect(r2.applied).toBe('34000'); // the rest of the deposit can now cover the rejected portion
+
+    const bill = await admissions.bill(tenantId, admission.id);
+    expect(bill.totalPaid).toBe('50000');
+    expect(bill.balance).toBe('30000'); // 80000 - 50000, now fully the patient's to pay
   });
 });

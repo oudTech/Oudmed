@@ -12,6 +12,7 @@ import {
   CreateDepositDto,
   DischargeAdmissionDto,
   ListAdmissionsQueryDto,
+  PayRefundDto,
   RefundDepositDto,
   ReopenAdmissionDto,
   TransferAdmissionDto,
@@ -34,6 +35,14 @@ export class AdmissionsController {
   list(@CurrentUser() user: AuthUser, @Query() query: ListAdmissionsQueryDto) {
     assertCan(user.role, 'patient:read');
     return this.admissions.list(user.tenantId, query);
+  }
+
+  // Must be registered before ':id' - otherwise "refunds" would be matched
+  // as an admission id.
+  @Get('refunds/due')
+  listPendingRefunds(@CurrentUser() user: AuthUser) {
+    assertCan(user.role, 'admission:deposit-refund');
+    return this.admissions.listPendingRefunds(user.tenantId);
   }
 
   @Get(':id')
@@ -141,5 +150,15 @@ export class AdmissionsController {
   dischargeSummary(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     assertCan(user.role, 'patient:read');
     return this.admissions.dischargeSummary(user.tenantId, id);
+  }
+
+  @Post(':id/refunds/:refundId/pay')
+  payRefund(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('refundId') refundId: string,
+    @Body() dto: PayRefundDto,
+  ) {
+    return this.admissions.payRefund(actor(user), id, refundId, dto);
   }
 }

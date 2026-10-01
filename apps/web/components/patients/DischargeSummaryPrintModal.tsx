@@ -96,6 +96,7 @@ export function DischargeSummaryPrintModal({
               <Row label="Total charged" value={naira(sum.totalCharged)} />
               <Row label="Total paid" value={naira(sum.totalPaid)} />
               <Row label="Deposit held" value={naira(sum.totalDeposited)} />
+              {sum.pendingRefund && <Row label="Refund pending" value={naira(sum.pendingRefund)} />}
               <Row label="Balance" value={naira(sum.balance)} bold />
             </div>
 

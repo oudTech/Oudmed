@@ -10,6 +10,7 @@ import type {
   AdmissionDTO,
   AdmissionWorkspaceDTO,
   AdmissionBillDTO,
+  AdmissionPendingRefundDTO,
   DischargeSummaryDTO,
   WardDTO,
   BedDTO,
@@ -61,6 +62,12 @@ export const refundAdmissionDeposit = (id: string, depositId: string, data: { am
 
 export const getAdmissionDepositReceipt = (id: string, depositId: string) =>
   api.get(`/admissions/${id}/deposits/${depositId}/receipt`).then((r) => r.data)
+
+export const listPendingRefunds = () =>
+  api.get<AdmissionPendingRefundDTO[]>('/admissions/refunds/due').then((r) => r.data)
+
+export const payAdmissionRefund = (id: string, refundId: string, data: { method: string; reference?: string }) =>
+  api.post<{ ok: true; receiptNumber: string }>(`/admissions/${id}/refunds/${refundId}/pay`, data).then((r) => r.data)
 
 export const getDoctorShifts = (doctorId: string) =>
   api.get<(DoctorShiftDTO & { id: string })[]>(`/directory/staff/${doctorId}/shifts`).then((r) => r.data)

@@ -33,7 +33,7 @@ BEGIN
     'StoredFile','TenantSequence',
     'Visit','Admission','ServiceItem','Invoice','InvoiceLine','Payment',
     'PrescriptionItem','Subscription','SubscriptionInvoice',
-    'AdmissionWardStay','BedDayCharge','AdmissionDeposit'
+    'AdmissionWardStay','BedDayCharge','AdmissionDeposit','AdmissionRefund'
   ]
   LOOP
     EXECUTE format('ALTER TABLE "%s" ENABLE ROW LEVEL SECURITY;', t);

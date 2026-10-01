@@ -8,7 +8,7 @@ import {
 import { AdmissionStatus, BedStatus, PaymentMethod, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
-import { assertCan } from '../common/permissions';
+import { assertCan, can } from '../common/permissions';
 import { nextSequence } from '../common/sequence';
 import { BillingService } from '../billing/billing.service';
 import { BedChargesService } from './bed-charges.service';
@@ -19,6 +19,7 @@ import {
   CreateDepositDto,
   DischargeAdmissionDto,
   ListAdmissionsQueryDto,
+  PayRefundDto,
   RefundDepositDto,
   ReopenAdmissionDto,
   TransferAdmissionDto,
@@ -27,6 +28,11 @@ import {
 
 const D0 = () => new Prisma.Decimal(0);
 const min = (a: Prisma.Decimal, b: Prisma.Decimal) => (a.lt(b) ? a : b);
+const max = (a: Prisma.Decimal, b: Prisma.Decimal) => (a.gt(b) ? a : b);
+// A claim in any of these statuses has nothing more coming from the HMO -
+// its remaining unpaid amount (if not written off) has become the
+// patient's responsibility, same as any other outstanding balance.
+const CLAIM_RESOLVED: string[] = ['PAID', 'REJECTED', 'WRITTEN_OFF', 'CANCELLED'];
 
 interface Actor {
   tenantId: string;
@@ -256,25 +262,22 @@ export class AdmissionsService {
       // one place this happens without a separate staff click, since
       // "settle what's owed from the deposit on hand" is exactly what
       // discharge is supposed to do. Only the balance left after this is
-      // subject to the settlement gate below.
-      const [invoices, deposits] = await Promise.all([
-        tx.invoice.findMany({ where: { admissionId: id }, include: { payments: true } }),
-        tx.admissionDeposit.findMany({ where: { admissionId: id } }),
-      ]);
-      const totalCharged = invoices.reduce((s, i) => s.add(i.totalAmount), D0());
-      const totalPaidBefore = invoices.reduce(
-        (s, i) => s.add(i.payments.filter((p) => !p.reversedAt).reduce((ps, p) => ps.add(p.amount), D0())),
-        D0(),
-      );
-      const owedBeforeApply = totalCharged.sub(totalPaidBefore);
+      // subject to the settlement gate below. Capped at the patient-payable
+      // portion (correction: never applied against money still expected
+      // from an HMO) - see patientPayableBalance().
+      const deposits = await tx.admissionDeposit.findMany({ where: { admissionId: id } });
+      const owedBeforeApply = await this.patientPayableBalance(tx, { id: admission.id, tenantId });
       const availableDeposit = deposits.reduce(
         (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
       );
-      const toApply = min(availableDeposit, owedBeforeApply.gt(0) ? owedBeforeApply : D0());
+      const toApply = min(availableDeposit, owedBeforeApply);
       const applyResult = toApply.gt(0)
         ? await this.applyDepositInternal(tx, { id: admission.id, tenantId }, toApply, userId)
         : { applied: D0(), payments: [] as { paymentId: string; receiptNumber: string | null }[] };
 
+      // Gated on the patient's own remaining share, not the whole invoice
+      // balance - an HMO portion still awaiting a claim is not something
+      // discharge should ever be blocked on.
       const balanceAfterApply = owedBeforeApply.sub(applyResult.applied);
       const depositRemaining = availableDeposit.sub(applyResult.applied);
 
@@ -293,22 +296,22 @@ export class AdmissionsService {
         });
       }
 
-      // Any deposit credit left over (deposited more than was owed) must be
-      // refunded as part of discharge, not left dangling for staff to
-      // remember separately afterward.
+      // Any deposit credit left over (deposited more than was owed, or more
+      // than the patient's own share while the rest sits with the HMO) is
+      // never a reason to block discharge - it is recorded as a pending
+      // refund, paid out immediately if refund details were given, or left
+      // for billing/cashier to process later from the refunds-due list.
       let refundReceiptNumber: string | null = null;
+      let pendingRefundId: string | null = null;
       if (depositRemaining.gt(0)) {
-        if (!dto.refundMethod?.trim()) {
-          throw new BadRequestException({
-            message: `A deposit credit of ${depositRemaining.toString()} remains after settling this admission's bill. Record how it is being refunded before discharging.`,
-            code: 'DEPOSIT_REFUND_REQUIRED',
-            amount: depositRemaining.toString(),
-          });
+        const refund = await tx.admissionRefund.create({
+          data: { tenantId, admissionId: id, amount: depositRemaining, requestedById: userId },
+        });
+        pendingRefundId = refund.id;
+        if (dto.refundMethod?.trim() && can(role, 'admission:deposit-refund')) {
+          refundReceiptNumber = await this.payRefundInternal(tx, refund, userId, dto.refundMethod, dto.refundReference);
+          pendingRefundId = null;
         }
-        assertCan(role, 'admission:deposit-refund');
-        refundReceiptNumber = await this.refundDepositsInternal(
-          tx, { id: admission.id, tenantId }, depositRemaining, userId, dto.refundMethod, dto.refundReference,
-        );
       }
 
       if (admission.bedId) {
@@ -328,8 +331,9 @@ export class AdmissionsService {
         metadata: {
           depositApplied: applyResult.applied.toString(),
           balanceAfterApply: balanceAfterApply.toString(),
-          depositRefunded: depositRemaining.gt(0) ? depositRemaining.toString() : '0',
+          depositRemaining: depositRemaining.gt(0) ? depositRemaining.toString() : '0',
           refundReceiptNumber,
+          pendingRefundId,
         },
       });
       return updated;
@@ -406,7 +410,7 @@ export class AdmissionsService {
       const admission = await tx.admission.findFirst({ where: { id }, include: ADMISSION_INCLUDE });
       if (!admission) throw new NotFoundException('Admission not found');
 
-      const [vitals, complaints, diagnoses, prescriptions, orders, notes, deposits] = await Promise.all([
+      const [vitals, complaints, diagnoses, prescriptions, orders, notes, deposits, pendingRefunds] = await Promise.all([
         tx.vitalSigns.findMany({ where: { admissionId: id }, orderBy: { recordedAt: 'desc' } }),
         tx.complaint.findMany({ where: { admissionId: id }, orderBy: { recordedAt: 'desc' } }),
         tx.diagnosis.findMany({ where: { admissionId: id }, orderBy: { diagnosedAt: 'desc' } }),
@@ -414,6 +418,7 @@ export class AdmissionsService {
         tx.clinicalOrder.findMany({ where: { admissionId: id }, orderBy: { orderedAt: 'desc' } }),
         tx.clinicalNote.findMany({ where: { admissionId: id }, include: { addenda: true }, orderBy: { createdAt: 'desc' } }),
         tx.admissionDeposit.findMany({ where: { admissionId: id }, orderBy: { receivedAt: 'desc' } }),
+        tx.admissionRefund.findMany({ where: { admissionId: id, status: 'PENDING' } }),
       ]);
 
       const nameMap = await this.names(tx, [
@@ -426,6 +431,12 @@ export class AdmissionsService {
         addenda: n.addenda.map((a) => ({ ...a, authorName: a.authorId ? nameMap.get(a.authorId) ?? null : null })),
       }));
 
+      // "Deposit held" is the raw unrefunded/unapplied balance still sitting
+      // in the ledger; "pending refund" (shown separately) is the portion of
+      // it already earmarked to go back to the patient, no longer available
+      // to spend against a new charge (see applyDeposit()/refundDeposit()'s
+      // own spendability checks, which do subtract it).
+      const pendingRefundTotal = pendingRefunds.reduce((s, r) => s.add(r.amount), D0());
       const totalDeposited = deposits.reduce(
         (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
       );
@@ -451,6 +462,7 @@ export class AdmissionsService {
           refundReason: d.refundReason,
         })),
         totalDeposited: totalDeposited.toString(),
+        pendingRefund: pendingRefundTotal.gt(0) ? pendingRefundTotal.toString() : null,
       };
     });
   }
@@ -465,13 +477,14 @@ export class AdmissionsService {
       const admission = await tx.admission.findFirst({ where: { id }, include: ADMISSION_INCLUDE });
       if (!admission) throw new NotFoundException('Admission not found');
 
-      const [invoices, deposits] = await Promise.all([
+      const [invoices, deposits, pendingRefunds] = await Promise.all([
         tx.invoice.findMany({
           where: { admissionId: id },
           include: { lines: true, payments: true, claim: { select: { id: true, claimNumber: true, status: true } } },
           orderBy: { createdAt: 'asc' },
         }),
         tx.admissionDeposit.findMany({ where: { admissionId: id }, orderBy: { receivedAt: 'desc' } }),
+        tx.admissionRefund.findMany({ where: { admissionId: id, status: 'PENDING' } }),
       ]);
 
       const totalCharged = invoices.reduce((s, i) => s.add(i.totalAmount), D0());
@@ -482,7 +495,11 @@ export class AdmissionsService {
       const totalDeposited = deposits.reduce(
         (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
       );
-      const balance = totalCharged.sub(totalPaid).sub(totalDeposited);
+      const pendingRefundTotal = pendingRefunds.reduce((s, r) => s.add(r.amount), D0());
+      // Only the still-spendable deposit (not the portion already earmarked
+      // as a pending refund) offsets the balance - that money is committed
+      // to go back to the patient, not to cover more of the bill.
+      const balance = totalCharged.sub(totalPaid).sub(max(D0(), totalDeposited.sub(pendingRefundTotal)));
 
       return {
         admission,
@@ -516,6 +533,7 @@ export class AdmissionsService {
         totalCharged: totalCharged.toString(),
         totalPaid: totalPaid.toString(),
         totalDeposited: totalDeposited.toString(),
+        pendingRefund: pendingRefundTotal.gt(0) ? pendingRefundTotal.toString() : null,
         balance: balance.toString(),
       };
     });
@@ -546,7 +564,9 @@ export class AdmissionsService {
 
   /** Refund (partial or full) of one named deposit - a narrower permission
    * than taking a deposit, deliberately (separation of duties). Available
-   * balance is drawn from the same pool apply-deposit consumes. */
+   * balance is drawn from the same pool apply-deposit consumes, minus
+   * whatever this admission already has earmarked in a pending refund (no
+   * double-refunding the same money through the ad-hoc path). */
   async refundDeposit({ tenantId, userId, role }: Actor, id: string, depositId: string, dto: RefundDepositDto) {
     assertCan(role, 'admission:deposit-refund');
     return this.prisma.forTenant(tenantId, async (tx) => {
@@ -555,8 +575,12 @@ export class AdmissionsService {
       const alreadyApplied = deposit.appliedAmount ?? D0();
       const alreadyRefunded = deposit.refundedAmount ?? D0();
       const remaining = deposit.amount.sub(alreadyApplied).sub(alreadyRefunded);
-      if (new Prisma.Decimal(dto.amount).gt(remaining)) {
-        throw new BadRequestException(`Refund exceeds the remaining deposit balance (${remaining.toString()})`);
+      const pending = await tx.admissionRefund.aggregate({
+        where: { admissionId: id, status: 'PENDING' }, _sum: { amount: true },
+      });
+      const effectiveRemaining = max(D0(), remaining.sub(pending._sum.amount ?? D0()));
+      if (new Prisma.Decimal(dto.amount).gt(effectiveRemaining)) {
+        throw new BadRequestException(`Refund exceeds the remaining deposit balance (${effectiveRemaining.toString()})`);
       }
       const refundReceiptNumber = await this.billing.nextReceiptNumber(tx, tenantId);
       await tx.admissionDeposit.update({
@@ -580,30 +604,29 @@ export class AdmissionsService {
   /** The explicit interim-settlement action: converts up to `amount` of
    * available deposit credit into real Payment(s) against the admission's
    * currently unpaid/partial invoices - revenue recognised at exactly the
-   * moment it is actually applied, not when the cash first came in. */
+   * moment it is actually applied, not when the cash first came in. Capped
+   * at the patient-payable portion (correction: never applied against money
+   * still expected from an HMO) - see patientPayableBalance(). */
   async applyDeposit({ tenantId, userId, role }: Actor, id: string, dto: ApplyDepositDto) {
     assertCan(role, 'billing:manage');
     return this.prisma.forTenant(tenantId, async (tx) => {
       const admission = await tx.admission.findFirst({ where: { id }, select: { id: true } });
       if (!admission) throw new NotFoundException('Admission not found');
 
-      const [invoices, deposits] = await Promise.all([
-        tx.invoice.findMany({ where: { admissionId: id, status: { in: ['UNPAID', 'PARTIAL'] } }, include: { payments: true } }),
+      const [owed, deposits, pending] = await Promise.all([
+        this.patientPayableBalance(tx, { id, tenantId }),
         tx.admissionDeposit.findMany({ where: { admissionId: id } }),
+        tx.admissionRefund.aggregate({ where: { admissionId: id, status: 'PENDING' }, _sum: { amount: true } }),
       ]);
-      const owed = invoices.reduce(
-        (s, i) => s.add(i.totalAmount.sub(i.payments.filter((p) => !p.reversedAt).reduce((ps, p) => ps.add(p.amount), D0()))),
-        D0(),
-      );
-      const available = deposits.reduce(
+      const available = max(D0(), deposits.reduce(
         (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
-      );
+      ).sub(pending._sum.amount ?? D0()));
       const amount = new Prisma.Decimal(dto.amount);
       if (amount.gt(available)) {
         throw new BadRequestException(`Exceeds available deposit credit (${available.toString()})`);
       }
       if (amount.gt(owed)) {
-        throw new BadRequestException(`Exceeds the amount owed on this admission (${owed.toString()})`);
+        throw new BadRequestException(`Exceeds the patient-payable amount owed on this admission (${owed.toString()})`);
       }
 
       const result = await this.applyDepositInternal(tx, { id, tenantId }, amount, userId);
@@ -613,6 +636,87 @@ export class AdmissionsService {
       });
       return { applied: result.applied.toString(), payments: result.payments };
     });
+  }
+
+  /**
+   * How much of an admission's outstanding balance is the patient's own
+   * responsibility, as opposed to money still expected from an HMO - a
+   * deposit must never be applied against the HMO's expected share
+   * (correction before F1d). Determined as follows, in order:
+   *
+   * 1. No outstanding balance at all -> 0, trivially.
+   * 2. Not an HMO admission (payerType !== 'HMO') -> the whole balance is
+   *    the patient's, exactly as for any cash admission today.
+   * 3. An admission claim already exists -> whatever the HMO still has
+   *    outstanding on that claim (claimedAmount - paidAmount - writeOffAmount)
+   *    is reserved; the rest of the balance is the patient's. Once the claim
+   *    reaches a resolved status (PAID/REJECTED/WRITTEN_OFF/CANCELLED),
+   *    nothing more is "still expected" - if the HMO rejected part of it and
+   *    the hospital does not write that off, it simply becomes patient-
+   *    payable balance like any other, exactly as the brief describes
+   *    ("the patient portion grows"). This needs no special-casing: it falls
+   *    out of the same balance/claim-state read, and a deposit or a fresh
+   *    payment can cover it the same way any other balance is covered.
+   * 4. No claim yet (the common case pre-F1d, and mid-stay even after) -
+   *    estimate the patient's share via the same provider co-pay percentage
+   *    `claims.service.ts`'s generate() already uses (patient's own linked
+   *    provider, falling back to a name match on hmoName) - the best
+   *    estimate available before a real claim exists to measure against.
+   */
+  private async patientPayableBalance(
+    tx: Prisma.TransactionClient,
+    admission: { id: string; tenantId: string },
+  ): Promise<Prisma.Decimal> {
+    const invoices = await tx.invoice.findMany({
+      where: { admissionId: admission.id, status: { in: ['UNPAID', 'PARTIAL'] } },
+      include: { payments: true },
+    });
+    const balance = invoices.reduce(
+      (s, i) => s.add(i.totalAmount.sub(i.payments.filter((p) => !p.reversedAt).reduce((ps, p) => ps.add(p.amount), D0()))),
+      D0(),
+    );
+    if (balance.lte(0)) return D0();
+
+    const admissionRow = await tx.admission.findFirst({
+      where: { id: admission.id },
+      select: { payerType: true, hmoName: true, patientId: true },
+    });
+    if (!admissionRow || admissionRow.payerType !== 'HMO') return balance;
+
+    const claim = await tx.insuranceClaim.findFirst({
+      where: { admissionId: admission.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (claim) {
+      const hmoStillExpected = CLAIM_RESOLVED.includes(claim.status)
+        ? D0()
+        : max(D0(), claim.claimedAmount.sub(claim.paidAmount).sub(claim.writeOffAmount));
+      return max(D0(), balance.sub(hmoStillExpected));
+    }
+
+    const patient = await tx.patient.findFirst({
+      where: { id: admissionRow.patientId },
+      select: { insuranceProviderId: true, hmoName: true, insuranceProvider: true },
+    });
+    let coPayPct: Prisma.Decimal | null = null;
+    if (patient?.insuranceProviderId) {
+      const provider = await tx.insuranceProvider.findFirst({
+        where: { id: patient.insuranceProviderId },
+        select: { defaultCoPayPct: true },
+      });
+      coPayPct = provider?.defaultCoPayPct ?? null;
+    }
+    if (coPayPct === null) {
+      const nameGuess = admissionRow.hmoName ?? patient?.hmoName ?? patient?.insuranceProvider;
+      if (nameGuess) {
+        const match = await tx.insuranceProvider.findFirst({
+          where: { name: { equals: nameGuess, mode: 'insensitive' }, isActive: true },
+          select: { defaultCoPayPct: true },
+        });
+        coPayPct = match?.defaultCoPayPct ?? null;
+      }
+    }
+    return balance.mul(coPayPct ?? D0()).div(100);
   }
 
   /** Shared by applyDeposit() and discharge()'s automatic step. Allocates
@@ -680,15 +784,14 @@ export class AdmissionsService {
   }
 
   /** Refunds `amount` across the admission's deposits (oldest first), all
-   * under one refund receipt - used by discharge() when deposit credit
-   * remains after auto-apply and spans more than one deposit. */
+   * under one refund receipt - the mechanics behind both an immediate
+   * refund-at-discharge and paying out a pending AdmissionRefund later. */
   private async refundDepositsInternal(
     tx: Prisma.TransactionClient,
     admission: { id: string; tenantId: string },
     amount: Prisma.Decimal,
     userId: string,
-    method: string,
-    reference: string | undefined,
+    reasonLabel: string,
   ): Promise<string> {
     const refundReceiptNumber = await this.billing.nextReceiptNumber(tx, admission.tenantId);
     const deposits = await tx.admissionDeposit.findMany({
@@ -709,12 +812,85 @@ export class AdmissionsService {
           refundReceiptNumber,
           refundedAt: new Date(),
           refundedById: userId,
-          refundReason: `Refunded at discharge (reference: ${reference ?? method})`,
+          refundReason: reasonLabel,
         },
       });
       remaining = remaining.sub(chunk);
     }
     return refundReceiptNumber;
+  }
+
+  /** Pays out a pending refund immediately - shared by discharge() (when
+   * refund details are given inline) and the explicit pay-later endpoint. */
+  private async payRefundInternal(
+    tx: Prisma.TransactionClient,
+    refund: { id: string; admissionId: string; tenantId: string; amount: Prisma.Decimal },
+    userId: string,
+    method: string,
+    reference: string | undefined,
+  ): Promise<string> {
+    const refundReceiptNumber = await this.refundDepositsInternal(
+      tx, { id: refund.admissionId, tenantId: refund.tenantId }, refund.amount, userId,
+      `Refund paid out (reference: ${reference ?? method})`,
+    );
+    await tx.admissionRefund.update({
+      where: { id: refund.id },
+      data: { status: 'PAID', paidAt: new Date(), paidById: userId, method, reference, receiptNumber: refundReceiptNumber },
+    });
+    return refundReceiptNumber;
+  }
+
+  /** Pays out a pending refund recorded at discharge (or otherwise) -
+   * narrower permission than taking a deposit, same as an ad-hoc refund. */
+  async payRefund({ tenantId, userId, role }: Actor, id: string, refundId: string, dto: PayRefundDto) {
+    assertCan(role, 'admission:deposit-refund');
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const refund = await tx.admissionRefund.findFirst({ where: { id: refundId, admissionId: id } });
+      if (!refund) throw new NotFoundException('Refund not found');
+      if (refund.status === 'PAID') {
+        throw new BadRequestException('This refund has already been paid');
+      }
+      const receiptNumber = await this.payRefundInternal(
+        tx, { id: refund.id, admissionId: id, tenantId, amount: refund.amount }, userId, dto.method, dto.reference,
+      );
+      await this.audit.record({
+        tenantId, userId, action: 'REFUND_PAID', entityType: 'Admission', entityId: id,
+        metadata: { refundId, amount: refund.amount.toString(), receiptNumber },
+      });
+      return { ok: true, receiptNumber };
+    });
+  }
+
+  /** The tenant-wide "refunds due" list for billing/cashier - every pending
+   * deposit refund across every admission, oldest first. */
+  async listPendingRefunds(tenantId: string) {
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const refunds = await tx.admissionRefund.findMany({
+        where: { status: 'PENDING' },
+        include: {
+          admission: {
+            select: {
+              id: true, admissionNumber: true,
+              patient: { select: { id: true, patientNumber: true, firstName: true, lastName: true } },
+            },
+          },
+        },
+        orderBy: { requestedAt: 'asc' },
+      });
+      return refunds.map((r) => ({
+        id: r.id,
+        amount: r.amount.toString(),
+        reason: r.reason,
+        requestedAt: r.requestedAt,
+        admissionId: r.admission.id,
+        admissionNumber: r.admission.admissionNumber,
+        patient: {
+          id: r.admission.patient.id,
+          patientNumber: r.admission.patient.patientNumber,
+          name: `${r.admission.patient.firstName} ${r.admission.patient.lastName}`.trim(),
+        },
+      }));
+    });
   }
 
   /** A printable receipt for one deposit or refund - headed differently for
@@ -814,12 +990,13 @@ export class AdmissionsService {
       const admission = await tx.admission.findFirst({ where: { id }, include: ADMISSION_INCLUDE });
       if (!admission) throw new NotFoundException('Admission not found');
 
-      const [diagnoses, prescriptions, notes, invoices, deposits] = await Promise.all([
+      const [diagnoses, prescriptions, notes, invoices, deposits, pendingRefunds] = await Promise.all([
         tx.diagnosis.findMany({ where: { admissionId: id }, orderBy: { diagnosedAt: 'asc' } }),
         tx.prescription.findMany({ where: { admissionId: id }, include: { items: true }, orderBy: { prescribedAt: 'asc' } }),
         tx.clinicalNote.findMany({ where: { admissionId: id }, orderBy: { createdAt: 'asc' } }),
         tx.invoice.findMany({ where: { admissionId: id }, include: { payments: true } }),
         tx.admissionDeposit.findMany({ where: { admissionId: id } }),
+        tx.admissionRefund.findMany({ where: { admissionId: id } }),
       ]);
 
       const totalCharged = invoices.reduce((s, i) => s.add(i.totalAmount), D0());
@@ -830,7 +1007,8 @@ export class AdmissionsService {
       const totalDeposited = deposits.reduce(
         (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
       );
-      const balance = totalCharged.sub(totalPaid).sub(totalDeposited);
+      const pendingRefundTotal = pendingRefunds.filter((r) => r.status === 'PENDING').reduce((s, r) => s.add(r.amount), D0());
+      const balance = totalCharged.sub(totalPaid).sub(max(D0(), totalDeposited.sub(pendingRefundTotal)));
 
       return {
         admission,
@@ -840,6 +1018,7 @@ export class AdmissionsService {
         totalCharged: totalCharged.toString(),
         totalPaid: totalPaid.toString(),
         totalDeposited: totalDeposited.toString(),
+        pendingRefund: pendingRefundTotal.gt(0) ? pendingRefundTotal.toString() : null,
         balance: balance.toString(),
       };
     });

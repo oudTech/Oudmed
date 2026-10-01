@@ -187,10 +187,18 @@ export class ReportsService {
       // Unapplied/unrefunded deposit credit, tenant-wide - a liability held,
       // never summed into collections/revenue above (those only ever touch
       // Payment/Invoice rows; deposits live in their own ledger by design).
-      const depositAgg = await tx.admissionDeposit.aggregate({
-        _sum: { amount: true, refundedAmount: true },
-      });
-      const depositsHeld = num(depositAgg._sum.amount) - num(depositAgg._sum.refundedAmount);
+      // Also excludes anything already earmarked in a pending refund (F1c
+      // correction) - that is no longer "held against a bill," it is money
+      // owed back to the patient, its own separate liability below.
+      const [depositAgg, pendingRefundAgg] = await Promise.all([
+        tx.admissionDeposit.aggregate({ _sum: { amount: true, appliedAmount: true, refundedAmount: true } }),
+        tx.admissionRefund.aggregate({ where: { status: 'PENDING' }, _sum: { amount: true } }),
+      ]);
+      const refundsOwed = num(pendingRefundAgg._sum.amount);
+      const depositsHeld = Math.max(
+        0,
+        num(depositAgg._sum.amount) - num(depositAgg._sum.appliedAmount) - num(depositAgg._sum.refundedAmount) - refundsOwed,
+      );
 
       const finance: ReportKpiDTO[] = [
         kpi('total_collection', 'Total Collection', totalCollection.toString(), 'currency', null, 'N/A vs previous period'),
@@ -198,6 +206,7 @@ export class ReportsService {
         kpi('insurance_collected', 'Insurance Collected', insuranceCollected.toString(), 'currency', null, 'N/A vs previous period'),
         kpi('total_discount', 'Total Discount', String(totalDiscount), 'currency', null, 'N/A vs previous period'),
         kpi('deposits_held', 'Deposits held', String(depositsHeld), 'currency', null, 'Liability held, not revenue'),
+        kpi('refunds_owed', 'Refunds owed', String(refundsOwed), 'currency', null, 'Pending payout to patients'),
       ];
 
       // ── operations ──

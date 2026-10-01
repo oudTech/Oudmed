@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import { Button, Field, Input, Select, Textarea, Modal } from '@/components/ui/kit'
+import type { AdmissionPendingRefundDTO } from '@oudhealth/contracts'
 import { useToast } from '@/components/ui/feedback'
 import { can } from '@/lib/permissions'
 import { patientsApi, patientName } from '@/lib/patients'
@@ -18,6 +19,8 @@ import {
   reopenAdmission,
   addAdmissionNote,
   addAdmissionNoteAddendum,
+  listPendingRefunds,
+  payAdmissionRefund,
 } from '@/lib/hospital'
 import {
   AddDiagnosisModal,
@@ -43,6 +46,11 @@ export default function AdmissionWorkspacePage() {
   const ws = useQuery({ queryKey: ['admission-workspace', id], queryFn: () => getAdmissionWorkspace(id), enabled: allowed })
   const canBilling = can(role, 'billing:manage')
   const bill = useQuery({ queryKey: ['admission-bill', id], queryFn: () => getAdmissionBill(id), enabled: canBilling })
+  const canPayRefund = can(role, 'admission:deposit-refund')
+  const pendingRefunds = useQuery({
+    queryKey: ['pending-refunds'], queryFn: listPendingRefunds, enabled: canPayRefund,
+  })
+  const myPendingRefund = pendingRefunds.data?.find((r) => r.admissionId === id) ?? null
 
   const [addVitals, setAddVitals] = useState(false)
   const [addDiagnosis, setAddDiagnosis] = useState(false)
@@ -52,6 +60,7 @@ export default function AdmissionWorkspacePage() {
   const [addingDeposit, setAddingDeposit] = useState(false)
   const [applyingDeposit, setApplyingDeposit] = useState(false)
   const [refunding, setRefunding] = useState<{ id: string; max: number } | null>(null)
+  const [payingRefund, setPayingRefund] = useState(false)
   const [complaintText, setComplaintText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
   const [addendumFor, setAddendumFor] = useState<string | null>(null)
@@ -61,6 +70,7 @@ export default function AdmissionWorkspacePage() {
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['admission-workspace', id] })
     qc.invalidateQueries({ queryKey: ['admission-bill', id] })
+    qc.invalidateQueries({ queryKey: ['pending-refunds'] })
   }
 
   const addComplaint = useMutation({
@@ -139,6 +149,14 @@ export default function AdmissionWorkspacePage() {
               <Stat label="Deposit held" value={naira(bill.data.totalDeposited)} />
               <Stat label="Balance" value={naira(bill.data.balance)} tone={Number(bill.data.balance) > 0 ? '#DC2626' : '#047857'} />
             </div>
+            {bill.data.pendingRefund && (
+              <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800 flex items-center justify-between">
+                <span>Refund pending: {naira(bill.data.pendingRefund)}</span>
+                {canPayRefund && myPendingRefund && (
+                  <button className="font-medium underline" onClick={() => setPayingRefund(true)}>Pay out</button>
+                )}
+              </div>
+            )}
             {bill.data.deposits.length > 0 && (
               <div className="border-t border-gray-100 pt-3">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Deposits</p>
@@ -314,6 +332,12 @@ export default function AdmissionWorkspacePage() {
       <AddNoteAddendumModal admissionId={id} noteId={addendumFor} onClose={() => setAddendumFor(null)} onDone={refresh} />
       <ReopenModal admissionId={id} open={reopening} onClose={() => setReopening(false)} onDone={refresh} />
       <DischargeSummaryPrintModal admissionId={id} open={showDischargeSummary} onClose={() => setShowDischargeSummary(false)} />
+      <PayRefundModal
+        admissionId={id}
+        refund={payingRefund ? myPendingRefund : null}
+        onClose={() => setPayingRefund(false)}
+        onDone={refresh}
+      />
     </div>
   )
 }
@@ -551,6 +575,58 @@ function ReopenModal({ admissionId, open, onClose, onDone }: { admissionId: stri
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button loading={m.isPending} disabled={reason.trim().length < 3} onClick={() => m.mutate()}>Reopen</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function PayRefundModal({
+  admissionId,
+  refund,
+  onClose,
+  onDone,
+}: {
+  admissionId: string
+  refund: AdmissionPendingRefundDTO | null
+  onClose: () => void
+  onDone: () => void
+}) {
+  const toast = useToast()
+  const [method, setMethod] = useState('CASH')
+  const [reference, setReference] = useState('')
+
+  const key = refund?.id ?? ''
+  const [seen, setSeen] = useState(key)
+  if (key !== seen) { setSeen(key); setMethod('CASH'); setReference('') }
+
+  const m = useMutation({
+    mutationFn: () => payAdmissionRefund(admissionId, refund!.id, { method, reference: reference || undefined }),
+    onSuccess: (res) => {
+      toast(`Refund paid - receipt ${res.receiptNumber}`, 'success')
+      onClose(); onDone()
+    },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not pay out the refund.', 'error'),
+  })
+
+  if (!refund) return null
+  return (
+    <Modal open={!!refund} onClose={onClose} title="Pay out pending refund" width={400} align="center">
+      <div className="space-y-3">
+        <p className="text-sm text-gray-500">{naira(refund.amount)} owed to {refund.patient.name}.</p>
+        <Field label="Method">
+          <Select value={method} onChange={(e) => setMethod(e.target.value)}>
+            <option value="CASH">Cash</option>
+            <option value="CARD">Card</option>
+            <option value="TRANSFER">Transfer</option>
+          </Select>
+        </Field>
+        <Field label="Reference (optional)">
+          <Input value={reference} onChange={(e) => setReference(e.target.value)} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={m.isPending} onClick={() => m.mutate()}>Pay out</Button>
         </div>
       </div>
     </Modal>
