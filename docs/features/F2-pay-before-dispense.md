@@ -152,13 +152,13 @@ boundedly-sized alternative, not dismissed here as impractical:
   visit mental model FUNC-2 was built around. The code cost is moderate (a
   category-filtered variant of an existing resolver); the UX/reporting cost
   is the real one, and is not free.
-- **Recommendation**: keep the single shared-invoice design for the initial
-  build, with the UI copy above making the constraint explicit rather than
-  surprising anyone. Revisit a dedicated pharmacy invoice as a follow-up
-  enhancement if this friction proves real in practice once a hospital is
-  actually using the gate day to day - it is a contained, well-understood
-  addition to layer in later, not something that needs to be decided before
-  F2 can ship.
+- **Decision (approved): keep the single shared-invoice design for F2's
+  build**, with the UI copy above making the constraint explicit rather than
+  surprising anyone. A dedicated pharmacy-only invoice is logged in
+  `docs/audit/backlog.md` as a follow-up enhancement to revisit if this
+  friction proves real in practice once a hospital is actually using the
+  gate day to day - a contained, well-understood addition to layer in
+  later, not something that blocked F2 from shipping.
 
 ### Release (`POST /pharmacy/prescriptions/:id/release`)
 

@@ -25,21 +25,27 @@ read this before assuming status from chat history, which decays fast.
 
 OudHealth must support both outpatient and inpatient care at launch, not just
 outpatient. Three features promoted from the backlog's "separate roadmap
-tracks" to Phase 1 proper - design docs first (stop for approval after all
-three), then build one at a time, one report each:
+tracks" to Phase 1 proper. Designs approved (with 5 F1 review questions
+resolved, then 4 further F1 conditions resolved into the doc - see
+`docs/features/F1-inpatient-billing.md`'s current content, not the chat
+history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 
 | Item | What | Status |
 |---|---|---|
-| F1 | Inpatient/admissions billing - running bill per admission, deposits, bed/ward daily charges, transfers, everything during the stay posts to it, interim bills, discharge, HMO pre-auth + one claim per episode | Design doc **done**: `docs/features/F1-inpatient-billing.md`. Awaiting approval. |
-| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | Design doc **done**: `docs/features/F2-pay-before-dispense.md`. Awaiting approval. Depends on F1's `resolveBillingTarget`/`postCharge` for the inpatient exemption - build after F1. |
-| F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Design doc **done**: `docs/features/F3-bulk-import.md`. Awaiting approval. Independent of F1/F2 - can build in any order. |
+| F1a | Schema/migrations, admission episode, deposits ledger (receipts + cash-report entries), inpatient workspace basics | Building |
+| F1b | Daily charges (both rules + short-stay setting), transfers, charges posted during the stay, interim bill | Not started |
+| F1c | Discharge (settlement setting, override), final bill, deposit application and refund, discharge summary | Not started |
+| F1d | Admission claims (`generateForAdmission`, remittance generalisation, backfill verification), occupancy/inpatient revenue reports; add F1 usability cases to the test plan | Not started |
+| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | Approved as designed. One report. Build after F1 (depends on `resolveBillingTarget`/`postCharge`). |
+| F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Approved as designed. One report. Independent of F1/F2. |
 
 ## Remaining, in order
 
 | Item | What | Status |
 |---|---|---|
-| F1-F3 designs | `docs/features/F1-inpatient-billing.md`, `F2-pay-before-dispense.md`, `F3-bulk-import.md` | **Done, all three written.** Stopped here for approval, per instruction - no code written yet. |
-| F1-F3 builds | One feature at a time, in approved order (F1 -> F2 -> F3 recommended, since F2 depends on F1), one report each, stopping after each | Not started |
+| F1a-d | See table above | F1a in progress |
+| F2 | One report | Not started |
+| F3 | One report | Not started |
 | 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts; cover all new F1-F3 screens | Not started |
 | Final | Regression pass, extended usability test plan (original 44 cases + new F1/F2/F3 cases), launch report | Not started |
 
@@ -55,5 +61,7 @@ cases - passes on staging.
 
 See `docs/audit/backlog.md` - nothing Critical found so far. BL-1 (orphaned
 env var) still open, Low. BL-2 (remaining Lagos-time call sites) closed in
-the follow-ups round. BL-3 (per-tenant timezone) newly logged, Low - fine
+the follow-ups round. BL-3 (per-tenant timezone) still open, Low - fine
 while every hospital is in Nigeria, but blocks onboarding one outside it.
+BL-4 (F2's dedicated pharmacy-only invoice, deferred by approval) newly
+logged, Low.
