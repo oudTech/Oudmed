@@ -129,14 +129,34 @@ model Invoice {
   admission path; otherwise the existing visit path, unchanged. Every
   existing caller (`pharmacy.service.ts`, `encounters.service.ts`) keeps
   calling with a `visitId` and is unaffected.
-- **Every charge-creation path during a stay must route to the admission,
-  not a visit**, once a patient is admitted: pharmacy dispense, clinical
-  orders (labs/imaging/procedures), and any consultation/service charge.
-  New helper `resolveBillingTarget(tx, patientId)`: if the patient has an
-  `ADMITTED` admission, return `{ admissionId }`; otherwise fall back to
-  whatever `visitId` the caller already had. Called once at the top of
-  `pharmacy.dispense()` and `encounters.createOrder()`/consultation-charge
-  sites, replacing their direct `visitId` passthrough.
+- **A charge's billing target comes from where it was created, not from the
+  patient's live admission status** (corrected after review - the first pass
+  got this backwards). A prescription or order already carries its own
+  source: `admissionId` if written from the inpatient workspace, `visitId` if
+  written from the outpatient encounter workspace. That recorded source wins
+  outright. `resolveBillingTarget(tx, patientId)` - find the patient's open
+  `ADMITTED` admission, or `null` - is only consulted when a prescription has
+  **neither** recorded (written from the general patient chart, with no
+  encounter context at all), so it does not land on a stray standalone
+  invoice. Concretely: `pharmacy.dispense()` checks `rx.admissionId`, then
+  `rx.visitId`, and only calls `resolveBillingTarget` if both are empty;
+  `encounters.createOrder()` is only ever reached from the outpatient
+  workspace, so it always charges its own `visitId` and never calls
+  `resolveBillingTarget` at all - an order raised there stays on that visit's
+  invoice even if the patient is admitted moments later. The inpatient
+  workspace's own order/note creation (F1b) will charge the admission
+  directly, the same way its prescriptions already do, by passing
+  `admissionId` as its own recorded source - not through this fallback.
+- **The admission's originating visit is not special-cased.** A charge
+  created against `originatingVisitId` after the admission has started still
+  follows the rule above and stays on that visit's own invoice - the same as
+  any other visit-sourced charge. Carving out an exception here (merging the
+  originating visit's later charges into the admission bill) was considered
+  and rejected: it would require checking `admission.originatingVisitId ==
+  visit.id` at every charge site, a second, harder-to-audit fallback path
+  alongside the general rule, for a scenario normal staff workflow design
+  already avoids - once admitted, a clinician records new activity against
+  the admission workspace, not the now-superseded originating visit.
 - `flagReopenedInvoices`/`acknowledgeReopen` (FUNC-2, `billing.service.ts`)
   are generalised to accept either a `visitId` or an `admissionId` lookup -
   same two methods, one more `where` clause each, so a reopened admission's
@@ -422,12 +442,24 @@ admin screen (no history table needed for v1: changing a rate only affects
 *future* nights, since a night already charged is a frozen `InvoiceLine`
 with its own `unitPrice` - changing `Ward.dailyRate` tomorrow cannot alter
 an invoice line already posted today). `dailyRate` is `null` until an admin
-sets it; an admission cannot be opened against a ward with no rate set
-(`BadRequestException`, clear message naming the ward) - this is a
-deliberate hard stop so "forgot to price a ward" fails loudly at admission
-time, not silently at the first missed night. `dayCaseRate` is optional and
-only required if the hospital chooses `DAY_CASE_RATE` below for a ward that
-can actually have a short stay.
+sets it. `dayCaseRate` is optional and only required if the hospital chooses
+`DAY_CASE_RATE` below for a ward that can actually have a short stay.
+
+**Corrected: a missing rate never blocks the admission or transfer itself**
+(the original design's hard `BadRequestException` was wrong - clinical need
+to admit a patient must never wait on billing setup). `admit`/`transfer`
+succeed regardless, and write a `WARD_RATE_MISSING` audit entry; the
+admitting/transferring user gets a toast warning immediately, the admission
+itself shows a persistent "Ward rate not set - bed charges on hold" banner
+(inpatient workspace and wards board), and Hospital Admin/Accountant see
+every such admission on their dashboard ("Ward rate not set" widget,
+`home.service.ts`, linking to the wards board to fix it) until a rate is
+set. F1b's daily bed-charge job is written to be naturally idempotent and
+catch-up-safe over every uncharged past night (keyed by `BedDayCharge`'s
+`[admissionId, nightOf]` uniqueness) rather than only "yesterday" - so once
+a rate is set, every night that passed with no rate posts automatically, at
+the rate now in effect, exactly once each. The same applies to
+`DAY_CASE_RATE` with no `dayCaseRate` set: it holds rather than blocks.
 
 ### Charging rule (per-hospital, configurable, defined precisely)
 
@@ -485,10 +517,10 @@ real hospital billing, not an artefact of one particular counting rule:
   - `NONE` → no charge at all.
   - `MINIMUM_FULL_DAY` (default) → one full night at the ward's `dailyRate`.
   - `DAY_CASE_RATE` → one charge at the ward's own `dayCaseRate`. If the
-    ward has no `dayCaseRate` set, this **blocks the charge** with a clear
-    message naming the ward - the same "fail loudly, not silently"
-    principle as a missing `dailyRate`, not a silent fallback to the full
-    rate.
+    ward has no `dayCaseRate` set, this **holds** the same way a missing
+    `dailyRate` does (section 6's "Rate source" above) - flagged on the
+    admission and the admin/billing dashboard, posted automatically once a
+    rate is set - never a silent fallback to the full `dailyRate`.
 - **One or more midnights crossed** → `shortStayChargeMode` does not apply
   at all; the chosen `inpatientChargeRule` governs every night/block exactly
   as described above, unchanged from the original design.

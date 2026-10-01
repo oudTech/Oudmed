@@ -38,7 +38,7 @@ const ADMISSION_INCLUDE = {
   admittingDoctor: { select: { id: true, fullName: true } },
   attendingDoctor: { select: { id: true, fullName: true } },
   department: { select: { id: true, name: true } },
-  ward: { select: { id: true, name: true } },
+  ward: { select: { id: true, name: true, dailyRate: true } },
   bed: { select: { id: true, label: true } },
 } satisfies Prisma.AdmissionInclude;
 
@@ -102,13 +102,13 @@ export class AdmissionsService {
         throw new ConflictException({ message: 'That bed is not available', code: 'BED_UNAVAILABLE' });
       }
 
-      // A ward with no rate set cannot accrue bed-day charges at all (F1b) -
-      // failing loudly here, at admission time, beats discovering it silently
-      // at the first missed night.
+      // A ward with no rate set cannot accrue bed-day charges (F1b), but that
+      // is never a reason to block a real admission (F1 condition 2) - the
+      // bed charges simply hold until a rate is set (F1b's daily-charge job
+      // catches up on every uncharged night, no lost or doubled charges),
+      // and admin/billing are flagged below instead.
       const ward = await tx.ward.findFirst({ where: { id: dto.wardId }, select: { dailyRate: true, name: true } });
-      if (!ward?.dailyRate) {
-        throw new BadRequestException(`Ward "${ward?.name ?? dto.wardId}" has no daily rate set - ask an admin to set one before admitting into it`);
-      }
+      const wardRateMissing = !ward?.dailyRate;
 
       const admittedAt = new Date();
       const admission = await tx.admission.create({
@@ -143,8 +143,14 @@ export class AdmissionsService {
       });
       await this.audit.record({
         tenantId, userId, action: 'ADMIT', entityType: 'Admission', entityId: admission.id,
-        metadata: { admissionNumber: admission.admissionNumber, bedId: dto.bedId },
+        metadata: { admissionNumber: admission.admissionNumber, bedId: dto.bedId, wardRateMissing },
       });
+      if (wardRateMissing) {
+        await this.audit.record({
+          tenantId, userId, action: 'WARD_RATE_MISSING', entityType: 'Admission', entityId: admission.id,
+          metadata: { wardId: dto.wardId, wardName: ward?.name ?? null },
+        });
+      }
       return admission;
     });
   }
@@ -164,9 +170,7 @@ export class AdmissionsService {
         throw new ConflictException({ message: 'That bed is not available', code: 'BED_UNAVAILABLE' });
       }
       const newWard = await tx.ward.findFirst({ where: { id: newBed.wardId }, select: { dailyRate: true, name: true } });
-      if (!newWard?.dailyRate) {
-        throw new BadRequestException(`Ward "${newWard?.name ?? newBed.wardId}" has no daily rate set - ask an admin to set one before transferring into it`);
-      }
+      const wardRateMissing = !newWard?.dailyRate;
 
       if (admission.bedId) {
         await tx.bed.update({ where: { id: admission.bedId }, data: { status: BedStatus.AVAILABLE } });
@@ -190,8 +194,14 @@ export class AdmissionsService {
       });
       await this.audit.record({
         tenantId, userId, action: 'TRANSFER', entityType: 'Admission', entityId: id,
-        metadata: { from: admission.bedId, to: newBed.id, reason: dto.reason },
+        metadata: { from: admission.bedId, to: newBed.id, reason: dto.reason, wardRateMissing },
       });
+      if (wardRateMissing) {
+        await this.audit.record({
+          tenantId, userId, action: 'WARD_RATE_MISSING', entityType: 'Admission', entityId: id,
+          metadata: { wardId: newBed.wardId, wardName: newWard?.name ?? null },
+        });
+      }
       return updated;
     });
   }

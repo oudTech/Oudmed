@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { PatientPickerValue } from '@/lib/hospital'
 import { Modal, Field, Input, Select, Textarea, Button } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
 import { PatientPicker } from './PatientPicker'
 import {
   getDoctors,
@@ -31,6 +32,7 @@ export function NewAdmissionModal({
   prefill?: { wardId?: string; bedId?: string }
 }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const doctors = useQuery({ queryKey: ['doctors'], queryFn: getDoctors, enabled: open })
   const departments = useQuery({ queryKey: ['departments'], queryFn: getDepartments, enabled: open })
   const wards = useQuery({ queryKey: ['wards-list'], queryFn: getWards, enabled: open })
@@ -83,9 +85,12 @@ export function NewAdmissionModal({
       }
       return admitPatient(payload)
     },
-    onSuccess: () => {
+    onSuccess: (admission) => {
       qc.invalidateQueries({ queryKey: ['admissions'] })
       qc.invalidateQueries({ queryKey: ['wards'] })
+      if (!admission.ward?.dailyRate) {
+        toast('Admitted - but this ward has no daily rate set, so bed charges are on hold until one is.', 'error')
+      }
       onClose()
     },
     onError: (e: any) => setError(e?.response?.data?.message ?? 'Could not admit the patient.'),

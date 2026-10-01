@@ -70,4 +70,32 @@ describe('ReportsService.payments (integration - deposits as cash)', () => {
     // net cash: deposit in, minus refund out, no invoice payments in this window
     expect(res.totalAmount).toBe('30000');
   });
+
+  it('F1 condition 3: a deposit never moves revenue/collection KPIs, and appears separately as a held liability', async () => {
+    const ward = await ownerPrisma.ward.create({
+      data: { tenantId, name: `Ward ${Math.random().toString(36).slice(2, 8)}`, wardType: 'GENERAL', dailyRate: 15000 },
+    });
+    const bed = await ownerPrisma.bed.create({ data: { tenantId, wardId: ward.id, label: 'A1' } });
+    const patient = await makePatient(tenantId);
+    const admission = await admissions.admit(nurseActor, {
+      patientId: patient.id, wardId: ward.id, bedId: bed.id, admissionType: 'ELECTIVE',
+    } as any);
+
+    const from = new Date(Date.now() - 60_000).toISOString().slice(0, 10);
+    const to = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const before = await reports.overview(accountantActor, { from, to });
+    const revenueBefore = before.finance.find((k) => k.key === 'total_collection')!.value;
+    const depositsHeldBefore = Number(before.finance.find((k) => k.key === 'deposits_held')!.value);
+
+    await admissions.addDeposit(receptionActor, admission.id, { amount: 75000, method: 'CASH' } as any);
+
+    const after = await reports.overview(accountantActor, { from, to });
+    const revenueAfter = after.finance.find((k) => k.key === 'total_collection')!.value;
+    const depositsHeldAfter = Number(after.finance.find((k) => k.key === 'deposits_held')!.value);
+
+    // taking a deposit must not move the collections/revenue KPI at all...
+    expect(revenueAfter).toBe(revenueBefore);
+    // ...but must show up, separately, as held liability.
+    expect(depositsHeldAfter - depositsHeldBefore).toBe(75000);
+  });
 });

@@ -52,14 +52,19 @@ describe('AdmissionsService (integration - F1a)', () => {
     return { ward, bed };
   }
 
-  it('cannot admit into a ward with no dailyRate set', async () => {
-    const { bed } = await makeWard(null);
+  it('admitting into a ward with no dailyRate set succeeds (never blocked on billing setup)', async () => {
+    const { ward, bed } = await makeWard(null);
     const patient = await makePatient(tenantId);
-    await expect(
-      admissions.admit(nurseActor, {
-        patientId: patient.id, wardId: bed.wardId, bedId: bed.id, admissionType: 'ELECTIVE',
-      } as any),
-    ).rejects.toThrow(/no daily rate/);
+    const admission = await admissions.admit(nurseActor, {
+      patientId: patient.id, wardId: ward.id, bedId: bed.id, admissionType: 'ELECTIVE',
+    } as any);
+    expect(admission.status).toBe('ADMITTED');
+    expect(admission.ward?.dailyRate).toBeNull();
+
+    const log = await ownerPrisma.auditLog.findFirst({
+      where: { tenantId, entityId: admission.id, action: 'WARD_RATE_MISSING' },
+    });
+    expect(log).not.toBeNull();
   });
 
   it('admit creates the admission, occupies the bed, and opens the first ward-stay row', async () => {
@@ -79,28 +84,32 @@ describe('AdmissionsService (integration - F1a)', () => {
     expect(stays[0].endedAt).toBeNull();
   });
 
-  it('transfer closes the old ward-stay row and opens a new one, blocked into a no-rate ward', async () => {
+  it('transfer closes the old ward-stay row and opens a new one, never blocked into a no-rate ward', async () => {
     const { ward: wardA, bed: bedA } = await makeWard(15000);
-    const { bed: bedB } = await makeWard(20000);
     const { bed: noRateBed } = await makeWard(null);
     const patient = await makePatient(tenantId);
     const admission = await admissions.admit(nurseActor, {
       patientId: patient.id, wardId: wardA.id, bedId: bedA.id, admissionType: 'ELECTIVE',
     } as any);
 
-    await expect(
-      admissions.transfer(nurseActor, admission.id, { bedId: noRateBed.id } as any),
-    ).rejects.toThrow(/no daily rate/);
+    const transferred = await admissions.transfer(nurseActor, admission.id, { bedId: noRateBed.id } as any);
+    expect(transferred.ward?.dailyRate).toBeNull();
+    const log = await ownerPrisma.auditLog.findFirst({
+      where: { tenantId, entityId: admission.id, action: 'WARD_RATE_MISSING' },
+    });
+    expect(log).not.toBeNull();
 
+    const { bed: bedB } = await makeWard(20000);
     await admissions.transfer(nurseActor, admission.id, { bedId: bedB.id } as any);
     const stays = await ownerPrisma.admissionWardStay.findMany({
       where: { admissionId: admission.id },
       orderBy: { startedAt: 'asc' },
     });
-    expect(stays).toHaveLength(2);
+    expect(stays).toHaveLength(3);
     expect(stays[0].endedAt).not.toBeNull();
-    expect(stays[1].endedAt).toBeNull();
-    expect(stays[1].bedId).toBe(bedB.id);
+    expect(stays[1].endedAt).not.toBeNull();
+    expect(stays[2].endedAt).toBeNull();
+    expect(stays[2].bedId).toBe(bedB.id);
   });
 
   it('a charge during the stay posts to the admission running bill, not a standalone invoice', async () => {

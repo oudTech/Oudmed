@@ -74,7 +74,7 @@ export interface AdmissionDTO {
   admittingDoctor: { id: string; fullName: string } | null
   attendingDoctor: { id: string; fullName: string } | null
   department: { id: string; name: string } | null
-  ward: { id: string; name: string } | null
+  ward: { id: string; name: string; dailyRate: string | null } | null
   bed: { id: string; label: string } | null
 }
 

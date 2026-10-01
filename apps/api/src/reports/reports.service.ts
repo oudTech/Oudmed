@@ -184,11 +184,20 @@ export class ReportsService {
       const invoiceDiscount = invoices.reduce((s, i) => s + (num(i.subtotal) - num(i.totalAmount)), 0);
       const totalDiscount = Math.max(0, lineDiscount + invoiceDiscount);
 
+      // Unapplied/unrefunded deposit credit, tenant-wide - a liability held,
+      // never summed into collections/revenue above (those only ever touch
+      // Payment/Invoice rows; deposits live in their own ledger by design).
+      const depositAgg = await tx.admissionDeposit.aggregate({
+        _sum: { amount: true, refundedAmount: true },
+      });
+      const depositsHeld = num(depositAgg._sum.amount) - num(depositAgg._sum.refundedAmount);
+
       const finance: ReportKpiDTO[] = [
         kpi('total_collection', 'Total Collection', totalCollection.toString(), 'currency', null, 'N/A vs previous period'),
         kpi('invoice_count', 'Invoice count', String(invoices.length), 'number', null, 'N/A vs previous period'),
         kpi('insurance_collected', 'Insurance Collected', insuranceCollected.toString(), 'currency', null, 'N/A vs previous period'),
         kpi('total_discount', 'Total Discount', String(totalDiscount), 'currency', null, 'N/A vs previous period'),
+        kpi('deposits_held', 'Deposits held', String(depositsHeld), 'currency', null, 'Liability held, not revenue'),
       ];
 
       // ── operations ──

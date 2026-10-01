@@ -189,7 +189,7 @@ function WardSection({
         {ward.dailyRate ? (
           <span className="text-xs text-gray-500">{naira(ward.dailyRate)}/night</span>
         ) : canManage ? (
-          <span className="text-xs text-amber-600">No rate set - cannot admit</span>
+          <span className="text-xs text-amber-600">No rate set - bed charges on hold</span>
         ) : null}
         {canManage && (
           <>
@@ -321,7 +321,7 @@ function NewWardModal({ open, onClose }: { open: boolean; onClose: () => void })
           </Field>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Daily rate (₦)" required>
+          <Field label="Daily rate (₦)">
             <Input type="number" min={0} value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} placeholder="e.g. 15000" />
           </Field>
           <Field label="Day-case rate (₦, optional)">
@@ -329,7 +329,7 @@ function NewWardModal({ open, onClose }: { open: boolean; onClose: () => void })
           </Field>
         </div>
         <p className="text-xs text-gray-400">
-          A ward needs a daily rate before it can accept an admission - it is never too late to set it from "edit rate" later.
+          Without a daily rate, patients can still be admitted here, but bed charges stay on hold until one is set - it is never too late to set it from "edit rate" later.
         </p>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">

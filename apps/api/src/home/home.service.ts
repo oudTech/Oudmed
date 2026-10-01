@@ -171,7 +171,7 @@ export class HomeService {
 
       // ── money ──
       if (role === 'ACCOUNTANT' || isAdmin) {
-        const [payToday, invToday, outstandingInv, claims] = await Promise.all([
+        const [payToday, invToday, outstandingInv, claims, billingHolds] = await Promise.all([
           tx.payment.aggregate({ _sum: { amount: true }, where: { paidAt: { gte: from, lte: to }, reversedAt: null } }),
           tx.invoice.aggregate({ _sum: { totalAmount: true }, where: { createdAt: { gte: from, lte: to }, status: { not: 'CANCELLED' } } }),
           tx.invoice.findMany({
@@ -181,6 +181,15 @@ export class HomeService {
           tx.insuranceClaim.findMany({
             where: { status: { in: ['SUBMITTED', 'PART_PAID', 'REJECTED'] } },
             select: { status: true, claimedAmount: true, paidAmount: true, writeOffAmount: true },
+          }),
+          // F1 condition 2: admitting/transferring into a no-rate ward is
+          // never blocked - this surfaces the hold to admin/billing instead,
+          // since bed-day charges for these admissions cannot post until a
+          // rate is set.
+          tx.admission.findMany({
+            where: { status: 'ADMITTED', ward: { dailyRate: null } },
+            include: { patient: { select: { firstName: true, lastName: true } }, ward: { select: { name: true } } },
+            take: 10,
           }),
         ]);
         const outstanding = outstandingInv.reduce((s, i) => {
@@ -210,6 +219,16 @@ export class HomeService {
               { label: 'Part paid', value: String(claims.filter((c) => c.status === 'PART_PAID').length), tone: 'warn' },
               { label: 'Rejected', value: String(rejected), tone: rejected ? 'bad' : 'default' },
             ],
+          });
+        }
+        if (billingHolds.length) {
+          widgets.push({
+            key: 'billing-holds', title: 'Ward rate not set - bed charges on hold', kind: 'list', href: '/wards',
+            items: billingHolds.map((a) => ({
+              primary: name(a.patient),
+              secondary: `${a.ward?.name ?? 'Unknown ward'} · ${a.admissionNumber}`,
+              tone: 'bad',
+            })),
           });
         }
       }

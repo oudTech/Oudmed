@@ -313,15 +313,15 @@ export class EncountersService {
         });
       }
 
-      // A patient who is currently admitted has their charges routed to the
-      // running bill even when this order was raised from the ordinary
-      // encounter workspace, not the inpatient one (F1) - the order record
-      // itself stays visit-linked either way.
-      const admissionId = await this.billing.resolveBillingTarget(tx, visit.patientId);
-      const { lineId } = await this.billing.postCharge(tx, {
+      // This order's source is the visit it was raised from (F1, corrected):
+      // it always charges that visit's invoice, even if the patient happens
+      // to be admitted right now. A patient's live admission status is not
+      // the order's source - only the inpatient workspace's own order
+      // creation (F1b) charges an admission directly.
+      const { lineId } = await this.billing.postChargeToVisit(tx, {
         tenantId: actor.tenantId,
         userId: actor.userId,
-        ...(admissionId ? { admissionId } : { visitId }),
+        visitId,
         patientId: visit.patientId,
         serviceItemId,
         orderId: order.id,

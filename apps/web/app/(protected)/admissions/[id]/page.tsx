@@ -87,6 +87,11 @@ export default function AdmissionWorkspacePage() {
             <p className="text-xl font-bold text-gray-900">{naira(ws.data.totalDeposited)}</p>
           </div>
         </div>
+        {a.status === 'ADMITTED' && !a.ward?.dailyRate && (
+          <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+            Ward rate not set - bed charges on hold. Once a rate is set for {a.ward?.name ?? 'this ward'}, every missed night posts automatically.
+          </div>
+        )}
       </div>
 
       <div className="flex-1 p-8 space-y-6 max-w-5xl">

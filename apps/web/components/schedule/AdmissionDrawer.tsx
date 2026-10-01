@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { AdmissionDTO } from '@oudhealth/contracts'
 import { Drawer, Button, Badge, Field, Select, Textarea } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
 import { dischargeAdmission, transferAdmission, getWardBoard } from '@/lib/hospital'
 import { can } from '@/lib/permissions'
 
@@ -27,6 +28,7 @@ export function AdmissionDrawer({
   onClose: () => void
 }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const { data: session } = useSession()
   const role = session?.role
   const [mode, setMode] = useState<'view' | 'discharge' | 'transfer'>('view')
@@ -49,7 +51,13 @@ export function AdmissionDrawer({
   })
   const transfer = useMutation({
     mutationFn: () => transferAdmission(admission!.id, targetBed),
-    onSuccess: () => { invalidate(); setMode('view') },
+    onSuccess: (updated) => {
+      invalidate()
+      setMode('view')
+      if (!updated.ward?.dailyRate) {
+        toast('Transferred - but this ward has no daily rate set, so bed charges are on hold until one is.', 'error')
+      }
+    },
     onError: (e: any) => setError(e?.response?.data?.message ?? 'Could not transfer.'),
   })
 

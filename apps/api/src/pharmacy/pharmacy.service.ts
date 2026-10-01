@@ -146,13 +146,17 @@ export class PharmacyService {
       // charge the delta only
       const billable = plan.filter((p) => p.delta > 0 && p.unitPrice > 0);
       if (billable.length) {
-        // Precedence (F1): an admissionId already recorded on the prescription
-        // (written from the inpatient workspace) wins outright; otherwise, a
-        // patient who is currently admitted still routes here even if this
-        // prescription was written from the general patient chart with no
-        // visit/admission context at all - an admitted patient's charges
-        // belong on their running bill, not a stray standalone invoice.
-        const admissionId = rx.admissionId ?? (await this.billing.resolveBillingTarget(tx, rx.patientId));
+        // Precedence (F1, corrected): the charge follows where the
+        // prescription was actually written, not the patient's live status.
+        // admissionId or visitId already recorded on the prescription is the
+        // source of truth and wins outright, even if the patient is now
+        // admitted (an outpatient script stays on its own visit invoice) or
+        // was admitted when written but has since been discharged. Only a
+        // prescription with no recorded context at all (written from the
+        // general patient chart) falls back to the patient's open admission,
+        // so it lands on a running bill instead of a stray standalone invoice.
+        const admissionId = rx.admissionId
+          ?? (rx.visitId ? null : await this.billing.resolveBillingTarget(tx, rx.patientId));
         if (admissionId) {
           for (const p of billable) {
             await this.billing.postCharge(tx, {
