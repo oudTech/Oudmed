@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
-import type { ComplaintDTO, PatientDTO } from '@oudhealth/contracts'
+import type { ComplaintDTO, PatientDTO, PatientOrderRowDTO, PrescriptionDTO } from '@oudhealth/contracts'
 import { Button, Textarea } from '@/components/ui/kit'
 import {
   patientsApi,
@@ -26,6 +26,8 @@ import {
   AddDocumentModal,
   ComplaintDetailModal,
 } from '@/components/patients/clinicalModals'
+import { PrescriptionPrintModal } from '@/components/patients/PrescriptionPrintModal'
+import { LabReportPrintModal } from '@/components/patients/LabReportPrintModal'
 import { RecordPaymentModal } from '@/components/billing/RecordPaymentModal'
 import { InvoiceDetailDrawer } from '@/components/billing/InvoiceDetailDrawer'
 import { VISIT_STATUS_META } from '@/lib/hospital'
@@ -152,10 +154,10 @@ export default function PatientDetailPage() {
           {tab === 'Appointments' && <Appointments id={id} />}
           {tab === 'Complaints' && <Complaints id={id} role={session?.role} />}
           {tab === 'Diagnoses' && <Diagnoses id={id} role={session?.role} />}
-          {tab === 'Investigations' && <Investigations id={id} />}
+          {tab === 'Investigations' && <Investigations id={id} patient={p} />}
           {tab === 'Medical background' && <MedicalBackground p={p} role={session?.role} />}
           {tab === 'Vital Signs' && <Vitals id={id} role={session?.role} />}
-          {tab === 'Prescriptions' && <Prescriptions id={id} role={session?.role} />}
+          {tab === 'Prescriptions' && <Prescriptions id={id} role={session?.role} patient={p} />}
           {tab === 'Documents' && <Documents id={id} role={session?.role} />}
           {tab === 'Invoices' && <Invoices id={id} role={session?.role} patientName={patientName(p)} />}
         </div>
@@ -413,14 +415,15 @@ function Appointments({ id }: { id: string }) {
   )
 }
 
-function Investigations({ id }: { id: string }) {
+function Investigations({ id, patient }: { id: string; patient: PatientDTO }) {
   const q = useQuery({ queryKey: ['pt-orders', id], queryFn: () => patientsApi.orders(id) })
+  const [printing, setPrinting] = useState<PatientOrderRowDTO | null>(null)
   if (!q.data) return <Empty>Loading…</Empty>
   if (!q.data.length) return <Empty>No investigations ordered.</Empty>
   return (
     <>
       <SectionHead title="Investigations" />
-      <TableShell head={['Date', 'Type', 'Test', 'Ordered by', 'Status', 'Result', 'Flag']}>
+      <TableShell head={['Date', 'Type', 'Test', 'Ordered by', 'Status', 'Result', 'Flag', '']}>
         {q.data.map((o) => {
           const om = ORDER_STATUS_META[o.status]
           return (
@@ -441,10 +444,23 @@ function Investigations({ id }: { id: string }) {
               <td className={`px-3 py-2.5 ${o.abnormalFlag && o.abnormalFlag !== 'Normal' ? 'text-red-600 font-semibold' : ''}`}>
                 {o.abnormalFlag ?? '-'}
               </td>
+              <td className="px-3 py-2.5">
+                {o.status === 'RESULTED' && (
+                  <button className="text-xs font-medium text-primary hover:underline" onClick={() => setPrinting(o)}>
+                    Print
+                  </button>
+                )}
+              </td>
             </tr>
           )
         })}
       </TableShell>
+      <LabReportPrintModal
+        order={printing}
+        patient={{ name: patientName(patient), patientNumber: patient.patientNumber, age: patient.age, gender: patient.gender }}
+        open={!!printing}
+        onClose={() => setPrinting(null)}
+      />
     </>
   )
 }
@@ -631,8 +647,9 @@ function Vital({ flag, children }: { flag: 'low' | 'high' | null; children: Reac
   )
 }
 
-function Prescriptions({ id, role }: { id: string; role?: string }) {
+function Prescriptions({ id, role, patient }: { id: string; role?: string; patient: PatientDTO }) {
   const [add, setAdd] = useState(false)
+  const [printing, setPrinting] = useState<PrescriptionDTO | null>(null)
   const q = useQuery({ queryKey: ['prescriptions', id], queryFn: () => patientsApi.prescriptions(id) })
   return (
     <>
@@ -643,7 +660,7 @@ function Prescriptions({ id, role }: { id: string; role?: string }) {
       {!q.data?.length ? (
         <Empty>No prescriptions.</Empty>
       ) : (
-        <TableShell head={['Date', 'Medicine', 'Dosage', 'Frequency', 'Route', 'Duration', 'Prescriber', 'Status', 'Dispensing']}>
+        <TableShell head={['Date', 'Medicine', 'Dosage', 'Frequency', 'Route', 'Duration', 'Prescriber', 'Status', 'Dispensing', '']}>
           {q.data.flatMap((rx) =>
             rx.items.map((it, idx) => {
               const m = PRESCRIPTION_STATUS_META[rx.status]
@@ -678,6 +695,13 @@ function Prescriptions({ id, role }: { id: string; role?: string }) {
                       </span>
                     )}
                   </td>
+                  <td className="px-3 py-2.5">
+                    {idx === 0 && (
+                      <button className="text-xs font-medium text-primary hover:underline" onClick={() => setPrinting(rx)}>
+                        Print
+                      </button>
+                    )}
+                  </td>
                 </tr>
               )
             }),
@@ -685,6 +709,12 @@ function Prescriptions({ id, role }: { id: string; role?: string }) {
         </TableShell>
       )}
       <AddPrescriptionModal patientId={id} open={add} onClose={() => setAdd(false)} />
+      <PrescriptionPrintModal
+        prescription={printing}
+        patient={{ name: patientName(patient), patientNumber: patient.patientNumber, age: patient.age, gender: patient.gender }}
+        open={!!printing}
+        onClose={() => setPrinting(null)}
+      />
     </>
   )
 }

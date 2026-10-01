@@ -4,13 +4,14 @@ import { useRouter } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { InvoiceDetailDTO } from '@oudhealth/contracts'
-import { Button, Drawer, Field, Textarea } from '@/components/ui/kit'
+import { Button, Drawer, Field, Input, Textarea } from '@/components/ui/kit'
 import { useToast } from '@/components/ui/feedback'
 import { can } from '@/lib/permissions'
 import { billingApi, naira, INVOICE_STATUS_META, PAYER_TYPES } from '@/lib/billing'
 import { claimsApi, CLAIM_STATUS_META } from '@/lib/claims'
 import { RecordPaymentModal } from './RecordPaymentModal'
 import { ReceiptView } from './ReceiptView'
+import { AddItemModal, type BuilderLine } from './AddItemModal'
 
 const dt = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB') : '-')
 const payerLabel = (v: string) => PAYER_TYPES.find((p) => p.value === v)?.label ?? v
@@ -38,6 +39,11 @@ export function InvoiceDetailDrawer({
   const [reversingId, setReversingId] = useState<string | null>(null)
   const [reverseReason, setReverseReason] = useState('')
   const [err, setErr] = useState('')
+  const [addingLine, setAddingLine] = useState(false)
+  const [editingLineId, setEditingLineId] = useState<string | null>(null)
+  const [editQty, setEditQty] = useState('')
+  const [editPrice, setEditPrice] = useState('')
+  const [editDiscount, setEditDiscount] = useState('')
 
   const q = useQuery({
     queryKey: ['billing-invoice', invoiceId],
@@ -74,8 +80,39 @@ export function InvoiceDetailDrawer({
     onSuccess: () => { toast('Reopen notice acknowledged', 'success'); invalidate() },
     onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not acknowledge.', 'error'),
   })
+  const addLine = useMutation({
+    mutationFn: (line: BuilderLine) =>
+      billingApi.addInvoiceLine(invoiceId!, {
+        description: line.description, quantity: line.quantity, unitPrice: line.unitPrice,
+        discountPct: line.discountPct || undefined, category: line.category,
+        serviceItemId: line.serviceItemId, drugId: line.drugId,
+      }),
+    onSuccess: () => { toast('Line added', 'success'); invalidate() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not add the line.', 'error'),
+  })
+  const updateLine = useMutation({
+    mutationFn: (p: { lineId: string; quantity: number; unitPrice: number; discountPct: number }) =>
+      billingApi.updateInvoiceLine(invoiceId!, p.lineId, {
+        quantity: p.quantity, unitPrice: p.unitPrice, discountPct: p.discountPct,
+      }),
+    onSuccess: () => { setEditingLineId(null); toast('Line updated', 'success'); invalidate() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not update the line.', 'error'),
+  })
+  const removeLine = useMutation({
+    mutationFn: (lineId: string) => billingApi.removeInvoiceLine(invoiceId!, lineId),
+    onSuccess: () => { toast('Line removed', 'success'); invalidate() },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not remove the line.', 'error'),
+  })
 
   const meta = inv ? INVOICE_STATUS_META[inv.status] : null
+  const locked = !!inv && (inv.payments.some((p) => !p.reversedAt) || !!inv.claim)
+  const canEditLines = canManage && !!inv && inv.status !== 'CANCELLED' && !locked
+  const startEdit = (l: NonNullable<typeof inv>['lines'][number]) => {
+    setEditingLineId(l.id)
+    setEditQty(String(l.quantity))
+    setEditPrice(String(Number(l.unitPrice)))
+    setEditDiscount(l.discountPct ? String(Number(l.discountPct)) : '')
+  }
 
   return (
     <>
@@ -154,30 +191,93 @@ export function InvoiceDetailDrawer({
               </div>
             )}
 
+            {!canEditLines && canManage && inv.status !== 'CANCELLED' && (
+              <p className="text-xs text-gray-400 -mb-2">
+                {inv.claim
+                  ? 'This invoice has an insurance claim - line items cannot be edited.'
+                  : locked
+                    ? 'Reverse the payment(s) on this invoice to edit its line items.'
+                    : null}
+              </p>
+            )}
+
             <div className="border border-gray-100 rounded-xl overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-500">
-                  <tr>{['Item', 'Category', 'Provided by', 'Unit ₦', 'Qty', 'Disc %', 'Amount'].map((h) => (
-                    <th key={h} className="text-left font-medium px-3 py-2">{h}</th>
+                  <tr>{['Item', 'Category', 'Provided by', 'Unit ₦', 'Qty', 'Disc %', 'Amount', ...(canEditLines ? [''] : [])].map((h, i) => (
+                    <th key={i} className="text-left font-medium px-3 py-2">{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody>
                   {inv.lines.map((l) => (
-                    <tr key={l.id} className="border-t border-gray-100">
-                      <td className="px-3 py-2">{l.description}</td>
-                      <td className="px-3 py-2 text-gray-500">{l.category ?? '-'}</td>
-                      <td className="px-3 py-2 text-gray-500">{l.providedByName ?? '-'}</td>
-                      <td className="px-3 py-2">{naira(l.unitPrice)}</td>
-                      <td className="px-3 py-2">{l.quantity}</td>
-                      <td className="px-3 py-2">{l.discountPct ? `${Number(l.discountPct)}%` : '-'}</td>
-                      <td className="px-3 py-2">{naira(l.lineTotal)}</td>
-                    </tr>
+                    editingLineId === l.id ? (
+                      <tr key={l.id} className="border-t border-gray-100 bg-blue-50/30">
+                        <td className="px-3 py-2" colSpan={3}>{l.description}</td>
+                        <td className="px-2 py-1.5"><Input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-24" /></td>
+                        <td className="px-2 py-1.5"><Input type="number" value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-16" /></td>
+                        <td className="px-2 py-1.5"><Input type="number" value={editDiscount} onChange={(e) => setEditDiscount(e.target.value)} className="w-16" /></td>
+                        <td className="px-3 py-2 text-gray-500">
+                          {naira((Number(editPrice) || 0) * (Number(editQty) || 0) * (1 - (Number(editDiscount) || 0) / 100))}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <button
+                            className="text-xs text-primary font-medium hover:underline disabled:opacity-50"
+                            disabled={updateLine.isPending || !Number(editQty) || Number(editPrice) < 0}
+                            onClick={() => updateLine.mutate({
+                              lineId: l.id,
+                              quantity: Number(editQty),
+                              unitPrice: Number(editPrice),
+                              discountPct: Number(editDiscount) || 0,
+                            })}
+                          >
+                            Save
+                          </button>
+                          <button className="text-xs text-gray-400 hover:underline ml-2" onClick={() => setEditingLineId(null)}>
+                            Cancel
+                          </button>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={l.id} className="border-t border-gray-100">
+                        <td className="px-3 py-2">{l.description}</td>
+                        <td className="px-3 py-2 text-gray-500">{l.category ?? '-'}</td>
+                        <td className="px-3 py-2 text-gray-500">{l.providedByName ?? '-'}</td>
+                        <td className="px-3 py-2">{naira(l.unitPrice)}</td>
+                        <td className="px-3 py-2">{l.quantity}</td>
+                        <td className="px-3 py-2">{l.discountPct ? `${Number(l.discountPct)}%` : '-'}</td>
+                        <td className="px-3 py-2">{naira(l.lineTotal)}</td>
+                        {canEditLines && (
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            <button className="text-xs text-primary hover:underline" onClick={() => startEdit(l)}>Edit</button>
+                            {inv.lines.length > 1 && (
+                              <button
+                                className="text-xs text-gray-400 hover:text-red-500 ml-2"
+                                disabled={removeLine.isPending}
+                                onClick={() => removeLine.mutate(l.id)}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    )
                   ))}
+                  {canEditLines && (
+                    <tr className="border-t border-gray-100">
+                      <td className="px-3 py-2" colSpan={8}>
+                        <button className="text-sm text-primary font-medium hover:underline" onClick={() => setAddingLine(true)}>
+                          + Add line
+                        </button>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
                 <tfoot className="text-sm">
                   <tr className="border-t border-gray-200">
                     <td className="px-3 py-1.5 text-gray-500" colSpan={6}>Subtotal</td>
                     <td className="px-3 py-1.5">{naira(inv.subtotal)}</td>
+                    {canEditLines && <td />}
                   </tr>
                   {inv.discountPct && (
                     <tr>
@@ -187,19 +287,23 @@ export function InvoiceDetailDrawer({
                       <td className="px-3 py-1.5 text-red-600">
                         -{naira(Number(inv.subtotal) - Number(inv.totalAmount))}
                       </td>
+                      {canEditLines && <td />}
                     </tr>
                   )}
                   <tr className="font-bold border-t border-gray-200">
                     <td className="px-3 py-2" colSpan={6}>Total payable</td>
                     <td className="px-3 py-2">{naira(inv.totalAmount)}</td>
+                    {canEditLines && <td />}
                   </tr>
                   <tr className="text-gray-500">
                     <td className="px-3 py-1.5" colSpan={6}>Paid</td>
                     <td className="px-3 py-1.5">{naira(inv.paidAmount)}</td>
+                    {canEditLines && <td />}
                   </tr>
                   <tr className="font-semibold">
                     <td className="px-3 py-1.5" colSpan={6}>Balance due</td>
                     <td className="px-3 py-1.5">{naira(inv.balanceDue)}</td>
+                    {canEditLines && <td />}
                   </tr>
                 </tfoot>
               </table>
@@ -302,6 +406,7 @@ export function InvoiceDetailDrawer({
         }
       />
       <ReceiptView paymentId={receiptId} open={!!receiptId} onClose={() => setReceiptId(null)} />
+      <AddItemModal open={addingLine} onClose={() => setAddingLine(false)} onAdd={(line) => addLine.mutate(line)} />
     </>
   )
 }

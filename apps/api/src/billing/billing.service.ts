@@ -5,7 +5,14 @@ import { AuditService } from '../common/audit/audit.service';
 import { FilesService } from '../storage/files.service';
 import { assertCan } from '../common/permissions';
 import { nextSequence } from '../common/sequence';
-import { CancelInvoiceDto, CreateInvoiceDto, ReversePaymentDto, UpdateInvoiceDto } from './dto/create-invoice.dto';
+import {
+  CancelInvoiceDto,
+  CreateInvoiceDto,
+  InvoiceLineDto,
+  ReversePaymentDto,
+  UpdateInvoiceDto,
+  UpdateInvoiceLineDto,
+} from './dto/create-invoice.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 
 export interface ChargeInput {
@@ -660,28 +667,34 @@ export class BillingService {
     return inv.payments.some((p) => !p.reversedAt) || !!inv.claim;
   }
 
+  /** Shared guard for every billing-desk edit (invoice-level or per-line):
+   * blocked once CANCELLED, or once a live payment or a claim locks it - a
+   * supplementary invoice for the same visit carries any further charges
+   * instead (FUNC-2); this method does not create one, since nothing here
+   * is itself a new charge. A supplementary invoice is otherwise editable
+   * exactly like any other invoice as long as it isn't itself locked. */
+  private assertEditable(inv: { status: InvoiceStatus; payments: { reversedAt: Date | null }[]; claim: unknown }) {
+    if (inv.status === 'CANCELLED') throw new BadRequestException('This invoice has been cancelled');
+    if (this.isLocked(inv)) {
+      throw new BadRequestException({
+        message: inv.claim
+          ? 'This invoice has an insurance claim and cannot be edited'
+          : 'Reverse the payments on this invoice before editing it',
+        code: inv.claim ? 'HAS_CLAIM' : 'HAS_PAYMENTS',
+      });
+    }
+  }
+
   /**
    * Correct an invoice after creation: invoice-level discount, reason, note,
-   * category. Blocked once the invoice is CANCELLED, carries a live payment
-   * (reverse the payments first), or has a claim (a supplementary invoice
-   * carries any further changes instead). Individual line edits are delete +
-   * re-add (`removeInvoiceLine` / raise a fresh invoice) - deliberately not a
-   * full line editor.
+   * category. See `assertEditable` for when this is blocked.
    */
   async updateInvoice(actor: Actor, id: string, dto: UpdateInvoiceDto) {
     assertCan(actor.role, 'billing:manage');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
       const inv = await tx.invoice.findFirst({ where: { id }, include: { payments: true, claim: true } });
       if (!inv) throw new NotFoundException('Invoice not found');
-      if (inv.status === 'CANCELLED') throw new BadRequestException('This invoice has been cancelled');
-      if (this.isLocked(inv)) {
-        throw new BadRequestException({
-          message: inv.claim
-            ? 'This invoice has an insurance claim and cannot be edited'
-            : 'Reverse the payments on this invoice before editing it',
-          code: inv.claim ? 'HAS_CLAIM' : 'HAS_PAYMENTS',
-        });
-      }
+      this.assertEditable(inv);
       const data: Prisma.InvoiceUpdateInput = {};
       if (dto.invoiceDiscountPct !== undefined)
         data.discountPct = new Prisma.Decimal(dto.invoiceDiscountPct);
@@ -708,15 +721,7 @@ export class BillingService {
         include: { payments: true, claim: true, lines: { select: { id: true } } },
       });
       if (!inv) throw new NotFoundException('Invoice not found');
-      if (inv.status === 'CANCELLED') throw new BadRequestException('This invoice has been cancelled');
-      if (this.isLocked(inv)) {
-        throw new BadRequestException({
-          message: inv.claim
-            ? 'This invoice has an insurance claim and cannot be edited'
-            : 'Reverse the payments on this invoice before editing it',
-          code: inv.claim ? 'HAS_CLAIM' : 'HAS_PAYMENTS',
-        });
-      }
+      this.assertEditable(inv);
       if (!inv.lines.some((l) => l.id === lineId)) throw new NotFoundException('Line not found on this invoice');
       if (inv.lines.length <= 1) {
         throw new BadRequestException('An invoice must keep at least one line - cancel it instead');
@@ -725,6 +730,95 @@ export class BillingService {
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'VOID_LINE',
         entityType: 'Invoice', entityId: id, metadata: { lineId },
+      });
+      return { ok: true };
+    });
+  }
+
+  /** Add a new line to an existing, still-editable invoice (billing-desk correction -
+   * e.g. a charge that was missed). Client-supplied unitPrice is trusted here,
+   * same as the ad-hoc builder (`createInvoiceTx`): both are billing:manage-only
+   * tools for manual invoice construction, unlike the clinical charge-posting
+   * paths FUNC-1 locks to the catalogue price. */
+  async addInvoiceLine(actor: Actor, id: string, dto: InvoiceLineDto) {
+    assertCan(actor.role, 'billing:manage');
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      const inv = await tx.invoice.findFirst({ where: { id }, include: { payments: true, claim: true } });
+      if (!inv) throw new NotFoundException('Invoice not found');
+      this.assertEditable(inv);
+
+      if (dto.serviceItemId && !(await tx.serviceItem.count({ where: { id: dto.serviceItemId } }))) {
+        throw new BadRequestException('Invalid service item');
+      }
+      if (dto.drugId && !(await tx.drug.count({ where: { id: dto.drugId } }))) {
+        throw new BadRequestException('Invalid drug');
+      }
+
+      const unitPrice = new Prisma.Decimal(dto.unitPrice);
+      const { gross, net } = lineNet(unitPrice, dto.quantity, dto.discountPct);
+      const line = await tx.invoiceLine.create({
+        data: {
+          tenantId: actor.tenantId,
+          invoiceId: id,
+          serviceItemId: dto.serviceItemId ?? null,
+          drugId: dto.drugId ?? null,
+          category: dto.category ?? inv.category,
+          description: dto.description,
+          quantity: dto.quantity,
+          unitPrice,
+          grossAmount: gross,
+          discountPct: dto.discountPct != null ? new Prisma.Decimal(dto.discountPct) : null,
+          lineTotal: net,
+          providedById: actor.userId,
+          providedAt: new Date(),
+        },
+      });
+      await this.recomputeInvoice(tx, id);
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'ADD_LINE',
+        entityType: 'Invoice', entityId: id,
+        metadata: { lineId: line.id, description: dto.description, lineTotal: net.toString() },
+      });
+      return { ok: true, lineId: line.id };
+    });
+  }
+
+  /** Edit an existing line's quantity, price, discount or description (billing-desk
+   * correction - e.g. a quantity typo or a late discount). Not available for
+   * re-linking a line to a different catalogue item; that's a remove + add. */
+  async updateInvoiceLine(actor: Actor, id: string, lineId: string, dto: UpdateInvoiceLineDto) {
+    assertCan(actor.role, 'billing:manage');
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      const inv = await tx.invoice.findFirst({ where: { id }, include: { payments: true, claim: true } });
+      if (!inv) throw new NotFoundException('Invoice not found');
+      this.assertEditable(inv);
+
+      const line = await tx.invoiceLine.findFirst({ where: { id: lineId, invoiceId: id } });
+      if (!line) throw new NotFoundException('Line not found on this invoice');
+
+      const quantity = dto.quantity ?? line.quantity;
+      const unitPrice = dto.unitPrice != null ? new Prisma.Decimal(dto.unitPrice) : line.unitPrice;
+      const discountPct = dto.discountPct !== undefined ? dto.discountPct : line.discountPct ? Number(line.discountPct) : null;
+      const description = dto.description ?? line.description;
+      const { gross, net } = lineNet(unitPrice, quantity, discountPct);
+
+      const before = {
+        quantity: line.quantity, unitPrice: line.unitPrice.toString(),
+        discountPct: line.discountPct?.toString() ?? null, description: line.description,
+      };
+      await tx.invoiceLine.update({
+        where: { id: lineId },
+        data: {
+          quantity, unitPrice, description,
+          discountPct: discountPct != null ? new Prisma.Decimal(discountPct) : null,
+          grossAmount: gross, lineTotal: net,
+        },
+      });
+      await this.recomputeInvoice(tx, id);
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'UPDATE_LINE',
+        entityType: 'Invoice', entityId: id,
+        metadata: { lineId, before, after: { quantity, unitPrice: unitPrice.toString(), discountPct, description } },
       });
       return { ok: true };
     });

@@ -247,6 +247,49 @@ describe('BillingService (integration - money paths)', () => {
     ).rejects.toThrow(/at least one line/);
   });
 
+  it('addInvoiceLine: appends a line and re-totals; blocked once paid', async () => {
+    const patient = await makePatient(tenantId);
+    const inv = await billing.createInvoice(actor, {
+      patientId: patient.id,
+      lines: [{ description: 'Consult', quantity: 1, unitPrice: 5000 }],
+    } as any);
+
+    const { lineId } = await billing.addInvoiceLine(actor, inv.id, {
+      description: 'Dressing', quantity: 2, unitPrice: 1000,
+    } as any);
+    const after = await billing.getInvoice(tenantId, inv.id);
+    expect(after.lines).toHaveLength(2);
+    expect(Number(after.totalAmount)).toBe(7000);
+    expect(after.lines.find((l) => l.id === lineId)?.lineTotal).toBe('2000');
+
+    await billing.addPayment(actor, inv.id, { amount: 7000, method: 'CASH' } as any);
+    await expect(
+      billing.addInvoiceLine(actor, inv.id, { description: 'Too late', quantity: 1, unitPrice: 100 } as any),
+    ).rejects.toMatchObject({ response: { code: 'HAS_PAYMENTS' } });
+  });
+
+  it('updateInvoiceLine: corrects quantity/price/discount and re-totals; blocked once paid', async () => {
+    const patient = await makePatient(tenantId);
+    const inv = await billing.createInvoice(actor, {
+      patientId: patient.id,
+      lines: [{ description: 'X-ray', quantity: 1, unitPrice: 10000 }],
+    } as any);
+    const before = await billing.getInvoice(tenantId, inv.id);
+
+    await billing.updateInvoiceLine(actor, inv.id, before.lines[0].id, {
+      quantity: 2, unitPrice: 9000, discountPct: 10,
+    } as any);
+    const after = await billing.getInvoice(tenantId, inv.id);
+    // 2 * 9000 = 18000 gross, 10% off = 16200
+    expect(after.lines[0].lineTotal).toBe('16200');
+    expect(Number(after.totalAmount)).toBe(16200);
+
+    await billing.addPayment(actor, inv.id, { amount: 16200, method: 'CASH' } as any);
+    await expect(
+      billing.updateInvoiceLine(actor, inv.id, after.lines[0].id, { quantity: 1 } as any),
+    ).rejects.toMatchObject({ response: { code: 'HAS_PAYMENTS' } });
+  });
+
   it('listInvoices summary is computed with DB aggregates and matches the rows', async () => {
     const t2 = (await makeTenant()).id;
     try {
@@ -468,9 +511,51 @@ describe('BillingService (integration - money paths)', () => {
       await expect(billing.removeInvoiceLine(actor, invoiceId, lineId)).rejects.toMatchObject({
         response: { code: 'HAS_CLAIM' },
       });
+      await expect(
+        billing.addInvoiceLine(actor, invoiceId, { description: 'Sneaky', quantity: 1, unitPrice: 100 } as any),
+      ).rejects.toMatchObject({ response: { code: 'HAS_CLAIM' } });
+      await expect(
+        billing.updateInvoiceLine(actor, invoiceId, lineId, { quantity: 2 } as any),
+      ).rejects.toMatchObject({ response: { code: 'HAS_CLAIM' } });
 
       const untouched = await ownerPrisma.invoice.findUnique({ where: { id: invoiceId } });
       expect(untouched!.note).toBeNull();
+    });
+
+    it('item 9: a supplementary invoice is fully editable (add/update/remove lines) as long as it is not itself locked', async () => {
+      const patient = await makePatient(tenantId);
+      const visit = await makeVisit(tenantId, patient.id);
+      const { invoiceId: originalId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation',
+        }),
+      );
+      await billing.addPayment(actor, originalId, { amount: 5000, method: 'CASH' } as any);
+
+      const { invoiceId: supplementId, lineId: labLineId } = await prisma.forTenant(tenantId, (tx) =>
+        billing.postChargeToVisit(tx, {
+          tenantId, userId, visitId: visit.id, patientId: patient.id,
+          description: 'Late lab order', quantity: 1, unitPrice: 3000, category: 'Laboratory',
+        }),
+      );
+
+      // the primary is locked, but the supplementary invoice it spawned is not
+      await billing.updateInvoiceLine(actor, supplementId, labLineId, { unitPrice: 2500 } as any);
+      const { lineId: addedId } = await billing.addInvoiceLine(actor, supplementId, {
+        description: 'Second lab test', quantity: 1, unitPrice: 1000,
+      } as any);
+      const detail = await billing.getInvoice(tenantId, supplementId);
+      expect(Number(detail.totalAmount)).toBe(3500); // 2500 + 1000
+      expect(detail.isSupplementary).toBe(true);
+
+      await billing.removeInvoiceLine(actor, supplementId, addedId);
+      const afterRemove = await billing.getInvoice(tenantId, supplementId);
+      expect(Number(afterRemove.totalAmount)).toBe(2500);
+
+      // meanwhile the primary (paid) invoice remains untouched and still locked
+      const primary = await ownerPrisma.invoice.findUnique({ where: { id: originalId } });
+      expect(Number(primary!.totalAmount)).toBe(5000);
     });
   });
 });

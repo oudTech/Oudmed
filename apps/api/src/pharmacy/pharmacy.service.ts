@@ -286,16 +286,47 @@ export class PharmacyService {
     // A batch is treated as expired from the start of its printed expiry date
     // in Lagos time, not just "has the exact instant passed" (BL-2).
     const cutoff = lagosCalendarDate(new Date());
-    const batches = await tx.drugBatch.findMany({
-      where: { drugId: p.drugId, quantity: { gt: 0 }, expiryDate: { gt: cutoff } },
+    // Fetch every batch with stock, expired or not, so a shortfall can say
+    // *why* - "nothing left at all" reads very differently to a pharmacist
+    // than "there's stock, but it's all expired."
+    const allBatches = await tx.drugBatch.findMany({
+      where: { drugId: p.drugId, quantity: { gt: 0 } },
       orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }],
     });
+    const batches = allBatches.filter((b) => b.expiryDate > cutoff);
+    const expired = allBatches.filter((b) => b.expiryDate <= cutoff);
     const available = batches.reduce((s, b) => s + b.quantity, 0);
+
     if (available < p.quantity) {
       const drug = await tx.drug.findFirst({ where: { id: p.drugId }, select: { name: true } });
+      const name = drug?.name ?? 'this drug';
+
+      if (available === 0 && expired.length > 0) {
+        const detail = expired
+          .slice(0, 3)
+          .map((b) => `batch ${b.batchNumber} expired ${b.expiryDate.toISOString().slice(0, 10)}`)
+          .join(', ');
+        const more = expired.length > 3 ? `, +${expired.length - 3} more` : '';
+        throw new ConflictException({
+          code: 'EXPIRED_STOCK_ONLY',
+          message: `Only expired stock remains for ${name} (${detail}${more}). Remove expired stock and restock.`,
+          drugId: p.drugId,
+          available: 0,
+        });
+      }
+
+      if (available === 0) {
+        throw new ConflictException({
+          code: 'OUT_OF_STOCK',
+          message: `${name} is out of stock.`,
+          drugId: p.drugId,
+          available: 0,
+        });
+      }
+
       throw new ConflictException({
         code: 'INSUFFICIENT_STOCK',
-        message: `Not enough stock of ${drug?.name ?? 'this drug'} (need ${p.quantity}, ${available} on hand)`,
+        message: `Not enough unexpired stock of ${name} (need ${p.quantity}, ${available} available)`,
         drugId: p.drugId,
         available,
       });

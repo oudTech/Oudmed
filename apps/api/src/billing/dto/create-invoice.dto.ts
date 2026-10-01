@@ -40,6 +40,13 @@ export class CreateInvoiceDto {
   lines: InvoiceLineDto[];
 }
 
+export class UpdateInvoiceLineDto {
+  @IsOptional() @IsString() @MaxLength(200) description?: string;
+  @IsOptional() @IsInt() @Min(1) quantity?: number;
+  @IsOptional() @IsNumber() @Min(0) unitPrice?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(100) discountPct?: number;
+}
+
 export class UpdateInvoiceDto {
   @IsOptional() @IsNumber() @Min(0) @Max(100) invoiceDiscountPct?: number;
   @IsOptional() @IsString() @MaxLength(200) discountReason?: string;

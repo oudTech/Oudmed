@@ -49,6 +49,28 @@ export const billingApi = {
   cancelInvoice: (id: string, reason: string) =>
     api.post(`/billing/invoices/${id}/cancel`, { reason }).then((r) => r.data),
 
+  addInvoiceLine: (
+    invoiceId: string,
+    data: {
+      description: string
+      quantity: number
+      unitPrice: number
+      discountPct?: number
+      category?: string
+      serviceItemId?: string
+      drugId?: string
+    },
+  ) => api.post<{ ok: true; lineId: string }>(`/billing/invoices/${invoiceId}/lines`, data).then((r) => r.data),
+
+  updateInvoiceLine: (
+    invoiceId: string,
+    lineId: string,
+    data: { description?: string; quantity?: number; unitPrice?: number; discountPct?: number },
+  ) => api.patch(`/billing/invoices/${invoiceId}/lines/${lineId}`, data).then((r) => r.data),
+
+  removeInvoiceLine: (invoiceId: string, lineId: string) =>
+    api.delete(`/billing/invoices/${invoiceId}/lines/${lineId}`).then((r) => r.data),
+
   acknowledgeReopen: (id: string) =>
     api.post(`/billing/invoices/${id}/acknowledge-reopen`).then((r) => r.data),
 

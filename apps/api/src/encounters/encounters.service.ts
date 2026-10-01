@@ -468,7 +468,7 @@ export class EncountersService {
           patient: { select: { id: true, patientNumber: true, firstName: true, lastName: true } },
         },
       });
-      const nm = await this.names(tx, orders.map((o) => o.orderedById));
+      const nm = await this.names(tx, [...orders.map((o) => o.orderedById), ...orders.map((o) => o.resultedById)]);
       return orders.map((o) => ({
         id: o.id,
         orderType: o.orderType,
@@ -484,6 +484,8 @@ export class EncountersService {
         referenceRange: o.referenceRange,
         abnormalFlag: o.abnormalFlag,
         resultNote: o.resultNote,
+        resultedByName: o.resultedById ? nm.get(o.resultedById) ?? null : null,
+        resultedAt: o.resultedAt,
       }));
     });
   }

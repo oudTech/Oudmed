@@ -8,7 +8,14 @@ import { Roles } from '../common/roles.decorator';
 import { assertCan, can } from '../common/permissions';
 import { CurrentUser, AuthUser } from '../common/current-user.decorator';
 import { BillingService } from './billing.service';
-import { CancelInvoiceDto, CreateInvoiceDto, ReversePaymentDto, UpdateInvoiceDto } from './dto/create-invoice.dto';
+import {
+  CancelInvoiceDto,
+  CreateInvoiceDto,
+  InvoiceLineDto,
+  ReversePaymentDto,
+  UpdateInvoiceDto,
+  UpdateInvoiceLineDto,
+} from './dto/create-invoice.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 
 class CreateServiceItemDto {
@@ -77,6 +84,21 @@ export class BillingController {
   @Delete('billing/invoices/:id/lines/:lineId')
   removeLine(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('lineId') lineId: string) {
     return this.billing.removeInvoiceLine(actor(u), id, lineId);
+  }
+
+  @Post('billing/invoices/:id/lines')
+  addLine(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: InvoiceLineDto) {
+    return this.billing.addInvoiceLine(actor(u), id, dto);
+  }
+
+  @Patch('billing/invoices/:id/lines/:lineId')
+  updateLine(
+    @CurrentUser() u: AuthUser,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() dto: UpdateInvoiceLineDto,
+  ) {
+    return this.billing.updateInvoiceLine(actor(u), id, lineId, dto);
   }
 
   @Post('billing/invoices/:id/cancel')

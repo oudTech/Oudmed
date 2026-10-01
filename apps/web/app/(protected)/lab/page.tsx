@@ -6,6 +6,7 @@ import { Button, Field, Input, Modal, Select, Textarea } from '@/components/ui/k
 import { can } from '@/lib/permissions'
 import { encountersApi, ORDER_STATUS_META, ORDER_TYPE_LABEL, ABNORMAL_FLAGS } from '@/lib/encounters'
 import { EmptyState } from '@/components/onboarding'
+import { LabReportPrintModal } from '@/components/patients/LabReportPrintModal'
 
 const dt = (iso: string) => new Date(iso).toLocaleString('en-GB')
 
@@ -24,6 +25,8 @@ type Order = {
   referenceRange: string | null
   abnormalFlag: string | null
   resultNote: string | null
+  resultedByName: string | null
+  resultedAt: string | null
 }
 
 export default function LabPage() {
@@ -31,6 +34,7 @@ export default function LabPage() {
   const canResult = can(session?.role, 'order:result')
   const [status, setStatus] = useState('open')
   const [active, setActive] = useState<Order | null>(null)
+  const [printing, setPrinting] = useState<Order | null>(null)
 
   const q = useQuery({
     queryKey: ['lab-worklist', status],
@@ -116,10 +120,15 @@ export default function LabPage() {
                           {om.label}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5 text-right">
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
                         {canResult && o.status !== 'CANCELLED' && (
                           <button className="text-sm font-semibold text-primary hover:underline" onClick={() => setActive(o)}>
                             {o.status === 'RESULTED' ? 'Edit result' : 'Enter result'}
+                          </button>
+                        )}
+                        {o.status === 'RESULTED' && (
+                          <button className="text-sm font-medium text-gray-500 hover:underline ml-3" onClick={() => setPrinting(o)}>
+                            Print
                           </button>
                         )}
                       </td>
@@ -133,6 +142,16 @@ export default function LabPage() {
       </div>
 
       <ResultModal order={active} open={!!active} onClose={() => setActive(null)} />
+      <LabReportPrintModal
+        order={printing}
+        patient={
+          printing
+            ? { name: `${printing.patient.firstName} ${printing.patient.lastName}`.trim(), patientNumber: printing.patient.patientNumber, age: null, gender: null }
+            : { name: '', patientNumber: '', age: null, gender: null }
+        }
+        open={!!printing}
+        onClose={() => setPrinting(null)}
+      />
     </div>
   )
 }
