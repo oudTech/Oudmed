@@ -32,7 +32,7 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 
 | Item | What | Status |
 |---|---|---|
-| F1a | Schema/migrations, admission episode, deposits ledger (receipts + cash-report entries), inpatient workspace basics | Building |
+| F1a | Schema/migrations, admission episode, deposits ledger (receipts + cash-report entries), inpatient workspace basics | Done |
 | F1b | Daily charges (both rules + short-stay setting), transfers, charges posted during the stay, interim bill | Not started |
 | F1c | Discharge (settlement setting, override), final bill, deposit application and refund, discharge summary | Not started |
 | F1d | Admission claims (`generateForAdmission`, remittance generalisation, backfill verification), occupancy/inpatient revenue reports; add F1 usability cases to the test plan | Not started |
@@ -43,7 +43,7 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 
 | Item | What | Status |
 |---|---|---|
-| F1a-d | See table above | F1a in progress |
+| F1a-d | See table above | F1a done, F1b next |
 | F2 | One report | Not started |
 | F3 | One report | Not started |
 | 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts; cover all new F1-F3 screens | Not started |

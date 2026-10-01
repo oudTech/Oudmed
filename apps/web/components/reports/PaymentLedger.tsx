@@ -67,7 +67,7 @@ export function PaymentLedger({
           <h2 className="text-lg font-bold text-gray-900">Payment ledger</h2>
           <p className="text-sm text-gray-500">
             {list.data ? `${list.data.total} transaction${list.data.total === 1 ? '' : 's'}` : 'Loading…'}
-            {list.data && ` · ${formatNaira(list.data.totalAmount)} collected`}
+            {list.data && ` · ${formatNaira(list.data.totalAmount)} net cash collected`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -113,23 +113,37 @@ export function PaymentLedger({
         <table className="w-full text-sm whitespace-nowrap">
           <thead className="bg-gray-50 text-gray-500">
             <tr>
-              {['Date', 'Invoice', 'Patient', 'Amount', 'Paid by', 'Cashier', 'Comment', 'Status', 'Reversed'].map((h) => (
+              {['Date', 'Type', 'Invoice', 'Patient', 'Amount', 'Paid by', 'Cashier', 'Comment', 'Status', 'Reversed'].map((h) => (
                 <th key={h} className="px-4 py-2.5 text-left font-medium">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {!list.data ? (
-              <tr><td colSpan={9} className="px-4 py-6 text-gray-400">Loading…</td></tr>
+              <tr><td colSpan={10} className="px-4 py-6 text-gray-400">Loading…</td></tr>
             ) : list.data.rows.length === 0 ? (
-              <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">No payments in this period.</td></tr>
+              <tr><td colSpan={10} className="px-4 py-6 text-center text-gray-400">No payments in this period.</td></tr>
             ) : (
               list.data.rows.map((r) => (
                 <tr key={r.id} className="border-t border-gray-100">
                   <td className="px-4 py-2.5 text-gray-600">{new Date(r.paidAt).toLocaleDateString('en-GB')}</td>
                   <td className="px-4 py-2.5">
+                    <span
+                      className="rounded-full px-2 py-0.5 text-xs font-medium"
+                      style={r.entryType === 'DEPOSIT_REFUND'
+                        ? { color: '#B45309', backgroundColor: '#FFF6E5' }
+                        : r.entryType === 'DEPOSIT'
+                          ? { color: '#1E40AF', backgroundColor: '#E4EFFF' }
+                          : { color: '#374151', backgroundColor: '#F3F4F6' }}
+                    >
+                      {r.entryType === 'DEPOSIT' ? 'Deposit' : r.entryType === 'DEPOSIT_REFUND' ? 'Deposit refund' : 'Payment'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5">
                     {r.invoiceId ? (
                       <Link href={`/billing?open=${r.invoiceId}`} className="text-primary hover:underline">{r.invoiceNumber}</Link>
+                    ) : r.admissionId ? (
+                      <Link href={`/admissions/${r.admissionId}`} className="text-primary hover:underline">{r.invoiceNumber}</Link>
                     ) : (
                       <span className="text-gray-400">{r.invoiceNumber}</span>
                     )}

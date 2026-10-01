@@ -263,6 +263,11 @@ export class ReportsService {
     });
   }
 
+  /**
+   * Deposits (and their refunds) are cash received/returned too - they belong
+   * in the same cash reconciliation ledger as invoice payments, clearly
+   * labelled, even though they are not revenue (F1 condition 1).
+   */
   async payments(actor: Actor, q: PaymentsQuery): Promise<ReportPaymentsResponse> {
     assertCan(actor.role, 'reports:view');
     const { from, to } = resolveRange(q.preset, q.from, q.to);
@@ -273,9 +278,11 @@ export class ReportsService {
       if (q.departmentId) where.invoice = { visit: { departmentId: q.departmentId } };
       else if (q.doctorId) where.invoice = { visit: { doctorId: q.doctorId } };
 
-      const [total, sumAgg, rows] = await Promise.all([
-        tx.payment.count({ where }),
-        tx.payment.aggregate({ _sum: { amount: true }, where: { ...where, reversedAt: null } }),
+      const admissionWhere: Prisma.AdmissionWhereInput = {};
+      if (q.departmentId) admissionWhere.departmentId = q.departmentId;
+      else if (q.doctorId) admissionWhere.attendingDoctorId = q.doctorId;
+
+      const [paymentRows, deposits] = await Promise.all([
         tx.payment.findMany({
           where,
           include: {
@@ -287,47 +294,123 @@ export class ReportsService {
               },
             },
           },
-          orderBy: { paidAt: 'desc' },
-          skip: (page - 1) * PAGE_SIZE,
-          take: PAGE_SIZE,
+        }),
+        tx.admissionDeposit.findMany({
+          where: {
+            admission: admissionWhere,
+            OR: [{ receivedAt: { gte: from, lt: to } }, { refundedAt: { gte: from, lt: to } }],
+          },
+          include: {
+            admission: {
+              select: { id: true, admissionNumber: true, patient: { select: { firstName: true, lastName: true } } },
+            },
+          },
         }),
       ]);
 
-      const cashierIds = [...new Set(rows.map((r) => r.receivedById).filter((x): x is string => !!x))];
+      const cashierIds = [
+        ...new Set(
+          [
+            ...paymentRows.map((r) => r.receivedById),
+            ...deposits.map((d) => d.receivedById),
+            ...deposits.map((d) => d.refundedById),
+          ].filter((x): x is string => !!x),
+        ),
+      ];
       const cashiers = cashierIds.length
         ? await tx.user.findMany({ where: { id: { in: cashierIds } }, select: { id: true, fullName: true } })
         : [];
       const cashierName = new Map(cashiers.map((c) => [c.id, c.fullName]));
 
+      const rows: ReportPaymentsResponse['rows'] = paymentRows.map((p) => ({
+        id: p.id,
+        paidAt: p.paidAt.toISOString(),
+        invoiceId: p.invoice?.id ?? '',
+        admissionId: null,
+        invoiceNumber: p.invoice?.invoiceNumber ?? '-',
+        patientName: p.invoice?.patient
+          ? `${p.invoice.patient.firstName} ${p.invoice.patient.lastName}`.trim()
+          : '-',
+        amount: p.amount.toString(),
+        method: p.method,
+        paidBy: p.payerName || PAYER_LABEL[p.payerType] || p.payerType,
+        cashier: p.receivedById ? cashierName.get(p.receivedById) ?? null : null,
+        comment: p.note ?? null,
+        status: p.reversedAt ? 'Reversed' : 'Success',
+        reversedAt: p.reversedAt ? p.reversedAt.toISOString() : null,
+        entryType: 'PAYMENT',
+      }));
+
+      let depositTotal = D0();
+      let refundTotal = D0();
+      for (const dep of deposits) {
+        const patientName = `${dep.admission.patient.firstName} ${dep.admission.patient.lastName}`.trim();
+        if (dep.receivedAt >= from && dep.receivedAt < to) {
+          depositTotal = depositTotal.add(dep.amount);
+          rows.push({
+            id: dep.id,
+            paidAt: dep.receivedAt.toISOString(),
+            invoiceId: '',
+            admissionId: dep.admission.id,
+            invoiceNumber: dep.admission.admissionNumber,
+            patientName,
+            amount: dep.amount.toString(),
+            method: dep.method,
+            paidBy: patientName,
+            cashier: dep.receivedById ? cashierName.get(dep.receivedById) ?? null : null,
+            comment: dep.reference ?? null,
+            status: 'Success',
+            reversedAt: null,
+            entryType: 'DEPOSIT',
+          });
+        }
+        if (dep.refundedAt && dep.refundedAt >= from && dep.refundedAt < to) {
+          const refundedAmount = dep.refundedAmount ?? D0();
+          refundTotal = refundTotal.add(refundedAmount);
+          rows.push({
+            id: `${dep.id}-refund`,
+            paidAt: dep.refundedAt.toISOString(),
+            invoiceId: '',
+            admissionId: dep.admission.id,
+            invoiceNumber: dep.admission.admissionNumber,
+            patientName,
+            amount: refundedAmount.toString(),
+            method: dep.method,
+            paidBy: patientName,
+            cashier: dep.refundedById ? cashierName.get(dep.refundedById) ?? null : null,
+            comment: dep.refundReason ?? null,
+            status: 'Success',
+            reversedAt: null,
+            entryType: 'DEPOSIT_REFUND',
+          });
+        }
+      }
+
+      rows.sort((a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime());
+
+      const paymentTotal = paymentRows
+        .filter((p) => !p.reversedAt)
+        .reduce((sum, p) => sum.add(p.amount), D0());
+
       return {
         page,
         pageSize: PAGE_SIZE,
-        total,
-        totalAmount: (sumAgg._sum.amount ?? D0()).toString(),
-        rows: rows.map((p) => ({
-          id: p.id,
-          paidAt: p.paidAt.toISOString(),
-          invoiceId: p.invoice?.id ?? '',
-          invoiceNumber: p.invoice?.invoiceNumber ?? '-',
-          patientName: p.invoice?.patient
-            ? `${p.invoice.patient.firstName} ${p.invoice.patient.lastName}`.trim()
-            : '-',
-          amount: p.amount.toString(),
-          method: p.method,
-          paidBy: p.payerName || PAYER_LABEL[p.payerType] || p.payerType,
-          cashier: p.receivedById ? cashierName.get(p.receivedById) ?? null : null,
-          comment: p.note ?? null,
-          status: p.reversedAt ? 'Reversed' : 'Success',
-          reversedAt: p.reversedAt ? p.reversedAt.toISOString() : null,
-        })),
+        total: rows.length,
+        totalAmount: paymentTotal.add(depositTotal).sub(refundTotal).toString(),
+        rows: rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
       };
     });
   }
 
   async paymentsCsv(actor: Actor, q: PaymentsQuery): Promise<string> {
     assertCan(actor.role, 'reports:view');
+    const typeLabel: Record<string, string> = {
+      PAYMENT: 'Payment',
+      DEPOSIT: 'Deposit',
+      DEPOSIT_REFUND: 'Deposit refund',
+    };
     const rows: string[][] = [
-      ['Date', 'Invoice', 'Patient', 'Amount', 'Method', 'Paid by', 'Cashier', 'Comment', 'Status', 'Reversed at'],
+      ['Date', 'Type', 'Invoice', 'Patient', 'Amount', 'Method', 'Paid by', 'Cashier', 'Comment', 'Status', 'Reversed at'],
     ];
     let page = 1;
     for (;;) {
@@ -335,6 +418,7 @@ export class ReportsService {
       for (const r of res.rows) {
         rows.push([
           new Date(r.paidAt).toISOString().slice(0, 10),
+          typeLabel[r.entryType] ?? r.entryType,
           r.invoiceNumber,
           r.patientName,
           r.amount,

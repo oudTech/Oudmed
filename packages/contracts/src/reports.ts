@@ -47,10 +47,13 @@ export interface ReportsOverviewDTO {
   appointmentsByWeekday: ReportWeekdayDTO[]
 }
 
+export type ReportPaymentEntryType = 'PAYMENT' | 'DEPOSIT' | 'DEPOSIT_REFUND'
+
 export interface ReportPaymentRowDTO {
   id: string
   paidAt: string
   invoiceId: string
+  admissionId: string | null
   invoiceNumber: string
   patientName: string
   amount: string
@@ -60,6 +63,9 @@ export interface ReportPaymentRowDTO {
   comment: string | null
   status: 'Success' | 'Reversed'
   reversedAt: string | null
+  /** PAYMENT = invoice payment/revenue; DEPOSIT/DEPOSIT_REFUND = cash held against
+   * an admission, not revenue (F1 condition 1). */
+  entryType: ReportPaymentEntryType
 }
 
 export interface ReportPaymentsResponse {
