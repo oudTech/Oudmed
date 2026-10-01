@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Button, Field, Input, Modal, Select } from '@/components/ui/kit'
+import { Button, Field, Input, Modal, Select, Textarea } from '@/components/ui/kit'
 import { billingApi, naira, BILLING_ITEM_TYPES } from '@/lib/billing'
 
 export type BuilderLine = {
@@ -14,16 +14,22 @@ export type BuilderLine = {
   quantity: number
   discountPct: number
   stock: number | null
+  reason?: string
 }
 
 export function AddItemModal({
   open,
   onClose,
   onAdd,
+  showReason,
 }: {
   open: boolean
   onClose: () => void
   onAdd: (line: BuilderLine) => void
+  /** Show a reason field (item 9 addendum) - only meaningful when adding a
+   * line to an EXISTING invoice, where a price override or a discount needs
+   * one. Not shown when building a brand new invoice from scratch. */
+  showReason?: boolean
 }) {
   const [type, setType] = useState<string>('Services')
   const [q, setQ] = useState('')
@@ -33,6 +39,7 @@ export function AddItemModal({
   const [price, setPrice] = useState('')
   const [qty, setQty] = useState('1')
   const [listOpen, setListOpen] = useState(false)
+  const [reason, setReason] = useState('')
 
   useEffect(() => {
     const tmr = setTimeout(() => setDebounced(q), 250)
@@ -46,7 +53,7 @@ export function AddItemModal({
   })
 
   const reset = () => {
-    setType('Services'); setQ(''); setPicked(null); setName(''); setPrice(''); setQty('1'); setListOpen(false)
+    setType('Services'); setQ(''); setPicked(null); setName(''); setPrice(''); setQty('1'); setListOpen(false); setReason('')
   }
   const close = () => { reset(); onClose() }
 
@@ -56,6 +63,8 @@ export function AddItemModal({
   const effQty = Number(qty) || 0
   const amount = effPrice * effQty
   const valid = effName.length >= 2 && effPrice >= 0 && effQty >= 1
+  const priceOverridden = showReason && picked != null && effPrice !== picked.unitPrice
+  const reasonNeeded = showReason && priceOverridden && reason.trim().length < 3
 
   return (
     <Modal open={open} onClose={close} title="Add item" width={560} align="center">
@@ -119,10 +128,16 @@ export function AddItemModal({
           <Input value={naira(amount)} disabled />
         </Field>
 
+        {showReason && priceOverridden && (
+          <Field label="Reason for overriding the catalogue price" required>
+            <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Hardship waiver approved by admin" />
+          </Field>
+        )}
+
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={close}>Cancel</Button>
           <Button
-            disabled={!valid}
+            disabled={!valid || reasonNeeded}
             onClick={() => {
               onAdd({
                 key: Math.random().toString(36).slice(2),
@@ -134,6 +149,7 @@ export function AddItemModal({
                 quantity: effQty,
                 discountPct: 0,
                 stock: picked?.stock ?? null,
+                reason: reason.trim() || undefined,
               })
               close()
             }}

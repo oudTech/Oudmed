@@ -9,6 +9,7 @@ import {
   CancelInvoiceDto,
   CreateInvoiceDto,
   InvoiceLineDto,
+  RemoveInvoiceLineDto,
   ReversePaymentDto,
   UpdateInvoiceDto,
   UpdateInvoiceLineDto,
@@ -413,6 +414,17 @@ export class BillingService {
       });
       if (!inv) throw new NotFoundException('Invoice not found');
 
+      // Which of the current lines have ever been edited (item 9 addendum) -
+      // derived from the audit trail rather than a new column, since the
+      // audit log already carries exactly this.
+      const editLogs = await tx.auditLog.findMany({
+        where: { entityType: 'Invoice', entityId: id, action: 'UPDATE_LINE' },
+        select: { metadata: true },
+      });
+      const editedLineIds = new Set(
+        editLogs.map((l) => (l.metadata as Record<string, unknown> | null)?.lineId).filter((x): x is string => !!x),
+      );
+
       const nm = await this.names(tx, [
         inv.createdById,
         ...inv.lines.map((l) => l.providedById),
@@ -467,6 +479,7 @@ export class BillingService {
           drugId: l.drugId,
           providedByName: l.providedById ? nm.get(l.providedById) ?? null : null,
           providedAt: l.providedAt,
+          edited: editedLineIds.has(l.id),
         })),
         payments: inv.payments.map((p) => ({
           id: p.id,
@@ -712,24 +725,58 @@ export class BillingService {
     });
   }
 
-  /** Remove a single line from an invoice (billing-desk correction). Same guards as updateInvoice. */
-  async removeInvoiceLine(actor: Actor, id: string, lineId: string) {
+  /** The catalogue's own current price for a line, if it's linked to one - used
+   * to decide whether a line add/edit counts as a price override (needs a
+   * reason) or is just "billed at the catalogue price" (doesn't). */
+  private async catalogueUnitPrice(
+    tx: Prisma.TransactionClient,
+    ref: { serviceItemId?: string | null; drugId?: string | null },
+  ): Promise<Prisma.Decimal | null> {
+    if (ref.serviceItemId) {
+      const item = await tx.serviceItem.findFirst({ where: { id: ref.serviceItemId }, select: { unitPrice: true } });
+      return item?.unitPrice ?? null;
+    }
+    if (ref.drugId) {
+      const drug = await tx.drug.findFirst({ where: { id: ref.drugId }, select: { sellPrice: true } });
+      return drug?.sellPrice ?? null;
+    }
+    return null;
+  }
+
+  /** Remove a single line from an invoice (billing-desk correction). Same guards as
+   * updateInvoice. Always audited with a reason and a full before-snapshot (item 9
+   * addendum: a removal is money leaving the books, so it always needs a reason,
+   * unlike a quantity fix or adding a catalogue-priced line). */
+  async removeInvoiceLine(actor: Actor, id: string, lineId: string, dto: RemoveInvoiceLineDto) {
     assertCan(actor.role, 'billing:manage');
+    // Enforced here too, not just by the DTO/pipe, since removing a line is
+    // money leaving the books and always needs a reason (item 9 addendum).
+    if (!dto.reason?.trim()) {
+      throw new BadRequestException({ code: 'REASON_REQUIRED', message: 'A reason is required when removing an invoice line' });
+    }
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
       const inv = await tx.invoice.findFirst({
         where: { id },
-        include: { payments: true, claim: true, lines: { select: { id: true } } },
+        include: { payments: true, claim: true, lines: true },
       });
       if (!inv) throw new NotFoundException('Invoice not found');
       this.assertEditable(inv);
-      if (!inv.lines.some((l) => l.id === lineId)) throw new NotFoundException('Line not found on this invoice');
+      const line = inv.lines.find((l) => l.id === lineId);
+      if (!line) throw new NotFoundException('Line not found on this invoice');
       if (inv.lines.length <= 1) {
         throw new BadRequestException('An invoice must keep at least one line - cancel it instead');
       }
       await this.voidInvoiceLine(tx, lineId); // deletes the line + recomputes
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'VOID_LINE',
-        entityType: 'Invoice', entityId: id, metadata: { lineId },
+        entityType: 'Invoice', entityId: id,
+        metadata: {
+          invoiceNumber: inv.invoiceNumber, lineId, reason: dto.reason,
+          before: {
+            description: line.description, quantity: line.quantity, unitPrice: line.unitPrice.toString(),
+            discountPct: line.discountPct?.toString() ?? null, lineTotal: line.lineTotal.toString(),
+          },
+        },
       });
       return { ok: true };
     });
@@ -739,7 +786,9 @@ export class BillingService {
    * e.g. a charge that was missed). Client-supplied unitPrice is trusted here,
    * same as the ad-hoc builder (`createInvoiceTx`): both are billing:manage-only
    * tools for manual invoice construction, unlike the clinical charge-posting
-   * paths FUNC-1 locks to the catalogue price. */
+   * paths FUNC-1 locks to the catalogue price. A reason is required only when the
+   * price deviates from the catalogue's own price or a discount is applied - a
+   * plain catalogue-priced line needs none (item 9 addendum). */
   async addInvoiceLine(actor: Actor, id: string, dto: InvoiceLineDto) {
     assertCan(actor.role, 'billing:manage');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
@@ -755,6 +804,16 @@ export class BillingService {
       }
 
       const unitPrice = new Prisma.Decimal(dto.unitPrice);
+      const cataloguePrice = await this.catalogueUnitPrice(tx, dto);
+      const priceOverridden = cataloguePrice != null && !unitPrice.equals(cataloguePrice);
+      const hasDiscount = (dto.discountPct ?? 0) > 0;
+      if ((priceOverridden || hasDiscount) && !dto.reason?.trim()) {
+        throw new BadRequestException({
+          code: 'REASON_REQUIRED',
+          message: 'A reason is required when the price overrides the catalogue price or a discount is applied',
+        });
+      }
+
       const { gross, net } = lineNet(unitPrice, dto.quantity, dto.discountPct);
       const line = await tx.invoiceLine.create({
         data: {
@@ -777,7 +836,13 @@ export class BillingService {
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'ADD_LINE',
         entityType: 'Invoice', entityId: id,
-        metadata: { lineId: line.id, description: dto.description, lineTotal: net.toString() },
+        metadata: {
+          invoiceNumber: inv.invoiceNumber, lineId: line.id, reason: dto.reason ?? null,
+          after: {
+            description: dto.description, quantity: dto.quantity, unitPrice: unitPrice.toString(),
+            discountPct: dto.discountPct ?? null, lineTotal: net.toString(),
+          },
+        },
       });
       return { ok: true, lineId: line.id };
     });
@@ -785,7 +850,10 @@ export class BillingService {
 
   /** Edit an existing line's quantity, price, discount or description (billing-desk
    * correction - e.g. a quantity typo or a late discount). Not available for
-   * re-linking a line to a different catalogue item; that's a remove + add. */
+   * re-linking a line to a different catalogue item; that's a remove + add. A
+   * reason is required only when the new price overrides the line's own
+   * catalogue price or the discount is being added/increased - a quantity-only
+   * fix needs none (item 9 addendum). */
   async updateInvoiceLine(actor: Actor, id: string, lineId: string, dto: UpdateInvoiceLineDto) {
     assertCan(actor.role, 'billing:manage');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
@@ -800,11 +868,24 @@ export class BillingService {
       const unitPrice = dto.unitPrice != null ? new Prisma.Decimal(dto.unitPrice) : line.unitPrice;
       const discountPct = dto.discountPct !== undefined ? dto.discountPct : line.discountPct ? Number(line.discountPct) : null;
       const description = dto.description ?? line.description;
-      const { gross, net } = lineNet(unitPrice, quantity, discountPct);
 
+      const priceChanged = dto.unitPrice != null && !unitPrice.equals(line.unitPrice);
+      const cataloguePrice = priceChanged ? await this.catalogueUnitPrice(tx, line) : null;
+      const priceOverridden = priceChanged && cataloguePrice != null && !unitPrice.equals(cataloguePrice);
+      const oldDiscount = line.discountPct ? Number(line.discountPct) : 0;
+      const discountIncreased = (discountPct ?? 0) > oldDiscount;
+      if ((priceOverridden || discountIncreased) && !dto.reason?.trim()) {
+        throw new BadRequestException({
+          code: 'REASON_REQUIRED',
+          message: 'A reason is required when changing the price away from the catalogue price or increasing the discount',
+        });
+      }
+
+      const { gross, net } = lineNet(unitPrice, quantity, discountPct);
       const before = {
         quantity: line.quantity, unitPrice: line.unitPrice.toString(),
         discountPct: line.discountPct?.toString() ?? null, description: line.description,
+        lineTotal: line.lineTotal.toString(),
       };
       await tx.invoiceLine.update({
         where: { id: lineId },
@@ -818,9 +899,76 @@ export class BillingService {
       await this.audit.record({
         tenantId: actor.tenantId, userId: actor.userId, action: 'UPDATE_LINE',
         entityType: 'Invoice', entityId: id,
-        metadata: { lineId, before, after: { quantity, unitPrice: unitPrice.toString(), discountPct, description } },
+        metadata: {
+          invoiceNumber: inv.invoiceNumber, lineId, reason: dto.reason ?? null, before,
+          after: { quantity, unitPrice: unitPrice.toString(), discountPct, description, lineTotal: net.toString() },
+        },
       });
       return { ok: true };
+    });
+  }
+
+  /** Every add/edit/remove audited against one invoice - the "Edited" marker and
+   * history panel in the billing drawer, and the raw material for the report
+   * below (item 9 addendum). */
+  async getLineAuditHistory(actor: Actor, id: string) {
+    assertCan(actor.role, 'billing:manage');
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      const inv = await tx.invoice.findFirst({ where: { id }, select: { id: true } });
+      if (!inv) throw new NotFoundException('Invoice not found');
+      const entries = await tx.auditLog.findMany({
+        where: { entityType: 'Invoice', entityId: id, action: { in: ['ADD_LINE', 'UPDATE_LINE', 'VOID_LINE'] } },
+        orderBy: { createdAt: 'desc' },
+      });
+      const nm = await this.names(tx, entries.map((e) => e.userId));
+      return entries.map((e) => {
+        const m = (e.metadata ?? {}) as Record<string, unknown>;
+        return {
+          id: e.id,
+          action: e.action,
+          createdAt: e.createdAt,
+          userName: e.userId ? nm.get(e.userId) ?? null : null,
+          lineId: (m.lineId as string) ?? null,
+          reason: (m.reason as string) ?? null,
+          before: m.before ?? null,
+          after: m.after ?? null,
+        };
+      });
+    });
+  }
+
+  /** Hospital-Admin-facing review of every manual invoice line change in a date
+   * range, across all invoices - the home for FUNC-1-style accountability on
+   * the billing-desk's own line editor (item 9 addendum). Gated the same as
+   * the editor itself: the roles who can make these edits can also review them. */
+  async lineEditsReport(actor: Actor, q: { from?: string; to?: string }) {
+    assertCan(actor.role, 'billing:manage');
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      const where: Prisma.AuditLogWhereInput = {
+        entityType: 'Invoice', action: { in: ['ADD_LINE', 'UPDATE_LINE', 'VOID_LINE'] },
+      };
+      if (q.from || q.to) {
+        where.createdAt = {
+          ...(q.from ? { gte: new Date(q.from) } : {}),
+          ...(q.to ? { lt: new Date(new Date(q.to).getTime() + 86_400_000) } : {}),
+        };
+      }
+      const entries = await tx.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: 1000 });
+      const nm = await this.names(tx, entries.map((e) => e.userId));
+      return entries.map((e) => {
+        const m = (e.metadata ?? {}) as Record<string, unknown>;
+        return {
+          id: e.id,
+          action: e.action,
+          createdAt: e.createdAt,
+          invoiceId: e.entityId,
+          invoiceNumber: (m.invoiceNumber as string) ?? null,
+          userName: e.userId ? nm.get(e.userId) ?? null : null,
+          reason: (m.reason as string) ?? null,
+          before: m.before ?? null,
+          after: m.after ?? null,
+        };
+      });
     });
   }
 

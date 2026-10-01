@@ -22,6 +22,10 @@ export class InvoiceLineDto {
   @IsInt() @Min(1) quantity: number;
   @IsNumber() @Min(0) unitPrice: number;
   @IsOptional() @IsNumber() @Min(0) @Max(100) discountPct?: number;
+  // Required by the service, not the DTO, only when adding a line to an
+  // EXISTING invoice with a catalogue price override or a discount - a brand
+  // new invoice's own lines (CreateInvoiceDto) never need one.
+  @IsOptional() @IsString() @MaxLength(300) reason?: string;
 }
 
 export class CreateInvoiceDto {
@@ -45,6 +49,11 @@ export class UpdateInvoiceLineDto {
   @IsOptional() @IsInt() @Min(1) quantity?: number;
   @IsOptional() @IsNumber() @Min(0) unitPrice?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(100) discountPct?: number;
+  @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
+export class RemoveInvoiceLineDto {
+  @IsString() @MaxLength(300) reason: string;
 }
 
 export class UpdateInvoiceDto {

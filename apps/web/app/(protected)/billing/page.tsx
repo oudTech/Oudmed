@@ -71,9 +71,14 @@ function BillingInner() {
       <div className="px-8 pt-7 pb-4 flex items-center justify-between flex-shrink-0">
         <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
         {can(session?.role, 'billing:manage') && (
-          <Link href="/billing/new" className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#2b58c9]">
-            + New invoice
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link href="/billing/edits" className="text-sm font-medium text-gray-500 hover:text-primary hover:underline">
+              Edit history report
+            </Link>
+            <Link href="/billing/new" className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#2b58c9]">
+              + New invoice
+            </Link>
+          </div>
         )}
       </div>
       <div className="border-b border-[#D6DEE8] flex-shrink-0" />

@@ -30,6 +30,26 @@ export interface InvoiceLineDTO {
   drugId: string | null
   providedByName: string | null
   providedAt: string | null
+  /** Has at least one UPDATE_LINE audit entry (item 9 addendum). */
+  edited: boolean
+}
+
+/** A single add/edit/remove entry from an invoice's line-audit trail. */
+export interface InvoiceLineAuditDTO {
+  id: string
+  action: 'ADD_LINE' | 'UPDATE_LINE' | 'VOID_LINE'
+  createdAt: string
+  userName: string | null
+  lineId: string | null
+  reason: string | null
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+}
+
+/** Hospital-Admin-facing report row: a manual invoice line change, across all invoices. */
+export interface InvoiceLineEditReportRowDTO extends InvoiceLineAuditDTO {
+  invoiceId: string
+  invoiceNumber: string | null
 }
 
 export interface PaymentDTO {

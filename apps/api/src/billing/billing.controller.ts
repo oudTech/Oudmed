@@ -12,6 +12,7 @@ import {
   CancelInvoiceDto,
   CreateInvoiceDto,
   InvoiceLineDto,
+  RemoveInvoiceLineDto,
   ReversePaymentDto,
   UpdateInvoiceDto,
   UpdateInvoiceLineDto,
@@ -82,8 +83,13 @@ export class BillingController {
   }
 
   @Delete('billing/invoices/:id/lines/:lineId')
-  removeLine(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('lineId') lineId: string) {
-    return this.billing.removeInvoiceLine(actor(u), id, lineId);
+  removeLine(
+    @CurrentUser() u: AuthUser,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() dto: RemoveInvoiceLineDto,
+  ) {
+    return this.billing.removeInvoiceLine(actor(u), id, lineId, dto);
   }
 
   @Post('billing/invoices/:id/lines')
@@ -99,6 +105,16 @@ export class BillingController {
     @Body() dto: UpdateInvoiceLineDto,
   ) {
     return this.billing.updateInvoiceLine(actor(u), id, lineId, dto);
+  }
+
+  @Get('billing/invoices/:id/line-history')
+  lineHistory(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.billing.getLineAuditHistory(actor(u), id);
+  }
+
+  @Get('billing/line-edits-report')
+  lineEditsReport(@CurrentUser() u: AuthUser, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.billing.lineEditsReport(actor(u), { from, to });
   }
 
   @Post('billing/invoices/:id/cancel')

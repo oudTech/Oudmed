@@ -2,6 +2,8 @@ import { api } from './api'
 import type {
   BillingCatalogueItemDTO,
   InvoiceDetailDTO,
+  InvoiceLineAuditDTO,
+  InvoiceLineEditReportRowDTO,
   InvoiceListResponse,
   ReceiptDTO,
 } from '@oudhealth/contracts'
@@ -59,17 +61,24 @@ export const billingApi = {
       category?: string
       serviceItemId?: string
       drugId?: string
+      reason?: string
     },
   ) => api.post<{ ok: true; lineId: string }>(`/billing/invoices/${invoiceId}/lines`, data).then((r) => r.data),
 
   updateInvoiceLine: (
     invoiceId: string,
     lineId: string,
-    data: { description?: string; quantity?: number; unitPrice?: number; discountPct?: number },
+    data: { description?: string; quantity?: number; unitPrice?: number; discountPct?: number; reason?: string },
   ) => api.patch(`/billing/invoices/${invoiceId}/lines/${lineId}`, data).then((r) => r.data),
 
-  removeInvoiceLine: (invoiceId: string, lineId: string) =>
-    api.delete(`/billing/invoices/${invoiceId}/lines/${lineId}`).then((r) => r.data),
+  removeInvoiceLine: (invoiceId: string, lineId: string, reason: string) =>
+    api.delete(`/billing/invoices/${invoiceId}/lines/${lineId}`, { data: { reason } }).then((r) => r.data),
+
+  lineHistory: (invoiceId: string) =>
+    api.get<InvoiceLineAuditDTO[]>(`/billing/invoices/${invoiceId}/line-history`).then((r) => r.data),
+
+  lineEditsReport: (params: { from?: string; to?: string }) =>
+    api.get<InvoiceLineEditReportRowDTO[]>('/billing/line-edits-report', { params }).then((r) => r.data),
 
   acknowledgeReopen: (id: string) =>
     api.post(`/billing/invoices/${id}/acknowledge-reopen`).then((r) => r.data),

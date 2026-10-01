@@ -237,14 +237,42 @@ describe('BillingService (integration - money paths)', () => {
     const full = await billing.getInvoice(tenantId, inv.id);
     expect(Number(full.totalAmount)).toBe(7000);
 
-    await billing.removeInvoiceLine(actor, inv.id, full.lines[1].id);
+    await billing.removeInvoiceLine(actor, inv.id, full.lines[1].id, { reason: 'Patient declined dressing' } as any);
     const after = await billing.getInvoice(tenantId, inv.id);
     expect(after.lines).toHaveLength(1);
     expect(Number(after.totalAmount)).toBe(5000);
 
     await expect(
-      billing.removeInvoiceLine(actor, inv.id, after.lines[0].id),
+      billing.removeInvoiceLine(actor, inv.id, after.lines[0].id, { reason: 'test' } as any),
     ).rejects.toThrow(/at least one line/);
+  });
+
+  it('removeInvoiceLine: requires a reason, and audits a full before-snapshot', async () => {
+    const patient = await makePatient(tenantId);
+    const inv = await billing.createInvoice(actor, {
+      patientId: patient.id,
+      lines: [
+        { description: 'Consult', quantity: 1, unitPrice: 5000 },
+        { description: 'Dressing', quantity: 2, unitPrice: 1000, discountPct: 10 },
+      ],
+    } as any);
+    const full = await billing.getInvoice(tenantId, inv.id);
+    const dressingLine = full.lines.find((l) => l.description === 'Dressing')!;
+
+    await expect(
+      billing.removeInvoiceLine(actor, inv.id, dressingLine.id, {} as any),
+    ).rejects.toThrow(); // reason is a required DTO field
+
+    await billing.removeInvoiceLine(actor, inv.id, dressingLine.id, { reason: 'Billed in error' } as any);
+    const history = await billing.getLineAuditHistory(actor, inv.id);
+    const voided = history.find((h) => h.action === 'VOID_LINE' && h.lineId === dressingLine.id);
+    expect(voided).toBeTruthy();
+    expect(voided!.reason).toBe('Billed in error');
+    const voidedBefore = voided!.before as any;
+    expect(voidedBefore.description).toBe('Dressing');
+    expect(voidedBefore.quantity).toBe(2);
+    expect(Number(voidedBefore.unitPrice)).toBe(1000);
+    expect(Number(voidedBefore.discountPct)).toBe(10);
   });
 
   it('addInvoiceLine: appends a line and re-totals; blocked once paid', async () => {
@@ -268,7 +296,36 @@ describe('BillingService (integration - money paths)', () => {
     ).rejects.toMatchObject({ response: { code: 'HAS_PAYMENTS' } });
   });
 
-  it('updateInvoiceLine: corrects quantity/price/discount and re-totals; blocked once paid', async () => {
+  it('addInvoiceLine: a plain catalogue-priced line needs no reason; overriding its price does', async () => {
+    const drug = await ownerPrisma.drug.create({
+      data: { tenantId, sku: `MED-${Date.now()}`, name: 'Paracetamol', sellPrice: 200, quantityOnHand: 0 },
+    });
+    const patient = await makePatient(tenantId);
+    const inv = await billing.createInvoice(actor, {
+      patientId: patient.id,
+      lines: [{ description: 'Consult', quantity: 1, unitPrice: 5000 }],
+    } as any);
+
+    // billed at the catalogue price -> no reason needed
+    await billing.addInvoiceLine(actor, inv.id, {
+      description: 'Paracetamol', quantity: 2, unitPrice: 200, drugId: drug.id,
+    } as any);
+
+    // overriding below the catalogue price with no reason -> rejected
+    await expect(
+      billing.addInvoiceLine(actor, inv.id, { description: 'Paracetamol', quantity: 1, unitPrice: 150, drugId: drug.id } as any),
+    ).rejects.toMatchObject({ response: { code: 'REASON_REQUIRED' } });
+
+    const { lineId } = await billing.addInvoiceLine(actor, inv.id, {
+      description: 'Paracetamol', quantity: 1, unitPrice: 150, drugId: drug.id, reason: 'Hardship waiver',
+    } as any);
+    const history = await billing.getLineAuditHistory(actor, inv.id);
+    const add = history.find((h) => h.action === 'ADD_LINE' && h.lineId === lineId);
+    expect(add!.reason).toBe('Hardship waiver');
+    expect(add!.after).toMatchObject({ unitPrice: '150', quantity: 1 });
+  });
+
+  it('updateInvoiceLine: a quantity-only fix needs no reason; adding a discount does', async () => {
     const patient = await makePatient(tenantId);
     const inv = await billing.createInvoice(actor, {
       patientId: patient.id,
@@ -276,8 +333,17 @@ describe('BillingService (integration - money paths)', () => {
     } as any);
     const before = await billing.getInvoice(tenantId, inv.id);
 
+    // quantity-only fix: no catalogue link, no discount change -> no reason needed
+    await billing.updateInvoiceLine(actor, inv.id, before.lines[0].id, { quantity: 2 } as any);
+
+    // now add a 10% discount with no reason -> rejected
+    await expect(
+      billing.updateInvoiceLine(actor, inv.id, before.lines[0].id, { discountPct: 10 } as any),
+    ).rejects.toMatchObject({ response: { code: 'REASON_REQUIRED' } });
+
+    // with a reason, it saves and re-totals
     await billing.updateInvoiceLine(actor, inv.id, before.lines[0].id, {
-      quantity: 2, unitPrice: 9000, discountPct: 10,
+      unitPrice: 9000, discountPct: 10, reason: 'Loyalty discount approved by admin',
     } as any);
     const after = await billing.getInvoice(tenantId, inv.id);
     // 2 * 9000 = 18000 gross, 10% off = 16200
@@ -288,6 +354,41 @@ describe('BillingService (integration - money paths)', () => {
     await expect(
       billing.updateInvoiceLine(actor, inv.id, after.lines[0].id, { quantity: 1 } as any),
     ).rejects.toMatchObject({ response: { code: 'HAS_PAYMENTS' } });
+  });
+
+  it('updateInvoiceLine: overriding a catalogue-linked price needs a reason; audited with before/after', async () => {
+    const svc = await ownerPrisma.serviceItem.create({ data: { tenantId, name: 'Suture removal', unitPrice: 3000 } });
+    const patient = await makePatient(tenantId);
+    const inv = await billing.createInvoice(actor, {
+      patientId: patient.id,
+      lines: [{ description: 'Suture removal', quantity: 1, unitPrice: 3000, serviceItemId: svc.id }],
+    } as any);
+    const full = await billing.getInvoice(tenantId, inv.id);
+    const lineId = full.lines[0].id;
+
+    // same price as the catalogue, just a quantity bump -> no reason needed
+    await billing.updateInvoiceLine(actor, inv.id, lineId, { quantity: 2 } as any);
+
+    // dropping below the catalogue price with no reason -> rejected
+    await expect(
+      billing.updateInvoiceLine(actor, inv.id, lineId, { unitPrice: 2000 } as any),
+    ).rejects.toMatchObject({ response: { code: 'REASON_REQUIRED' } });
+
+    // with a reason, it saves and is fully audited
+    await billing.updateInvoiceLine(actor, inv.id, lineId, { unitPrice: 2000, reason: 'Hardship waiver' } as any);
+    const after = await billing.getInvoice(tenantId, inv.id);
+    expect(Number(after.lines[0].unitPrice)).toBe(2000);
+    expect(after.lines[0].edited).toBe(true);
+
+    const history = await billing.getLineAuditHistory(actor, inv.id);
+    const edit = history.find((h) => h.action === 'UPDATE_LINE' && h.reason === 'Hardship waiver');
+    expect(edit).toBeTruthy();
+    const editBefore = edit!.before as any;
+    const editAfter = edit!.after as any;
+    expect(Number(editBefore.unitPrice)).toBe(3000);
+    expect(editBefore.quantity).toBe(2);
+    expect(Number(editAfter.unitPrice)).toBe(2000);
+    expect(editAfter.quantity).toBe(2);
   });
 
   it('listInvoices summary is computed with DB aggregates and matches the rows', async () => {
@@ -508,7 +609,9 @@ describe('BillingService (integration - money paths)', () => {
       await expect(
         billing.updateInvoice(actor, invoiceId, { note: 'trying to sneak an edit in' } as any),
       ).rejects.toMatchObject({ response: { code: 'HAS_CLAIM' } });
-      await expect(billing.removeInvoiceLine(actor, invoiceId, lineId)).rejects.toMatchObject({
+      await expect(
+        billing.removeInvoiceLine(actor, invoiceId, lineId, { reason: 'test' } as any),
+      ).rejects.toMatchObject({
         response: { code: 'HAS_CLAIM' },
       });
       await expect(
@@ -549,7 +652,7 @@ describe('BillingService (integration - money paths)', () => {
       expect(Number(detail.totalAmount)).toBe(3500); // 2500 + 1000
       expect(detail.isSupplementary).toBe(true);
 
-      await billing.removeInvoiceLine(actor, supplementId, addedId);
+      await billing.removeInvoiceLine(actor, supplementId, addedId, { reason: 'Duplicate order' } as any);
       const afterRemove = await billing.getInvoice(tenantId, supplementId);
       expect(Number(afterRemove.totalAmount)).toBe(2500);
 

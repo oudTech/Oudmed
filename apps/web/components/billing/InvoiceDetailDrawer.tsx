@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
@@ -44,6 +44,10 @@ export function InvoiceDetailDrawer({
   const [editQty, setEditQty] = useState('')
   const [editPrice, setEditPrice] = useState('')
   const [editDiscount, setEditDiscount] = useState('')
+  const [editReason, setEditReason] = useState('')
+  const [removingLineId, setRemovingLineId] = useState<string | null>(null)
+  const [removeReason, setRemoveReason] = useState('')
+  const [showHistory, setShowHistory] = useState(false)
 
   const q = useQuery({
     queryKey: ['billing-invoice', invoiceId],
@@ -85,23 +89,28 @@ export function InvoiceDetailDrawer({
       billingApi.addInvoiceLine(invoiceId!, {
         description: line.description, quantity: line.quantity, unitPrice: line.unitPrice,
         discountPct: line.discountPct || undefined, category: line.category,
-        serviceItemId: line.serviceItemId, drugId: line.drugId,
+        serviceItemId: line.serviceItemId, drugId: line.drugId, reason: line.reason,
       }),
     onSuccess: () => { toast('Line added', 'success'); invalidate() },
     onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not add the line.', 'error'),
   })
   const updateLine = useMutation({
-    mutationFn: (p: { lineId: string; quantity: number; unitPrice: number; discountPct: number }) =>
+    mutationFn: (p: { lineId: string; quantity: number; unitPrice: number; discountPct: number; reason: string }) =>
       billingApi.updateInvoiceLine(invoiceId!, p.lineId, {
-        quantity: p.quantity, unitPrice: p.unitPrice, discountPct: p.discountPct,
+        quantity: p.quantity, unitPrice: p.unitPrice, discountPct: p.discountPct, reason: p.reason || undefined,
       }),
-    onSuccess: () => { setEditingLineId(null); toast('Line updated', 'success'); invalidate() },
+    onSuccess: () => { setEditingLineId(null); setEditReason(''); toast('Line updated', 'success'); invalidate() },
     onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not update the line.', 'error'),
   })
   const removeLine = useMutation({
-    mutationFn: (lineId: string) => billingApi.removeInvoiceLine(invoiceId!, lineId),
-    onSuccess: () => { toast('Line removed', 'success'); invalidate() },
+    mutationFn: (p: { lineId: string; reason: string }) => billingApi.removeInvoiceLine(invoiceId!, p.lineId, p.reason),
+    onSuccess: () => { setRemovingLineId(null); setRemoveReason(''); toast('Line removed', 'success'); invalidate() },
     onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not remove the line.', 'error'),
+  })
+  const history = useQuery({
+    queryKey: ['billing-invoice-history', invoiceId],
+    queryFn: () => billingApi.lineHistory(invoiceId!),
+    enabled: showHistory && !!invoiceId,
   })
 
   const meta = inv ? INVOICE_STATUS_META[inv.status] : null
@@ -112,6 +121,7 @@ export function InvoiceDetailDrawer({
     setEditQty(String(l.quantity))
     setEditPrice(String(Number(l.unitPrice)))
     setEditDiscount(l.discountPct ? String(Number(l.discountPct)) : '')
+    setEditReason('')
   }
 
   return (
@@ -191,15 +201,22 @@ export function InvoiceDetailDrawer({
               </div>
             )}
 
-            {!canEditLines && canManage && inv.status !== 'CANCELLED' && (
-              <p className="text-xs text-gray-400 -mb-2">
-                {inv.claim
-                  ? 'This invoice has an insurance claim - line items cannot be edited.'
-                  : locked
-                    ? 'Reverse the payment(s) on this invoice to edit its line items.'
-                    : null}
-              </p>
-            )}
+            <div className="flex items-center justify-between -mb-2">
+              {!canEditLines && canManage && inv.status !== 'CANCELLED' ? (
+                <p className="text-xs text-gray-400">
+                  {inv.claim
+                    ? 'This invoice has an insurance claim - line items cannot be edited.'
+                    : locked
+                      ? 'Reverse the payment(s) on this invoice to edit its line items.'
+                      : null}
+                </p>
+              ) : <span />}
+              {canManage && (
+                <button className="text-xs text-gray-400 hover:text-primary hover:underline" onClick={() => setShowHistory(true)}>
+                  Edit history
+                </button>
+              )}
+            </div>
 
             <div className="border border-gray-100 rounded-xl overflow-x-auto">
               <table className="w-full text-sm">
@@ -211,35 +228,59 @@ export function InvoiceDetailDrawer({
                 <tbody>
                   {inv.lines.map((l) => (
                     editingLineId === l.id ? (
-                      <tr key={l.id} className="border-t border-gray-100 bg-blue-50/30">
-                        <td className="px-3 py-2" colSpan={3}>{l.description}</td>
-                        <td className="px-2 py-1.5"><Input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-24" /></td>
-                        <td className="px-2 py-1.5"><Input type="number" value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-16" /></td>
-                        <td className="px-2 py-1.5"><Input type="number" value={editDiscount} onChange={(e) => setEditDiscount(e.target.value)} className="w-16" /></td>
-                        <td className="px-3 py-2 text-gray-500">
-                          {naira((Number(editPrice) || 0) * (Number(editQty) || 0) * (1 - (Number(editDiscount) || 0) / 100))}
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          <button
-                            className="text-xs text-primary font-medium hover:underline disabled:opacity-50"
-                            disabled={updateLine.isPending || !Number(editQty) || Number(editPrice) < 0}
-                            onClick={() => updateLine.mutate({
-                              lineId: l.id,
-                              quantity: Number(editQty),
-                              unitPrice: Number(editPrice),
-                              discountPct: Number(editDiscount) || 0,
-                            })}
-                          >
-                            Save
-                          </button>
-                          <button className="text-xs text-gray-400 hover:underline ml-2" onClick={() => setEditingLineId(null)}>
-                            Cancel
-                          </button>
-                        </td>
-                      </tr>
+                      <Fragment key={l.id}>
+                        <tr className="border-t border-gray-100 bg-blue-50/30">
+                          <td className="px-3 py-2" colSpan={3}>{l.description}</td>
+                          <td className="px-2 py-1.5"><Input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-24" /></td>
+                          <td className="px-2 py-1.5"><Input type="number" value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-16" /></td>
+                          <td className="px-2 py-1.5"><Input type="number" value={editDiscount} onChange={(e) => setEditDiscount(e.target.value)} className="w-16" /></td>
+                          <td className="px-3 py-2 text-gray-500">
+                            {naira((Number(editPrice) || 0) * (Number(editQty) || 0) * (1 - (Number(editDiscount) || 0) / 100))}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            <button
+                              className="text-xs text-primary font-medium hover:underline disabled:opacity-50"
+                              disabled={updateLine.isPending || !Number(editQty) || Number(editPrice) < 0}
+                              onClick={() => updateLine.mutate({
+                                lineId: l.id,
+                                quantity: Number(editQty),
+                                unitPrice: Number(editPrice),
+                                discountPct: Number(editDiscount) || 0,
+                                reason: editReason.trim(),
+                              })}
+                            >
+                              Save
+                            </button>
+                            <button className="text-xs text-gray-400 hover:underline ml-2" onClick={() => setEditingLineId(null)}>
+                              Cancel
+                            </button>
+                          </td>
+                        </tr>
+                        <tr className="bg-blue-50/30">
+                          <td className="px-3 pb-2" colSpan={8}>
+                            <input
+                              value={editReason}
+                              onChange={(e) => setEditReason(e.target.value)}
+                              placeholder="Reason (required if the price overrides the catalogue price or the discount increases)"
+                              className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs"
+                            />
+                          </td>
+                        </tr>
+                      </Fragment>
                     ) : (
                       <tr key={l.id} className="border-t border-gray-100">
-                        <td className="px-3 py-2">{l.description}</td>
+                        <td className="px-3 py-2">
+                          {l.description}
+                          {l.edited && (
+                            <button
+                              className="ml-1.5 text-[11px] text-amber-600 hover:underline align-middle"
+                              onClick={() => setShowHistory(true)}
+                              title="This line has been edited - see Edit history"
+                            >
+                              (edited)
+                            </button>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-gray-500">{l.category ?? '-'}</td>
                         <td className="px-3 py-2 text-gray-500">{l.providedByName ?? '-'}</td>
                         <td className="px-3 py-2">{naira(l.unitPrice)}</td>
@@ -252,8 +293,7 @@ export function InvoiceDetailDrawer({
                             {inv.lines.length > 1 && (
                               <button
                                 className="text-xs text-gray-400 hover:text-red-500 ml-2"
-                                disabled={removeLine.isPending}
-                                onClick={() => removeLine.mutate(l.id)}
+                                onClick={() => { setRemovingLineId(l.id); setRemoveReason('') }}
                               >
                                 Remove
                               </button>
@@ -262,6 +302,30 @@ export function InvoiceDetailDrawer({
                         )}
                       </tr>
                     )
+                  ))}
+                  {inv.lines.map((l) => removingLineId === l.id && (
+                    <tr key={`${l.id}-remove`} className="bg-red-50/40">
+                      <td className="px-3 py-2" colSpan={canEditLines ? 8 : 7}>
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={removeReason}
+                            onChange={(e) => setRemoveReason(e.target.value)}
+                            placeholder={`Reason for removing "${l.description}" (required)`}
+                            className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-xs"
+                          />
+                          <button
+                            className="text-xs text-red-600 font-medium hover:underline disabled:opacity-50 flex-shrink-0"
+                            disabled={removeLine.isPending || removeReason.trim().length < 3}
+                            onClick={() => removeLine.mutate({ lineId: l.id, reason: removeReason.trim() })}
+                          >
+                            Confirm remove
+                          </button>
+                          <button className="text-xs text-gray-400 hover:underline flex-shrink-0" onClick={() => setRemovingLineId(null)}>
+                            Cancel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
                   ))}
                   {canEditLines && (
                     <tr className="border-t border-gray-100">
@@ -406,7 +470,40 @@ export function InvoiceDetailDrawer({
         }
       />
       <ReceiptView paymentId={receiptId} open={!!receiptId} onClose={() => setReceiptId(null)} />
-      <AddItemModal open={addingLine} onClose={() => setAddingLine(false)} onAdd={(line) => addLine.mutate(line)} />
+      <AddItemModal open={addingLine} onClose={() => setAddingLine(false)} onAdd={(line) => addLine.mutate(line)} showReason />
+
+      <Drawer open={showHistory} onClose={() => setShowHistory(false)} title="Invoice edit history" width={520}>
+        {!history.data ? (
+          <p className="text-sm text-gray-400">Loading…</p>
+        ) : history.data.length === 0 ? (
+          <p className="text-sm text-gray-400">No manual edits on this invoice yet.</p>
+        ) : (
+          <ul className="space-y-3">
+            {history.data.map((h) => (
+              <li key={h.id} className="border border-gray-100 rounded-xl p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-gray-800">
+                    {h.action === 'ADD_LINE' ? 'Line added' : h.action === 'VOID_LINE' ? 'Line removed' : 'Line edited'}
+                  </span>
+                  <span className="text-xs text-gray-400">{dt(h.createdAt)}</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-0.5">{h.userName ?? 'Unknown user'}</p>
+                {h.reason && <p className="text-xs text-gray-600 mt-1">Reason: {h.reason}</p>}
+                {h.before && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    Before: {JSON.stringify(h.before)}
+                  </p>
+                )}
+                {h.after && (
+                  <p className="text-xs text-gray-400">
+                    After: {JSON.stringify(h.after)}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Drawer>
     </>
   )
 }
