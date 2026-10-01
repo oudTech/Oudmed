@@ -593,29 +593,63 @@ charged.
 
 ### When bed-day charges are posted
 
-A new daily job, following `renewal.service.ts`'s exact pattern:
+A daily job, following `renewal.service.ts`'s tenant-iteration pattern,
+shipped as `BedChargesService.postNightlyBedCharges()`:
 
 ```ts
-@Cron('5 23 * * *') // 23:05 UTC = 00:05 Africa/Lagos, just after midnight census
-async postNightlyBedCharges() { /* iterate active tenants via forTenant, same as RenewalService */ }
+@Cron('5 0 * * *', { timeZone: 'Africa/Lagos' })
+async postNightlyBedCharges() { /* iterate active tenants, then each ADMITTED admission, via forTenant */ }
 ```
 
-For each `ADMITTED` admission in each tenant: determine whether last
-night's census point has already been charged via a small `BedDayCharge
-{ admissionId, nightOf, invoiceLineId }` marker table - a trivial
-unique-constraint check rather than a string/date scrape, removing an
-entire class of "did we already charge this night" bugs. Post one
-`InvoiceLine` at the ward-at-that-night's `dailyRate` via `postCharge`
-(category `"Inpatient"`, description `"Ward stay - <ward name> - <date>"`).
+**Confirmed to actually fire at 00:05 Lagos time regardless of server
+deployment timezone**: rather than a UTC-offset cron string (`'5 23 * * *'`,
+relying on the server process running in UTC - the PROD-4 assumption this
+codebase explicitly avoids everywhere else), the job passes an explicit
+`timeZone: 'Africa/Lagos'` to `@Cron` and writes the cron expression in that
+zone's own local time (`'5 0 * * *'`). `@nestjs/schedule`'s `CronOptions`
+supports this directly (confirmed in its type definitions); it is correct no
+matter what timezone the deployment host itself runs in.
+
+For each `ADMITTED` admission in each tenant: determine whether a given
+night/block has already been charged via the `BedDayCharge
+{ admissionId, nightOf, invoiceLineId }` marker table - enforced by a real
+DB-level `UNIQUE (admissionId, nightOf)` index (confirmed via `psql \d
+"BedDayCharge"`: `BedDayCharge_admissionId_nightOf_key`), not just a
+Prisma-level check, so two concurrent writers for the same night can never
+both succeed. Post one `InvoiceLine` at the ward-at-that-night's current
+`dailyRate` via `postCharge` (category `"Inpatient"`, description `"Ward
+stay - <ward name> - <date>"`).
+
+**Concurrency**: `BillingService.postChargeToAdmission`'s own
+per-admission advisory lock (`pg_advisory_xact_lock`, transaction-scoped)
+serializes two concurrent attempts to charge the same admission - whether
+that is the nightly cron racing discharge's own reconciliation, or two
+server instances both running the cron. The second writer's transaction
+rolls back whole (its own invoice line included) the moment it hits the
+unique-index conflict, rather than leaving a duplicate or a half-posted
+charge; the next run recomputes from scratch and only finds genuinely
+still-missing nights. Tested directly (`bed-charges.int-spec.ts`): two
+concurrent calls for the same admission/window produce exactly one charge
+per night, never two.
+
+**Catch-up uses the rate current at posting time - there is no rate
+history.** A held night (missing `dailyRate`/`dayCaseRate` at the moment it
+was due) gets no `BedDayCharge` row at all, so it is retried on every
+subsequent run until a rate exists; when it finally posts, it posts at
+whatever rate is set *then*, not any rate that may have been in effect on
+the night itself. A missed cron run entirely (the process asleep, or down
+for a deploy) is likewise caught up automatically - the plan is always
+recomputed from the admission's full history, not "since the last run" - by
+either the next cron tick or, for an admission that discharges before the
+cron ever gets to it again, by discharge's own final reconciliation.
 
 At **discharge**, before closing the admission: run the same per-night
-reconciliation for any night from the last cron run up to the discharge
-instant (so a patient discharged at 6am is correctly billed for the night
-just passed even though the 00:05 cron has already run and - depending on
-exact timing - may or may not have seen this admission), and apply the
-short-stay rule (above) if the whole admission turns out to have crossed
-zero midnights. This makes discharge the authoritative "final settle" step
-regardless of cron timing.
+reconciliation up to the discharge instant (so a patient discharged at 6am
+is correctly billed for the night just passed even though the 00:05 cron
+has already run and - depending on exact timing - may or may not have seen
+this admission), and apply the short-stay rule (above) if the whole
+admission turns out to have crossed zero midnights. This makes discharge
+the authoritative "final settle" step regardless of cron timing.
 
 ### Transfers: no double charge for the same day
 

@@ -88,6 +88,36 @@ describe('BedChargesService (integration - F1b bed-day charges)', () => {
     expect(invoices2[0].lines).toHaveLength(3);
   });
 
+  it('two concurrent runs (cron + discharge, or two instances) never double-post the same night', async () => {
+    const { ward, bed } = await makeWard(15000);
+    const patient = await makePatient(tenantId);
+    const admission = await admissions.admit(nurseActor, {
+      patientId: patient.id, wardId: ward.id, bedId: bed.id, admissionType: 'ELECTIVE',
+    } as any);
+    const admittedAt = days(-2);
+    await backdateAdmission(admission.id, admittedAt);
+    const tenant = await tenantSettings();
+    const through = new Date();
+
+    // Both runs read "nothing charged yet" before either commits - relies on
+    // BedDayCharge's DB-level unique(admissionId, nightOf) index (confirmed
+    // via psql: "BedDayCharge_admissionId_nightOf_key" UNIQUE btree) plus
+    // BillingService.postChargeToAdmission's own per-admission advisory lock
+    // to serialize the two writers, so the loser's whole transaction rolls
+    // back (including its own invoice line) rather than leaving a duplicate.
+    const run = () => prisma.forTenant(tenantId, (tx) =>
+      bedCharges.postBedCharges(tx, { id: admission.id, tenantId, patientId: patient.id, admittedAt }, tenant, through, false),
+    );
+    const results = await Promise.allSettled([run(), run()]);
+    expect(results.some((r) => r.status === 'fulfilled')).toBe(true);
+
+    const markers = await ownerPrisma.bedDayCharge.findMany({ where: { admissionId: admission.id } });
+    const invoices = await ownerPrisma.invoice.findMany({ where: { admissionId: admission.id }, include: { lines: true } });
+    expect(markers).toHaveLength(2); // 2 midnights crossed over the backdated 2-day stay
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0].lines).toHaveLength(2); // never 4 - no double-post from the race
+  });
+
   it('holds a night with no ward rate, then catches up once the rate is set, at the current rate', async () => {
     const { ward, bed } = await makeWard(null);
     const patient = await makePatient(tenantId);

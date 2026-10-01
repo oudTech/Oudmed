@@ -30,7 +30,11 @@ export class BedChargesService {
     private billing: BillingService,
   ) {}
 
-  @Cron('5 23 * * *') // 23:05 UTC = 00:05 Africa/Lagos, just after midnight census
+  // 00:05 Africa/Lagos, just after midnight census - an explicit timeZone
+  // rather than a UTC-offset cron string, so this is correct regardless of
+  // the server's own deployment timezone (PROD-4: never assume the process
+  // runs in UTC).
+  @Cron('5 0 * * *', { timeZone: 'Africa/Lagos' })
   async postNightlyBedCharges(): Promise<void> {
     const tenants = await this.prisma.tenant.findMany({
       where: { isActive: true },
