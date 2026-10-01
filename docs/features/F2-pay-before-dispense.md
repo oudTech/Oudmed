@@ -111,14 +111,54 @@ now carries the prepared line(s) alongside whatever else is on it.
 **Constraint, stated plainly rather than hidden**: because this app has no
 per-line payment tracking (section 1), "has this charge been paid" is
 answered at the *invoice* level - the invoice carrying the prepared line
-must reach `PAID` status, not merely `PARTIAL`. If other, unrelated charges
-share that invoice and remain unpaid, release stays blocked until the whole
-invoice is settled. This is a real trade-off of the current billing model,
-not an oversight; a future per-line reservation/payment model would relax
-it, but is out of scope here. In practice this rarely bites: a prepared
-pharmacy charge usually shares an invoice with that same visit's
-consultation/lab charges, which a patient typically settles together at the
-same billing-desk visit.
+must reach `PAID` status, not merely `PARTIAL`. **This means a patient must
+clear the whole invoice balance - including an unrelated consultation
+charge on the same visit - before drugs on that invoice can be released,
+not just the pharmacy amount.** This is a real trade-off of the current
+billing model, not an oversight; a future per-line reservation/payment
+model would relax it, but is out of scope here. In practice this rarely
+bites: a prepared pharmacy charge usually shares an invoice with that same
+visit's consultation/lab charges, which a patient typically settles
+together at the same billing-desk visit - but it is a real constraint when
+it does not, and both the doc and the UI say so exactly, not vaguely:
+
+- **"Awaiting payment" status copy** (section 6): *"Awaiting payment - the
+  full invoice balance must be cleared, including any other charges on it,
+  before these items can be released."*
+- **Release-blocked error** (if release is attempted before the invoice is
+  `PAID`): *"This invoice is not fully paid yet (balance: ₦X). Settle the
+  whole invoice, not just this prescription, before releasing these items."*
+
+### Alternative considered: a dedicated pharmacy-only invoice
+
+A drugs-only invoice, kept separate from that visit's consultation/lab
+invoice, would remove this friction entirely - a patient could pay for just
+their drugs without needing to clear an unrelated charge. It is a real,
+boundedly-sized alternative, not dismissed here as impractical:
+
+- **What it would take**: `prepare()` would resolve a *second*,
+  category-scoped open invoice for the visit (a new
+  `resolveOpenPharmacyInvoiceForVisit`, filtering by `category: 'Pharmacy'`
+  instead of taking whichever invoice is open) instead of sharing the
+  visit's one open invoice. It would need its own supplementary-invoice
+  handling (a drugs-only bill can itself become locked and need a
+  supplementary one, same FUNC-2 mechanism, just scoped) - not new
+  machinery, but a second parallel instance of it.
+- **What it would cost**: every visit with a gated pharmacy charge now has
+  **two** open invoices instead of one, which ripples outward - the billing
+  list and reports would show two invoice rows per such visit instead of
+  one, and billing-desk staff would need to see clearly which invoice is
+  "the drugs one" vs. "everything else" rather than the one-invoice-per-
+  visit mental model FUNC-2 was built around. The code cost is moderate (a
+  category-filtered variant of an existing resolver); the UX/reporting cost
+  is the real one, and is not free.
+- **Recommendation**: keep the single shared-invoice design for the initial
+  build, with the UI copy above making the constraint explicit rather than
+  surprising anyone. Revisit a dedicated pharmacy invoice as a follow-up
+  enhancement if this friction proves real in practice once a hospital is
+  actually using the gate day to day - it is a contained, well-understood
+  addition to layer in later, not something that needs to be decided before
+  F2 can ship.
 
 ### Release (`POST /pharmacy/prescriptions/:id/release`)
 
@@ -205,6 +245,11 @@ surfaced in the same admin-facing manual-overrides report item 9 built
 item, the status pill gains two new states on top of the existing ones:
 
 - **"Awaiting payment"** - `preparedQty > 0`, parent invoice not yet `PAID`.
+  Shown with the exact copy from section 4: *"Awaiting payment - the full
+  invoice balance must be cleared, including any other charges on it,
+  before these items can be released."* - naming the whole-invoice
+  constraint up front rather than letting a patient discover it only when
+  release is attempted.
 - **"Paid - ready to dispense"** - `preparedQty > 0`, parent invoice is
   `PAID`. Computed live by joining to the invoice on read, never cached, so
   a payment reversal (item 9's existing `reversePayment`) is immediately

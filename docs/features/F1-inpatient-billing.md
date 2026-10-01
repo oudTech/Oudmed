@@ -135,11 +135,72 @@ migration needed (existing rows stay visit-only). The encounter workspace
 and ward-round UI pass `admissionId` instead of/alongside `visitId` when the
 patient is currently admitted.
 
+**Why not route through the admission's visit(s) instead** (the smaller
+migration, considered and rejected): confirmed by reading
+`encounters.service.ts` and `patients/clinical.service.ts` directly -
+`Complaint`/`Diagnosis`/`Prescription`/`ClinicalNote`/`ClinicalOrder` are
+queried two different ways today, and neither suits reuse as-is:
+
+- The **patient chart's tabs** (`clinical.service.ts:47-51` and siblings)
+  list these by **`patientId`**, not `visitId` - a patient's whole
+  diagnosis/prescription history across every encounter, ever. This path is
+  completely unaffected by whichever linking choice F1 makes; it is why the
+  migration is safe regardless (see below).
+- The **encounter workspace** (`encounters.service.ts:67-71`,
+  `/encounters/[visitId]`) lists these by **`visitId`** - and that page's
+  whole model is a single-sitting outpatient encounter: one `doctorId`,
+  a scheduling/check-in lifecycle (`VisitStatus`), and FUNC-2's
+  completed-visit guard that blocks new orders/prescriptions once the visit
+  is `COMPLETED`.
+
+Routing an admission through "one synthetic Visit per stay" would need that
+Visit to stay open for days or weeks, under a model built around a same-day
+appointment, and would conflate two genuinely different real-world shapes:
+an admission already has separate `admittingDoctor`/`attendingDoctor`
+fields precisely because more than one clinician is involved over a stay,
+which a single `Visit.doctorId` does not represent; and the encounter
+workspace's UI would need admission-specific behaviour anyway (a multi-day
+timeline is not what that page is designed to show) - so the "smaller
+migration" does not actually avoid new work, it just moves the same problem
+into the Visit/Encounters model, which then needs its own changes to cope.
+`admissionId` on five tables, by contrast, is **purely additive**: every
+existing query above keeps working exactly as it does today (patient-chart
+tabs stay `patientId`-keyed, the encounter workspace stays `visitId`-keyed),
+and it mirrors the one precedent this schema already has (`VitalSigns`)
+instead of introducing a second, different pattern. Recommendation stands:
+add `admissionId` to the five models.
+
 ## 4. Deposits
 
-A deposit is money held against the stay, not a payment against a specific
-invoice line - it should not look like the patient already settled a
-charge. Kept as its own small ledger rather than overloading `Payment`.
+**Decision: a deposit is never a `Payment` row.** It is held as a separate
+admission-level credit, only ever converted into a real `Payment` by an
+explicit settlement action - never automatically the moment it is taken.
+
+### Why not record it as a `Payment` against the running-bill invoice
+
+`isLocked(inv) = inv.payments.some(p => !p.reversedAt) || !!inv.claim`
+(`billing.service.ts:659`) is a load-bearing invariant: FUNC-2 and the item
+9 audit work both depend on "a live payment means the invoice is locked
+against silent edits" meaning exactly that, everywhere. If a deposit were
+recorded as a `Payment`, the running-bill invoice would lock **the moment
+the first deposit is taken** - day one of a two-week stay - and every
+following bed-day charge would spawn a fresh supplementary invoice (FUNC-2's
+existing mechanism, working exactly as designed) rather than accumulating on
+one bill. That is not a bug in FUNC-2; it is FUNC-2 doing precisely what it
+was built to do. But it would fragment a long admission into a new invoice
+every single night, which is the wrong shape for a running bill and not
+what "deposit" means in hospital billing - a deposit is held *against* the
+eventual bill, it does not *settle* any of it yet.
+
+The alternative considered and rejected: special-case `isLocked()` so an
+admission's invoice does not lock on a live payment while the admission is
+still open. Rejected because it weakens a deliberately strict invariant
+everywhere it is checked (`updateInvoice`, `addInvoiceLine`,
+`updateInvoiceLine`, `removeInvoiceLine`, claim generation, item 9's whole
+audit trail) for one call site's convenience - and it would need to keep
+distinguishing "this payment was a deposit application" from "this payment
+really does mean settled," which is exactly the distinction the credit-
+ledger design below gives for free, without touching `isLocked` at all.
 
 ### Schema
 
@@ -168,23 +229,63 @@ model AdmissionDeposit {
 ### API
 
 - `POST /admissions/:id/deposits` `{ amount, method, reference? }` - records
-  a deposit or a top-up (same endpoint, called again). Permission
-  `admission:deposit` (new action: ACCOUNTANT, RECEPTIONIST, HOSPITAL_ADMIN
-  - the billing-desk roles, not clinical ones, matching `billing:manage`'s
-  own role set since this is money handling).
+  a deposit or a top-up (same endpoint, called again). Never touches
+  `Invoice`/`Payment`. Permission `admission:deposit` (new action:
+  ACCOUNTANT, RECEPTIONIST, HOSPITAL_ADMIN - the billing-desk roles, not
+  clinical ones, matching `billing:manage`'s own role set since this is
+  money handling).
+- `POST /admissions/:id/apply-deposit` `{ amount }` - the explicit interim-
+  settlement action: converts up to `amount` of *available* deposit credit
+  (section below) into a real `Payment` against the admission's currently
+  open invoice, via the existing `addPayment` path unchanged. This **does**
+  lock that invoice, on purpose - once deposit money is formally applied
+  against specific charges, those charges are paid and deserve the same
+  protection against silent editing as any other paid invoice. The next
+  charge after this naturally opens a supplementary invoice
+  (`resolveOpenInvoiceForAdmission`, unchanged FUNC-2 mechanism) - a
+  multi-invoice running bill across a long stay, each interim-settled
+  chunk preserved immutably, is the correct shape, not an edge case to work
+  around.
 - `POST /admissions/:id/deposits/:depositId/refund` `{ amount, reason }` -
   partial or full refund of one deposit; blocked if `amount` exceeds
   `deposit.amount - (deposit.refundedAmount ?? 0)`. Audited
   (`DEPOSIT_REFUND`, before/after, same shape as the item 9 line-edit audit).
-- `GET /admissions/:id/bill` (section 5) includes `totalDeposited`
-  (sum of `amount - refundedAmount` across the admission's deposits).
+- `GET /admissions/:id/bill` (section 8) includes `totalDeposited`
+  (sum of `amount - refundedAmount` across deposits - i.e. credit not yet
+  applied as a Payment and not yet refunded) alongside the invoice-derived
+  totals.
 
-### Balance vs. deposit
+### Balance, computed as a view - never a stored field
 
-The running-bill view shows, side by side: total charged (sum of this
-admission's invoice totals), total deposited, and balance = charged minus
-deposited. A negative balance (deposit exceeds charges) is the refundable
-amount, settled at discharge (section 7).
+The running bill is an **admission-level aggregate computed fresh on every
+read**, not a new persisted total:
+
+- `totalCharged` = sum of `totalAmount` across every `Invoice` with this
+  `admissionId` (primary + any supplementary).
+- `totalPaid` = sum of real `Payment`s (not reversed) across those same
+  invoices - this already includes anything applied via
+  `apply-deposit`, since that endpoint posts an ordinary `Payment`.
+- `totalDeposited` = unapplied, unrefunded deposit credit (section above).
+- `balance` = `totalCharged - totalPaid - totalDeposited`. Positive = still
+  owed; negative = credit beyond what is owed, refundable.
+
+This is deliberately **not** the same number as any single invoice's own
+`balanceDue` (that field only ever reflects its own invoice's lines and
+payments, unchanged) - it is a view assembled across all of an admission's
+invoices plus its deposit ledger, specifically for the interim/final bill
+(section 8) and the discharge settlement gate (section 7).
+
+### Refunds never require reversing a Payment, by construction
+
+The settlement actions above are deliberately written to convert **at most**
+`min(availableDeposit, amountOwed)` into a real `Payment` - never more. Any
+deposit beyond what was actually owed stays as `AdmissionDeposit` credit and
+is refunded directly through the deposit-refund endpoint above, with no
+`Payment` ever created for the excess and therefore nothing to reverse. An
+overpayment-via-deposit-application should not be able to happen if this
+rule is followed consistently in both `apply-deposit` and the discharge
+settlement step (section 7); it is called out explicitly here as an
+implementation invariant to test for (section 12), not merely a hope.
 
 ## 5. Bed/ward charges
 
@@ -230,16 +331,45 @@ pattern as `invoicePrefix` etc.) - a dropdown + two toggles.
   bed-day is charged for every Lagos midnight (`lagosCalendarDate` /
   `startOfDayLagos` from `common/lagos-time.ts`, the same helper Batch A
   built) at which the patient is still an open `Admission` occupying a bed.
-  **Worked example from the brief**: admitted 23:00, discharged 08:00 the
-  next day. Exactly one Lagos midnight falls inside that window → **one
-  night charged**, not two.
+  The ward charged for that night is whichever `AdmissionWardStay` (below)
+  was open at the midnight instant itself.
 - **`ROLLING_24H`**: one bed-day per full-or-partial 24-hour block measured
   from the exact `admittedAt` timestamp, independent of calendar midnight.
+  The ward charged for a block is whichever `AdmissionWardStay` was open at
+  **the instant that block ends** - the same "which stay was open at this
+  one instant" rule `MIDNIGHT_CENSUS` uses, just evaluated at a different
+  instant, rather than a separate majority-of-the-block calculation. This
+  keeps both rules sharing one mechanism and avoids the need to apportion a
+  single block across two wards.
 - **`inpatientMinimumOneDayCharge`**: when true (default), a same-day
   admission-and-discharge that crosses zero midnights still charges one
   night (common policy - a bed was occupied regardless of the clock). When
-  false, a same-day stay charges nothing. This is a separate toggle from the
-  rule itself because it is an independent policy choice.
+  false, a same-day stay charges nothing. This toggle **only affects
+  `MIDNIGHT_CENSUS`** - `ROLLING_24H` always charges at least one block for
+  any admission by construction (there is always at least one partial
+  24-hour block from `admittedAt`), so the toggle has nothing to do there.
+
+### Worked examples, both rules, per the brief
+
+| Scenario | `MIDNIGHT_CENSUS` | `ROLLING_24H` |
+|---|---|---|
+| Admitted 23:00, discharged 08:00 next day | 1 Lagos midnight falls inside the stay → **1 night** | 9 hours elapsed, one partial 24h block → **1 day** |
+| Admitted 09:00, discharged 17:00 same day | 0 midnights crossed → **0 nights** with the minimum-charge toggle off, **1 night** with it on (default) | 8 hours elapsed, one partial 24h block → **1 day** (always ≥ 1, the toggle does not apply) |
+| Admitted Day 1 10:00 (Ward A), transferred Day 1 15:00 to Ward B, discharged Day 2 10:00 | 1 midnight crossed, patient in Ward B at that instant → **1 night, Ward B's rate** (Ward A is never charged - no midnight occurred while the stay was open there) | 1 full 24h block (10:00→10:00); the block *ends* in Ward B → **1 day, Ward B's rate** |
+
+The middle row is the case where the two rules - and the minimum-charge
+toggle - genuinely diverge, and is exactly why both are exposed as
+independent settings rather than one combined choice. The bottom row shows
+why `MIDNIGHT_CENSUS` has no transfer-attribution ambiguity to resolve in
+the first place (a transfer before the only midnight in the stay means Ward
+A simply never had an open stay at any census point), while `ROLLING_24H`
+needs the explicit "ward at block end" rule stated above to get a
+well-defined answer at all.
+
+**Confirmed: this is a per-hospital setting**, not a fixed system rule -
+`Tenant.inpatientChargeRule` (enum column, default `MIDNIGHT_CENSUS`) and
+`Tenant.inpatientMinimumOneDayCharge` (boolean, default `true`), both
+editable from Settings alongside every other per-tenant toggle.
 
 ### Ward-stay history (needed for correct per-night billing across a transfer)
 
@@ -333,25 +463,56 @@ model InsuranceClaim {
 ```
 
 `invoiceId` stays as-is for outpatient claims. For an admission claim,
-`invoiceId` is left null and `admissionId` is set instead;
-`ClaimsService.generate()` gains an admission path: given an `admissionId`,
-gather every `Invoice` with that `admissionId` (primary + any
-supplementaries), pull their lines, and create **one** `InsuranceClaim` with
-`InsuranceClaimLine` rows drawn across all of them - never per invoice,
-never per day. Generation is only offered once the admission is
-`DISCHARGED` (the bill is final at that point) and `authCode` is set
-(blocked with a clear message otherwise, not a silent skip).
+`invoiceId` is left null and `admissionId` is set instead; a **new**
+`generateForAdmission(admissionId)` method is added alongside the existing
+`generate(dto.invoiceIds)` - `generate()` itself is not modified, so every
+outpatient call site and test behaves exactly as today. Given an
+`admissionId`, the new method gathers every `Invoice` with that
+`admissionId` (primary + any supplementaries), pulls their lines, and
+creates **one** `InsuranceClaim` with `InsuranceClaimLine` rows drawn across
+all of them - never per invoice, never per day. Generation is only offered
+once the admission is `DISCHARGED` (the bill is final at that point) and
+`authCode` is set (blocked with a clear message otherwise, not a silent
+skip).
+
+### Every place that assumes one claim : one invoice, checked directly against `claims.service.ts`
+
+| Site | Today | Change needed | Outpatient impact |
+|---|---|---|---|
+| `generate()`'s per-invoice loop (`claims.service.ts:360-471`) | Iterates `dto.invoiceIds`, one claim per id | **None** - untouched; `generateForAdmission` is a separate method | None - identical code path |
+| Duplicate-claim check (`:385`, `where: { invoiceId: invoice.id, ... }`) | "does a claim already exist for this invoice" | `generateForAdmission` uses the equivalent check keyed on `admissionId` instead | None - outpatient check unchanged |
+| Claim creation (`:442`, `invoiceId: invoice.id`) | Sets the 1:1 FK | `generateForAdmission` sets `admissionId` and leaves `invoiceId` null | None |
+| **Remittance allocation / payment posting** (`:1048-1063`, `:1170`, `postAdjustment`/`recomputeInvoice(tx, claim.invoiceId)`) | Posts the approved/paid amount, and any write-off, **directly against `claim.invoiceId`** | **The real structural change.** Generalise to resolve the claim's underlying invoice(s) from its lines (`InsuranceClaimLine.invoiceLineId` → `InvoiceLine.invoiceId`, grouped), then post each invoice's share of the remittance/write-off against it and `recomputeInvoice` each one - instead of assuming a single `claim.invoiceId`. For an outpatient claim this resolves to exactly the one invoice it always had, so behaviour is identical; the generalisation subsumes the old single-invoice case rather than branching around it. | **None, if done as a generalisation rather than a special case** - confirmed by construction: a claim with one invoice's worth of lines always resolves to that one invoice |
+| Write-off posting (`:620-621`, `postAdjustment(tx, tenantId, claim.invoiceId, ...)`) | Same single-invoice assumption | Same generalised per-invoice resolution as the row above | None |
+| **Claim batches** (`batchCsv`, `:855-888`) | Lists claim number, patient, member #, auth code, service date, diagnosis, claimed amount | **No change** - confirmed by reading the method: it never references `invoiceId`/an invoice at all, it is entirely claim-centric | None |
+| **CSV / schedule export** | Same `batchCsv` method as above | **No change**, same reason | None |
+| **Aging / outstanding** (`agingBuckets`/`addAging`/`outstanding`, `:1232-1284`) | Computed from the claim's own `claimedAmount`/`approvedAmount`/`paidAmount`/`writeOffAmount` and `submittedAt` | **No change** - confirmed by reading `this.outstanding(c)`'s inputs: never touches `invoiceId` | None |
+
+**Outpatient claims behave exactly as today**, confirmed two ways: (1)
+`generate()` is not modified at all, only joined by a new sibling method;
+(2) the one place that genuinely must change - remittance/write-off
+posting - is changed as a generalisation that resolves to the identical
+single invoice for any claim that only ever had one, not as a branch that
+could diverge for the outpatient case.
 
 ## 7. Discharge
 
 ### Settlement gate
 
+Discharge first runs the final night's reconciliation (section 5), then
+**automatically applies available deposit credit** via the same
+`apply-deposit` mechanism (section 4), capped at `min(availableDeposit,
+amountOwed)` - this is the one place deposit application happens without a
+separate staff click, since "settle what's owed from the deposit on hand"
+is exactly what discharge is supposed to do. Only the balance left *after*
+that automatic application is subject to the gate below.
+
 `Tenant.requireSettledBillAtDischarge` (section 5) - default **off**, so
 F1 never blocks a clinical discharge by default (a hospital should not be
 forced to choose this feature to keep discharging patients the way they do
-today). When on: `discharge()` is blocked if the running bill's balance
-(section 4) is greater than zero, with a clear message naming the amount
-owed. **Override**: a Hospital Admin can discharge anyway with
+today). When on: `discharge()` is blocked if the post-deposit-application
+balance (section 4) is greater than zero, with a clear message naming the
+amount owed. **Override**: a Hospital Admin can discharge anyway with
 `admission:discharge-unsettled` (new permission, HOSPITAL_ADMIN only) +
 a required reason, audited (`DISCHARGE_UNSETTLED_OVERRIDE`, metadata:
 balance, reason) - the same override-with-reason shape used throughout this
@@ -359,11 +520,14 @@ codebase (FUNC-1 off-formulary, item 9 line edits).
 
 ### Deposit refund at discharge
 
-If the final balance is negative (deposit exceeds the settled bill),
-discharge requires recording the refund (method + reference) before it
-completes - same inline reason/amount flow as the deposit-refund endpoint
-(section 4), surfaced as a mandatory step in the discharge screen rather
-than something staff have to remember to do separately afterward.
+If, after automatic application, deposit credit remains (the bill came in
+lower than what was deposited), discharge requires recording the refund
+(method + reference) before it completes - same inline reason/amount flow
+as the deposit-refund endpoint (section 4), surfaced as a mandatory step in
+the discharge screen rather than something staff have to remember to do
+separately afterward. Because application is always capped at what was
+actually owed (section 4), this refund is always a plain
+`AdmissionDeposit` refund, never a `Payment` reversal.
 
 ### Discharge summary
 
@@ -478,6 +642,15 @@ sync).
   invoices (primary + one supplementary) produces exactly one
   `InsuranceClaim` whose lines are drawn from both; generation before
   discharge is rejected; generation without an `authCode` is rejected.
+- Integration: remittance against a two-invoice admission claim posts the
+  correct `Payment` amount to each underlying invoice (not just the
+  primary) and recomputes both; an outpatient (single-invoice) claim's
+  remittance posts identically to its current behaviour, confirmed with a
+  before/after comparison against an existing `billing.int-spec.ts`-style
+  outpatient remittance test.
+- Integration: an `apply-deposit` call never creates a `Payment` larger
+  than the amount actually owed, even when more deposit is available -
+  the overpayment-by-construction invariant from section 4.
 - Integration: deposit refund cannot exceed the deposit's own remaining
   balance; discharge with a negative balance requires a recorded refund
   before it completes.
@@ -493,7 +666,7 @@ sync).
 | `resolveOpenInvoiceForAdmission` + `postCharge` dispatcher + `resolveBillingTarget` wiring into pharmacy/encounters | M |
 | Deposits API + refund | S |
 | Ward-stay history + nightly cron + discharge reconciliation (the trickiest correctness piece) | L |
-| Claims multi-invoice-per-admission generation | M |
+| Claims multi-invoice-per-admission generation, including generalising remittance/write-off posting off a single `claim.invoiceId` (section 6's table) | M |
 | Discharge settlement gate + override + refund-at-discharge | S |
 | Discharge summary assembly + print | S |
 | Interim/final bill read + print | S |
