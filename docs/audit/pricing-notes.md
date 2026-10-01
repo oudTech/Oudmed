@@ -72,4 +72,9 @@ polish item: every day a patient occupies a bed today generates zero
 revenue in the system. Fixing it is a real feature (schema: a rate on
 `Ward` or a `WardRate` table; logic: a per-day or per-discharge charge
 calculation; decision: charged daily, at discharge, or both) rather than a
-quick patch, and should be scoped as its own item once confirmed needed.
+quick patch.
+
+**Scope change (2026-10-01): confirmed needed, promoted to Phase 1 as F1.**
+OudHealth must support inpatient care at launch, not just outpatient. See
+`docs/features/F1-inpatient-billing.md` for the design (built on top of this
+gap analysis) and `docs/audit/phase1-status.md` for status.

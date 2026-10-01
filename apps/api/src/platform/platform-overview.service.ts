@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlatformTenantsService } from './platform-tenants.service';
+import { startOfMonthLagos, addMonthsLagos, lagosYear, lagosMonth } from '../common/lagos-time';
 
 const PAGE_SIZE = 25;
 const money = (v: Prisma.Decimal | number | string) => new Prisma.Decimal(v).toFixed(2);
@@ -58,9 +59,7 @@ export class PlatformOverviewService {
     };
     let estimatedMonthlyRevenue = new Prisma.Decimal(0);
     let newThisMonth = 0;
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
+    const startOfMonth = startOfMonthLagos(new Date());
 
     for (const s of summaries) {
       statusCounts[s.subscriptionStatus] = (statusCounts[s.subscriptionStatus] ?? 0) + 1;
@@ -80,17 +79,13 @@ export class PlatformOverviewService {
   }
 
   private async revenueTrend(months = 6) {
-    const since = new Date();
-    since.setMonth(since.getMonth() - (months - 1));
-    since.setDate(1);
-    since.setHours(0, 0, 0, 0);
+    const since = addMonthsLagos(startOfMonthLagos(new Date()), -(months - 1));
 
     const monthKeys: string[] = [];
     const totals = new Map<string, Prisma.Decimal>();
     for (let i = 0; i < months; i++) {
-      const d = new Date(since);
-      d.setMonth(d.getMonth() + i);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const d = addMonthsLagos(since, i);
+      const key = `${lagosYear(d)}-${String(lagosMonth(d) + 1).padStart(2, '0')}`;
       monthKeys.push(key);
       totals.set(key, new Prisma.Decimal(0));
     }
@@ -105,7 +100,7 @@ export class PlatformOverviewService {
       );
       for (const inv of invoices) {
         if (!inv.paidAt) continue;
-        const key = `${inv.paidAt.getFullYear()}-${String(inv.paidAt.getMonth() + 1).padStart(2, '0')}`;
+        const key = `${lagosYear(inv.paidAt)}-${String(lagosMonth(inv.paidAt) + 1).padStart(2, '0')}`;
         const current = totals.get(key);
         if (current) totals.set(key, current.add(inv.totalAmount));
       }

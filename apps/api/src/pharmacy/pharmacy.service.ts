@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
 import { assertCan, can } from '../common/permissions';
+import { lagosCalendarDate } from '../common/lagos-time';
 import { DispenseDto } from './dto/pharmacy.dto';
 
 interface Actor {
@@ -282,9 +283,11 @@ export class PharmacyService {
       visitId: string | null;
     },
   ) {
-    const now = new Date();
+    // A batch is treated as expired from the start of its printed expiry date
+    // in Lagos time, not just "has the exact instant passed" (BL-2).
+    const cutoff = lagosCalendarDate(new Date());
     const batches = await tx.drugBatch.findMany({
-      where: { drugId: p.drugId, quantity: { gt: 0 }, expiryDate: { gt: now } },
+      where: { drugId: p.drugId, quantity: { gt: 0 }, expiryDate: { gt: cutoff } },
       orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }],
     });
     const available = batches.reduce((s, b) => s + b.quantity, 0);

@@ -84,3 +84,21 @@ export function lagosMonth(d: Date): number {
 export function lagosDate(d: Date): number {
   return lagosParts(d).date;
 }
+
+/**
+ * `d`'s Lagos calendar date, expressed as a UTC-midnight Date - the same
+ * convention a date-only value takes when parsed (`new Date('2026-03-01')`
+ * is UTC midnight). Lets a "calendar date" column stored that way (a drug
+ * batch's expiryDate, an admission's census date, etc.) be compared directly
+ * against "today/now in Lagos" with a single Date comparison, instead of
+ * converting the column's own value row by row.
+ *
+ * A drug batch is therefore treated as expired starting at the beginning of
+ * its printed expiry date in Lagos time - `expiryDate > lagosCalendarDate(now)`
+ * is "still usable," `<=` is "expired" - not usable through the end of that
+ * date. This is the more conservative of the two common conventions and was
+ * chosen for patient safety (BL-2 / FEFO dispensing).
+ */
+export function lagosCalendarDate(d: Date): Date {
+  return new Date(startOfDayLagos(d).getTime() + LAGOS_OFFSET_MS);
+}

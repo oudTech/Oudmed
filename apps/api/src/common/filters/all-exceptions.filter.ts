@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
-import { Sentry } from '../sentry';
+import { Sentry, stripQuery } from '../sentry';
 import type { AuthUser } from '../current-user.decorator';
 
 /**
@@ -37,7 +37,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const requestId = (Array.isArray(headerId) ? headerId[0] : headerId) || randomUUID();
     res.setHeader('x-request-id', requestId);
 
-    const where = `${req.method} ${req.originalUrl}`;
+    // originalUrl's query string can carry a patient-name search or similar
+    // (e.g. GET /patients?search=Jane+Doe) - never put it in a log line or a
+    // Sentry tag.
+    const where = `${req.method} ${stripQuery(req.originalUrl)}`;
     // Populated by the JWT strategy for authenticated routes; undefined for
     // public ones (login, signup, health checks). Never includes email/name -
     // only an opaque userId, tenantId, and role (PROD-5: debuggable across

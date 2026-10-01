@@ -5,6 +5,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { FilesService } from '../storage/files.service';
 import { assertCan, can } from '../common/permissions';
 import { nextSequence } from '../common/sequence';
+import { startOfMonthLagos } from '../common/lagos-time';
 import {
   CheckDuplicatesDto,
   CreatePatientDto,
@@ -155,9 +156,7 @@ export class PatientsService {
   async stats(actor: Actor) {
     assertCan(actor.role, 'patient:read');
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
-      const monthStart = new Date();
-      monthStart.setDate(1);
-      monthStart.setHours(0, 0, 0, 0);
+      const monthStart = startOfMonthLagos(new Date());
 
       const openAdms = await tx.admission.findMany({
         where: { status: 'ADMITTED' },

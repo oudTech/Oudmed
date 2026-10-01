@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { assertCan } from '../common/permissions';
+import { startOfMonthLagos, lagosCalendarDate } from '../common/lagos-time';
 import {
   AdjustStockDto,
   CreateDrugDto,
@@ -27,8 +28,10 @@ const FORMS = new Set([
 ]);
 const PACKAGING = new Set(['Pack', 'Bottle', 'Tube', 'Blister', 'Vial', 'Ampoule', 'Sachet', 'Each']);
 
+// Matches drawStockFefo's expiry cutoff (BL-2): a batch is "0 days" on the
+// first day it's already excluded from dispensing, not the instant before.
 function daysUntil(d: Date): number {
-  return Math.round((d.getTime() - Date.now()) / 86_400_000);
+  return Math.round((d.getTime() - lagosCalendarDate(new Date()).getTime()) / 86_400_000);
 }
 function genSku(): string {
   return 'MED-' + Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -112,9 +115,7 @@ export class PharmacyInventoryService {
 
   async stats(tenantId: string) {
     return this.prisma.forTenant(tenantId, async (tx) => {
-      const monthStart = new Date();
-      monthStart.setDate(1);
-      monthStart.setHours(0, 0, 0, 0);
+      const monthStart = startOfMonthLagos(new Date());
 
       const drugs = await tx.drug.findMany({
         where: { isActive: true },

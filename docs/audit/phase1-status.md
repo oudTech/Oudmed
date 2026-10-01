@@ -14,6 +14,20 @@ read this before assuming status from chat history, which decays fast.
 | 3c | Off-formulary handling | **Done** (verified present, not just recalled): reason+audit required for off-formulary dispensing and free-text orders (`OFF_FORMULARY_DISPENSE` / `OFF_CATALOGUE_ORDER`); prescribing UI shows a "did you mean" confirmation before a typed drug can become off-formulary; dispensing UI requires a reason and labels off-formulary rows as not affecting stock; `GET /pharmacy/off-formulary-report` + a panel on the Inventory tab. |
 | 4 | Completed-visit / paid-invoice guard (FUNC-2) | **Done.** Reopen (`visit:reopen`, attending doctor or admin, reason, audited); orders/prescriptions/note-edits blocked on a completed visit, complaint/vitals/diagnosis stay available and labelled late; `ClinicalNoteAddendum` for late notes; supplementary invoices (`Invoice.isSupplementary`) when the primary is locked by a payment or claim; `updateInvoice`/`removeInvoiceLine` now also correctly block on an existing claim (a gap found while building this); claims generate per-invoice now; billing reopen-flag + explicit Acknowledge. |
 | Batch A | FUNC-3 (vitals validation), FUNC-4 (patient-reg coercion retest), production essentials (Sentry privacy/context, reset-email failure logging, Africa/Lagos day boundaries), known issue #6 (suspended hospital), known issue #5 (ledger date range) | **Done.** Weight was already `Decimal(5,2)` in both `Patient` and `VitalSigns` - no schema change needed; `heightCm` confirmed correctly `Int` (no sub-cm clinical need). Height/glucose field-level validation (API + UI). Sentry `sendDefaultPii: false` + `beforeSend` scrub + tenant/user/role tags only. Reset-email send failures now logged (response unchanged). New `common/lagos-time.ts` (fixed UTC+1, no DST) used by `reports.util.ts` and `schedule.service.ts`'s "today" default. `resolvePublic` now returns 403 `TENANT_SUSPENDED` instead of a generic 404 for a disabled hospital; login page shows a distinct "Account suspended" screen with a support CTA. Payment ledger gained a custom from/to range with `from <= to` validation (backend + UI), Lagos-aware. |
+| Follow-ups | Items 1/3c re-confirmed with commit hashes; known issue #2 retest (real HTTP + ValidationPipe, steps 1-4); BL-2 (4 remaining Lagos-time call sites + drug-expiry cutoff rule); Sentry URL/breadcrumb scrubbing (API + web, web previously had none); BL-3 logged (per-tenant timezone) | **Done.** See the follow-ups report for detail; full suite green. |
+
+## Scope change (2026-10-01): inpatient care is now a Phase 1 launch blocker
+
+OudHealth must support both outpatient and inpatient care at launch, not just
+outpatient. Three features promoted from the backlog's "separate roadmap
+tracks" to Phase 1 proper - design docs first (stop for approval after all
+three), then build one at a time, one report each:
+
+| Item | What | Status |
+|---|---|---|
+| F1 | Inpatient/admissions billing - running bill per admission, deposits, bed/ward daily charges, transfers, everything during the stay posts to it, interim bills, discharge, HMO pre-auth + one claim per episode | Design doc pending |
+| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | Design doc pending |
+| F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Design doc pending |
 
 ## Remaining, in order
 
@@ -21,17 +35,22 @@ read this before assuming status from chat history, which decays fast.
 |---|---|---|
 | 9 | Invoice line-edit UI (MISS-2), including supplementary-invoice and claim-lock behaviour | Not started |
 | 10 | Printable prescriptions and lab results (MISS-5) | Not started |
-| 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts | Not started |
-| Final | Regression pass + launch report (done/backlog/known limitations) | Not started |
+| F1-F3 designs | `docs/features/F1-inpatient-billing.md`, `F2-pay-before-dispense.md`, `F3-bulk-import.md` - stop for approval after all three | Not started |
+| F1-F3 builds | One feature at a time, in approved order, one report each, stopping after each | Not started |
+| 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts; cover all new F1-F3 screens | Not started |
+| Final | Regression pass, extended usability test plan (original 44 cases + new F1/F2/F3 cases), launch report | Not started |
 
 ## Definition of done (per the user's own bar)
 
 All items above complete, all tests passing, no open Critical findings, and
-the full 44-case usability test plan (Testers 1-4) passes on staging.
+the full usability test plan - the original 44 cases plus the new F1 (admit
+through discharge and HMO claim), F2 (setting on/off, payment gate,
+exemptions, emergency override) and F3 (template, dry run, duplicates, undo)
+cases - passes on staging.
 
 ## New findings since the scope freeze
 
-See `docs/audit/backlog.md` - nothing Critical found so far, two Low items
-logged (BL-1, an orphaned env var from the image-hardening fix; BL-2, four
-more "today" boundary call sites that want the same Lagos-time fix Batch A
-applied to reports/schedule).
+See `docs/audit/backlog.md` - nothing Critical found so far. BL-1 (orphaned
+env var) still open, Low. BL-2 (remaining Lagos-time call sites) closed in
+the follow-ups round. BL-3 (per-tenant timezone) newly logged, Low - fine
+while every hospital is in Nigeria, but blocks onboarding one outside it.

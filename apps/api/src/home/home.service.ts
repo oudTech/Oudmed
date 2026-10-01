@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { HomeResponseDTO, HomeWidgetDTO } from '@oudhealth/contracts';
 import { PrismaService } from '../prisma/prisma.service';
+import { startOfDayLagos, addDaysUtc } from '../common/lagos-time';
 
 interface Actor {
   tenantId: string;
@@ -11,9 +12,11 @@ interface Actor {
 
 const D0 = () => new Prisma.Decimal(0);
 const naira = (d: Prisma.Decimal) => '₦' + Number(d).toLocaleString('en-NG', { maximumFractionDigits: 0 });
-const startOfDay = (d = new Date()) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
-const endOfDay = (d = new Date()) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
-const time = (d: Date) => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+const startOfDay = (d = new Date()) => startOfDayLagos(d);
+const endOfDay = (d = new Date()) => new Date(addDaysUtc(startOfDayLagos(d), 1).getTime() - 1);
+// Server timezone is not guaranteed to be Lagos (PROD-4) - a "next up" time
+// on the dashboard must show the hospital's own local time, not the host's.
+const time = (d: Date) => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Lagos' });
 const name = (p: { firstName: string; lastName: string }) => `${p.firstName} ${p.lastName}`.trim();
 
 @Injectable()

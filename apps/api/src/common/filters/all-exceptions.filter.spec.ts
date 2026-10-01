@@ -69,6 +69,19 @@ describe('AllExceptionsFilter', () => {
     expect(logLine).not.toContain('Should Not Appear');
   });
 
+  it('strips the query string from the URL before it reaches the log line (a patient search could be in there)', () => {
+    const errorSpy = jest.spyOn(Logger.prototype, 'error');
+    errorSpy.mockClear();
+    const { host } = mockHost();
+    const req = host.switchToHttp().getRequest() as any;
+    req.originalUrl = '/api/patients?search=Jane+Doe';
+    filter.catch(new Error('boom'), host);
+    const logLine = errorSpy.mock.calls[0][0] as string;
+    expect(logLine).toContain('/api/patients');
+    expect(logLine).not.toContain('search=');
+    expect(logLine).not.toContain('Jane');
+  });
+
   it('omits the actor suffix entirely for an unauthenticated request', () => {
     const errorSpy = jest.spyOn(Logger.prototype, 'error');
     errorSpy.mockClear();
