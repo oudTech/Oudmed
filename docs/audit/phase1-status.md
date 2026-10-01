@@ -18,6 +18,7 @@ read this before assuming status from chat history, which decays fast.
 | SEC-1 recheck | Confirmed (not just re-asserted) that `next-auth@5.0.0-beta.32` fixes both critical advisories (GHSA-8fpg-xm3f-6cx3, GHSA-7rqj-j65f-68wh) - GitHub's own structured advisory data gives `first_patched_version: 5.0.0-beta.32` for both, `pnpm audit` shows zero next-auth findings, `@auth/core@0.41.3` (the dependency the second advisory also covers) is installed. No stable `next-auth@5.0.0` exists yet (`npm view next-auth dist-tags` - `beta` is the only v5 tag); that does not reopen either advisory since each one's own fix version is pinned to the beta line, not to the eventual stable tag. | **Done**, no version change needed. |
 | 2 (dispense expiry message) | Distinguish out-of-stock / expired-only / not-enough-unexpired in the dispense error, naming the expired batch(es) | **Done.** `OUT_OF_STOCK`, `EXPIRED_STOCK_ONLY` (names batch + expiry date), `INSUFFICIENT_STOCK` (names units available). |
 | 9 | Invoice line-edit UI (MISS-2), including supplementary-invoice and claim-lock behaviour | **Done.** Add/edit/remove lines from the billing screen; blocked with a clear message once paid or claimed; a supplementary invoice is editable like any other unlocked invoice. |
+| 9 addendum | Audit + required reason for invoice line edits | **Done.** Every add/edit/remove audited (who/when/invoice/line/before-after); reason required for a catalogue-price override, a discount add/increase, or any removal - not for a catalogue-priced add or a quantity-only fix. "Edited" marker + edit-history panel in the drawer; new `/billing/edits` report (date-range, `billing:manage`) for Hospital Admin review of manual price changes and discounts. |
 | 10 | Printable prescriptions and lab results (MISS-5) | **Done.** A4, hospital-branded, one page per Rx or per resulted lab/imaging order; patient details, prescriber/lab staff, date. |
 
 ## Scope change (2026-10-01): inpatient care is now a Phase 1 launch blocker
@@ -29,16 +30,16 @@ three), then build one at a time, one report each:
 
 | Item | What | Status |
 |---|---|---|
-| F1 | Inpatient/admissions billing - running bill per admission, deposits, bed/ward daily charges, transfers, everything during the stay posts to it, interim bills, discharge, HMO pre-auth + one claim per episode | Design doc pending |
-| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | Design doc pending |
-| F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Design doc pending |
+| F1 | Inpatient/admissions billing - running bill per admission, deposits, bed/ward daily charges, transfers, everything during the stay posts to it, interim bills, discharge, HMO pre-auth + one claim per episode | Design doc **done**: `docs/features/F1-inpatient-billing.md`. Awaiting approval. |
+| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | Design doc **done**: `docs/features/F2-pay-before-dispense.md`. Awaiting approval. Depends on F1's `resolveBillingTarget`/`postCharge` for the inpatient exemption - build after F1. |
+| F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Design doc **done**: `docs/features/F3-bulk-import.md`. Awaiting approval. Independent of F1/F2 - can build in any order. |
 
 ## Remaining, in order
 
 | Item | What | Status |
 |---|---|---|
-| F1-F3 designs | `docs/features/F1-inpatient-billing.md`, `F2-pay-before-dispense.md`, `F3-bulk-import.md` - stop for approval after all three | Not started |
-| F1-F3 builds | One feature at a time, in approved order, one report each, stopping after each | Not started |
+| F1-F3 designs | `docs/features/F1-inpatient-billing.md`, `F2-pay-before-dispense.md`, `F3-bulk-import.md` | **Done, all three written.** Stopped here for approval, per instruction - no code written yet. |
+| F1-F3 builds | One feature at a time, in approved order (F1 -> F2 -> F3 recommended, since F2 depends on F1), one report each, stopping after each | Not started |
 | 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts; cover all new F1-F3 screens | Not started |
 | Final | Regression pass, extended usability test plan (original 44 cases + new F1/F2/F3 cases), launch report | Not started |
 
