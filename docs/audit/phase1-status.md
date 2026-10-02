@@ -35,8 +35,8 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 | F1a | Schema/migrations, admission episode, deposits ledger (receipts + cash-report entries), inpatient workspace basics | Done |
 | F1b | Daily charges (both rules + short-stay setting), transfers, charges posted during the stay, interim bill | Done |
 | F1c | Discharge (settlement setting, override), final bill, deposit application and refund, discharge summary, admission reopen, admission ward-round notes. Two corrections after approval: refund-pending-never-blocks-discharge, deposits apply only to the patient-payable (non-HMO) share | Done |
-| F1d | Admission claims (`generateForAdmission`, remittance generalisation, backfill verification), occupancy/inpatient revenue reports; F1 usability cases added to the test plan | **Done.** `generateForAdmission` + `resolveClaimInvoices`/`splitProportionally` generalise remittance/write-off/reversal across a multi-invoice admission claim, provably identical for every existing (single-invoice) outpatient claim; backfill-verification queries ran clean (zero orphans); full outpatient generate->batch->CSV->remittance->write-off->aging regression passes unchanged. Reports gained `occupancyByWard`, `admissionsTrend`, and an `inpatient_revenue` KPI. See `docs/features/F1-inpatient-billing.md`'s F1d implementation notes and `docs/audit/usability-test-plan.md`'s F1 section (25 cases). |
-| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | **Done.** `requirePaymentBeforeDispense` (off by default); `prepare()`/`release()`/`cancel-preparation()` state machine (charge posted, stock held back until the invoice is `PAID`); co-pay splits proportionally into an immediately-dispensed covered share and a gated co-pay share; an admitted patient or an HMO-covered item skips the gate entirely; `pharmacy:dispense-emergency-override` (PHARMACIST/HOSPITAL_ADMIN) still dispenses in the old one-step way, audited, for a genuine emergency. See `docs/features/F2-pay-before-dispense.md`'s implementation notes and `docs/audit/usability-test-plan.md`'s F2 section. |
+| F1d | Admission claims (`generateForAdmission`, remittance generalisation, backfill verification), occupancy/inpatient revenue reports; F1 usability cases added to the test plan | **Done.** `generateForAdmission` + `resolveClaimInvoices`/`splitProportionally` generalise remittance/write-off/reversal across a multi-invoice admission claim, provably identical for every existing (single-invoice) outpatient claim; backfill-verification queries ran clean (zero orphans); full outpatient generate->batch->CSV->remittance->write-off->aging regression passes unchanged. Reports gained `occupancyByWard`, `admissionsTrend`, and an `inpatient_revenue` KPI. See `docs/features/F1-inpatient-billing.md`'s F1d implementation notes and `docs/audit/USABILITY_TEST_PLAN.md`'s T4 (inpatient) track. |
+| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | **Done.** `requirePaymentBeforeDispense` (off by default); `prepare()`/`release()`/`cancel-preparation()` state machine (charge posted, stock held back until the invoice is `PAID`); co-pay splits proportionally into an immediately-dispensed covered share and a gated co-pay share; an admitted patient or an HMO-covered item skips the gate entirely; `pharmacy:dispense-emergency-override` (PHARMACIST/HOSPITAL_ADMIN) still dispenses in the old one-step way, audited, for a genuine emergency. See `docs/features/F2-pay-before-dispense.md`'s implementation notes and `docs/audit/USABILITY_TEST_PLAN.md`'s T3 (pharmacy/billing/claims) track. |
 | F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Approved as designed. One report. Independent of F1/F2. |
 
 ## Remaining, in order
@@ -52,12 +52,14 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 ## Definition of done (per the user's own bar)
 
 All items above complete, all tests passing, no open Critical findings, and
-the full usability test plan (`docs/audit/usability-test-plan.md`) - the
-original 44 cases plus the new F1 (admit through discharge and HMO claim,
-25 cases, written), the FUNC2/INV/PRINT cases for items 4/9/10 (written),
-F2 (setting on/off, payment gate, exemptions, emergency override, 13 cases,
-written) and F3 (template, dry run, duplicates, undo, not yet written)
-cases - passes on staging.
+the full usability test plan (`docs/audit/USABILITY_TEST_PLAN.md` /
+`.csv`, the 2026-10-02 rewrite - supersedes `usability-test-plan.md`) -
+82 cases across 6 connected tester tracks plus a feedback spot-check
+section, covering outpatient cash/HMO, inpatient cash/HMO, pay-before-
+dispense, supplementary invoices and line edits, the full claims
+lifecycle, reports, admin/settings, and the platform console, with a
+19-case go-live smoke test marked - passes on staging. F3 (bulk import)
+has no cases yet since it isn't built.
 
 ## New findings since the scope freeze
 

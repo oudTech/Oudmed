@@ -1,20 +1,17 @@
-# Usability test plan
+# Usability test plan (superseded)
+
+> **Superseded by [USABILITY_TEST_PLAN.md](USABILITY_TEST_PLAN.md)** (and
+> its `.csv` export), a fresh, complete rewrite that incorporates the
+> original 44 cases (by then available as
+> `usability-test-plan-original.csv`) plus everything below, restructured
+> into connected tester tracks with a Setup & Shared Data sheet, Actual
+> Result/Pass-Fail/Severity/Notes columns, and a marked go-live smoke
+> test. Kept here for history; do not run this version.
 
 Manual, click-through test cases run on staging before launch - this is
 distinct from the automated integration/unit suite (`pnpm test`), which
 checks the code is correct; this plan checks the *product* is usable by
-someone who has never read the code. Referenced as "the test plan" / "the
-usability test plan" in `docs/audit/phase1-status.md`'s definition of done.
-
-**Status note on cases 1-44**: the original 44 outpatient/general cases
-(registration, scheduling, encounters, pharmacy, billing, claims, HR,
-admin, reports, onboarding) were defined and tracked during the pre-launch
-audit phase of this project, before this file existed. They are not yet
-transcribed into this repo - do not invent their content. Before the
-"Final" regression pass in `phase1-status.md`, pull them from that audit's
-original record and paste them in above the F1 section below, renumbered
-1-44 as they were originally defined. The cases below (F1) are complete and
-ready to run as-is.
+someone who has never read the code.
 
 ## F1: inpatient admissions and billing
 
