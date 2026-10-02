@@ -4,20 +4,29 @@ Source: UX/feedback audit, pre-launch review (2026-09-30). This is the working
 checklist for the toast/feedback standardization pass (Phase 1, item 7). Update
 a row's status inline as it's fixed; don't delete rows.
 
-**Status (2026-10-02): batches 1-2 done.** New toast stack (top-right, tone
+**Status (2026-10-02): batches 1-3 done.** New toast stack (top-right, tone
 icons, tone-aware dismissal - error persists ~8s or until dismissed,
 success/info ~3.5s) and `toastPromise()` for slow actions (CSV export, bulk
 import) with a "still working..." upgrade and an optional retry action -
-`components/ui/feedback.tsx`. New `lib/errors.ts`'s `errorMessage(e)`
-replaces the repeated `?? 'Could not save.'` fallback. All 12 High findings
-(UX-1 through UX-12) fixed. Medium findings M1, M3, M4, M5, M6, M9 fixed.
-M2 got representative fixes (patient registration, HR add-user, pharmacy
-dispense/prepare, appointment booking - matching the brief's own examples)
-rather than an exhaustive sweep of every silent success across the app -
-the remaining spread is listed under "Still open" below, not silently
-dropped. M7 and M8 are real UX gaps but are new interaction mechanisms
-(focus management, dirty-state tracking across an 8-step wizard), not toast
-gaps - deliberately deferred, tracked in `docs/audit/WHATS_LEFT.md`.
+`components/ui/feedback.tsx`, now wired into both CSV-export flows (claims
+batch schedule, reports payment ledger). New `lib/errors.ts`'s
+`errorMessage(e)` replaces the repeated `?? 'Could not save.'` fallback.
+All 12 High findings (UX-1 through UX-12) fixed. Medium findings M1, M3,
+M4, M5, M6, M9 fixed. M2 got representative fixes (patient registration,
+HR add-user/edit/toggle-active, pharmacy dispense/prepare, appointment
+booking, admission/transfer) rather than an exhaustive sweep of every
+silent success across the app - the remaining spread is listed under
+"Still open" below, not silently dropped. **Batch 3 specifically
+re-audited the F1/F2 screens named in the brief** (admission, deposits,
+discharge, transfer, pay-before-dispense): every mutation on the
+admission workspace and discharge/transfer drawer already had full
+error+success feedback from when those features were built - two gaps
+found and closed (admit and transfer had error handling but no plain
+success toast when nothing was wrong), confirming the standard holds on
+the newest screens, not just the audited-in-September ones. M7 and M8 are
+real UX gaps but are new interaction mechanisms (focus management,
+dirty-state tracking across an 8-step wizard), not toast gaps -
+deliberately deferred, tracked in `docs/audit/WHATS_LEFT.md`.
 
 Not audited in depth by the source pass (still needs a first look when reached):
 admin's Insurance/Providers tab, platform settings' Maintenance Mode / General /

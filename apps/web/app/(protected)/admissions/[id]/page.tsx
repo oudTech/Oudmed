@@ -77,7 +77,7 @@ export default function AdmissionWorkspacePage() {
 
   const addComplaint = useMutation({
     mutationFn: () => patientsApi.addComplaint(a!.patient.id, { description: complaintText.trim(), admissionId: id }),
-    onSuccess: () => { setComplaintText(''); refresh() },
+    onSuccess: () => { setComplaintText(''); toast('Complaint added', 'success'); refresh() },
     onError: () => toast('Could not add the complaint.', 'error'),
   })
 

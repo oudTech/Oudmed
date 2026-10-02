@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { StaffDetailDTO } from '@oudhealth/contracts'
 import { Button, Drawer, Field, Input, Select, Textarea } from '@/components/ui/kit'
-import { useConfirm } from '@/components/ui/feedback'
+import { useConfirm, useToast } from '@/components/ui/feedback'
 import { getDepartments } from '@/lib/hospital'
 import { staffApi, HR_ROLES, ROLE_LABEL } from '@/lib/hr'
 import { DoctorHoursModal } from '@/components/schedule/DoctorHoursModal'
@@ -51,6 +51,7 @@ export function StaffDetailDrawer({
 function EditForm({ s, isSelf, onClose }: { s: StaffDetailDTO; isSelf: boolean; onClose: () => void }) {
   const qc = useQueryClient()
   const confirm = useConfirm()
+  const toast = useToast()
   const [first, ...rest] = s.fullName.split(' ')
   const [f, setF] = useState({
     firstName: first ?? '',
@@ -105,13 +106,13 @@ function EditForm({ s, isSelf, onClose }: { s: StaffDetailDTO; isSelf: boolean; 
         notes: f.notes.trim(),
         departmentIds: deptIds,
       }),
-    onSuccess: invalidate,
+    onSuccess: () => { invalidate(); toast('Staff details saved', 'success') },
     onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not save.'),
   })
 
   const toggleActive = useMutation({
     mutationFn: () => (s.isActive ? staffApi.deactivate(s.id) : staffApi.activate(s.id)),
-    onSuccess: invalidate,
+    onSuccess: () => { invalidate(); toast(s.isActive ? `${s.fullName} deactivated` : `${s.fullName} activated`, 'success') },
     onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not change status.'),
   })
 

@@ -91,6 +91,8 @@ export function AdmissionDrawer({
       setMode('view')
       if (!updated.ward?.dailyRate) {
         toast('Transferred - but this ward has no daily rate set, so bed charges are on hold until one is.', 'error')
+      } else {
+        toast(`Transferred to ${updated.ward?.name ?? 'the new ward'}`, 'success')
       }
     },
     onError: (e: any) => setError(e?.response?.data?.message ?? 'Could not transfer.'),

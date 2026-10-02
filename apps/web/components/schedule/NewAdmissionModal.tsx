@@ -90,6 +90,8 @@ export function NewAdmissionModal({
       qc.invalidateQueries({ queryKey: ['wards'] })
       if (!admission.ward?.dailyRate) {
         toast('Admitted - but this ward has no daily rate set, so bed charges are on hold until one is.', 'error')
+      } else {
+        toast(`${admission.patient.firstName} ${admission.patient.lastName} admitted to ${admission.ward?.name ?? 'the ward'}`, 'success')
       }
       onClose()
     },
