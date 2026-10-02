@@ -1,0 +1,98 @@
+TC ID,Tester,Module / Screen,Login Role,Scenario / Objective,Test Steps,Expected Result
+T1-01,Tester 1,Marketing Homepage,None (logged out),First impression & pricing comprehension,"1. Visit the Oudmed homepage.
+2. Scroll through the ""Practice Experience"" wheel; click at least 3 segments.
+3. Scroll to the pricing calculator; drag the user-count slider to 8 users.
+4. Toggle Monthly / Annually.",Homepage loads with no layout/overflow issues; wheel segments respond to clicks and show correct content; pricing recalculates correctly and clearly for both billing cycles.
+T1-02,Tester 1,Sign Up,None,Create a new hospital account,"1. Click ""Get Started"".
+2. Fill in hospital name, admin name, email, password.
+3. Submit.
+4. Record hospital name, subdomain, and admin credentials in the 'Setup & Shared Data' sheet.","Form validates required fields; on success, user is told to check their email for verification."
+T1-03,Tester 1,Email Verification,None,Verify the new account,"1. Open the verification email.
+2. Click the verification link.",User is redirected to login (or auto-logged in) with a clear success message.
+T1-04,Tester 1,Dashboard,Hospital Admin (new),First-run experience,"1. Log in at the hospital's subdomain with the new admin credentials.
+2. Observe the dashboard.",Role-aware dashboard loads; a first-run checklist / onboarding tour is visible and can be followed or dismissed.
+T1-05,Tester 1,HR,Hospital Admin,Provision every staff role needed for the full test run,"1. Go to HR > Add User.
+2. Create one user per role: Reception, Nurse, Doctor, Lab Staff, Pharmacist, Accountant - setting each one's initial password directly.
+3. Record every email/password in the 'Setup & Shared Data' sheet as you go.","All 6 users are created successfully, each appears in the staff directory with the correct role and Active status."
+T1-06,Tester 1,Login / Access Control,Reception,Verify role-based access,"1. Log out.
+2. Log back in with the Reception user's credentials.","Reception sees only the navigation and actions appropriate to their role (no HR, Admin, or Settings access)."
+T1-07,Tester 1,Patients > New (steps 1-2),Reception,Start registering a new patient,"1. Go to Patients > New.
+2. Complete step 1 (basic info) and step 2 (contact info).",Patient record is created after step 2 with a patient number (e.g. PT-00001); the wizard can be exited and resumed later.
+T1-08,Tester 1,Patients > New (steps 3-8),Reception,Complete patient registration,"1. Resume the wizard from the Patients list.
+2. Complete remaining steps: address, next of kin, insurance/payer selection, document upload, photo, review.
+3. Submit.
+4. Record the patient's name and number in the 'Setup & Shared Data' sheet.",All steps save correctly; the insurer field autocompletes real providers; the wizard completes and the patient appears in the Patients list with correct stats.
+T1-09,Tester 1,Patient Chart,Reception,Verify patient record integrity,"1. Search for the patient by name or number.
+2. Open their chart.",All information entered during registration is correctly reflected across the chart's tabs.
+T1-10,Tester 1,Schedule,Reception,Book an appointment,"1. Go to Schedule.
+2. Create a new appointment for the patient with the Doctor user created in T1-05, for today.
+3. Save.
+4. Record the appointment date/time in the 'Setup & Shared Data' sheet.","Appointment appears on the calendar with status ""Scheduled"" and the correct patient/doctor."
+T1-11,Tester 1,Handoff,Reception,Confirm the flow is ready to hand off to Tester 2,1. Double-check the 'Setup & Shared Data' sheet is fully filled in for every field owned by Tester 1.,"Tester 2 can find the patient and appointment using only the shared data sheet, without needing to ask Tester 1 anything."
+T2-01,Tester 2,Login / Schedule,Nurse,Access the nursing workflow,"1. Log in with the Nurse credentials from the 'Setup & Shared Data' sheet.
+2. Go to Schedule and find the appointment Tester 1 booked.",Nurse can see the appointment and open the visit from it.
+T2-02,Tester 2,Visit / Vitals,Nurse,Check the patient in and record vitals,"1. Open the visit.
+2. Update visit status to checked-in / in progress.
+3. Record vital signs (BP, temperature, pulse, weight, etc.).",Visit status updates correctly; vitals save and are visible on the encounter workspace.
+T2-03,Tester 2,Encounter Workspace,Doctor,Access the same visit as the doctor,"1. Log out, log back in as the Doctor user.
+2. Open the same visit's encounter workspace.",Doctor sees the complaint/vitals the nurse already entered - nothing is lost switching roles.
+T2-04,Tester 2,Clinical Note,Doctor,Document the consultation,"1. Record the chief complaint.
+2. Write a SOAP clinical note.","Complaint and note save correctly, timestamped and attributed to the doctor."
+T2-05,Tester 2,Diagnosis,Doctor,Add a diagnosis,1. Add a diagnosis to the visit.,Diagnosis saves and appears on both the visit summary and the patient's chart.
+T2-06,Tester 2,e-Prescription,Doctor,Prescribe medication,"1. Add a prescription using the drug autocomplete (should pull from the Pharmacy catalogue).
+2. Save.",Autocomplete returns real catalogue drugs; the prescription is attached to the visit and will appear in Tester 3's dispensing queue.
+T2-07,Tester 2,Lab Order & Visit Completion,Doctor,Order a lab test and close the consultation,"1. Add a clinical order for a lab test.
+2. Mark the consultation/visit as complete.
+3. Record the resulting invoice number in the 'Setup & Shared Data' sheet.",Order is created as Pending; completing the visit posts a charge to a new invoice automatically.
+T2-08,Tester 2,Lab Worklist,Lab Staff,Access the pending order,"1. Log in as the Lab Staff user.
+2. Open the lab worklist and find the order from T2-07.",The order appears in the worklist with the correct patient and test.
+T2-09,Tester 2,Lab Result,Lab Staff,Complete the lab order,"1. Open the order and enter a result value.
+2. Mark it complete.",Result saves; order status updates to Completed; the result is visible back on the patient's chart/visit.
+T3-01,Tester 3,Pharmacy > Dispensing,Pharmacist,Access the dispensing queue,"1. Log in as the Pharmacist user.
+2. Open Pharmacy > Dispensing.",The prescription from Tester 2's patient appears in the dispensing queue.
+T3-02,Tester 3,Dispensing,Pharmacist,Dispense against the prescription,"1. Select the prescription.
+2. Dispense the prescribed quantity.","Stock decrements earliest-expiry-first (FEFO). If stock is insufficient, a clear message is shown rather than a silent failure."
+T3-03,Tester 3,Pharmacy > Inventory,Pharmacist,Verify inventory accuracy,"1. Open Pharmacy > Inventory.
+2. Find the dispensed drug and check quantity-on-hand.",Quantity reflects the dispensed amount; per-batch stock is accurate.
+T3-04,Tester 3,Pharmacy > Inventory,Pharmacist,Add new stock,"1. Add a new drug batch manually, or import via CSV.
+2. Save.",New batch appears with the correct expiry and quantity; the usage chart updates.
+T3-05,Tester 3,Billing > Invoices,Accountant,Access the auto-generated invoice,"1. Log in as the Accountant user.
+2. Open Billing > Invoices.",The invoice for Tester 2's visit appears in the list.
+T3-06,Tester 3,Billing > Invoices,Accountant,Verify invoice accuracy,"1. Open the invoice.
+2. Review the line items.","Line items match the consultation charge plus the dispensed drug(s), with correct amounts."
+T3-07,Tester 3,Billing > Record Payment,Accountant,Take payment against the invoice,"1. Click Record Payment.
+2. Enter payer, method, and amount.
+3. Submit.",Payment is recorded; invoice status updates (Paid / Partially Paid); a printable receipt is generated.
+T3-08,Tester 3,Claims,Accountant,Generate an HMO claim (if the patient has insurance),"1. Go to Claims.
+2. Generate a claim from the visit's invoice.","Claim is created with the correct patient, invoice, and payer linkage."
+T3-09,Tester 3,Claims,Accountant,Move the claim through submission,"1. Submit the claim.
+2. Add it to a batch for the provider.
+3. Export the batch schedule as CSV.",Claim status progresses correctly; the exported CSV contains the expected claim data.
+T3-10,Tester 3,Claims > Remittance,Accountant,Close the financial loop,"1. Record a remittance against the batch (approved/paid amount).
+2. Open the receivables aging report.",Remittance allocates correctly to the claim/invoice; the aging report accurately reflects the hospital's outstanding balance.
+T4-01,Tester 4,Settings,Hospital Admin,Access admin settings,"1. Log in as the Hospital Admin.
+2. Open Settings.","Settings page loads with hospital profile, branding, and invoice/receipt prefix options."
+T4-02,Tester 4,Settings > Branding,Hospital Admin,Update hospital branding,"1. Upload a logo.
+2. Change the accent color.
+3. Save.",Logo and color persist and are reflected across the app (e.g. in the header/navigation).
+T4-03,Tester 4,Administration,Hospital Admin,Manage departments & services,"1. Open Administration.
+2. Add a new Department and a new Service Item with a code.",New department/service appear and are usable elsewhere (e.g. selectable in scheduling/billing).
+T4-04,Tester 4,Administration > Insurance,Hospital Admin,Manage the payer list,1. Add a new Insurance Provider under Administration.,Provider appears and is selectable in patient registration and claims flows.
+T4-05,Tester 4,HR,Hospital Admin,Test staff deactivation safety,"1. Open HR.
+2. Attempt to deactivate the only remaining active Hospital Admin (or the currently logged-in user).",The system blocks the action with a clear message (cannot deactivate self / last admin).
+T4-06,Tester 4,Reports,Hospital Admin,Verify reporting reflects real activity,"1. Open Reports.
+2. Check the financial KPIs, patient trend chart, and payment ledger for the activity created by Testers 1-3.","Reports accurately reflect the patient registered, the visit billed, and the payment recorded earlier in the test run."
+T4-07,Tester 4,Reports > Export,Hospital Admin,Export data,"1. Filter the payment ledger by date range.
+2. Export to CSV.","CSV downloads and contains the filtered, correct data."
+T4-08,Tester 4,Platform Login,Super Admin,Access the platform dashboard,"1. Log out.
+2. Go to the platform login URL from the 'Setup & Shared Data' sheet and log in as Super Admin.","Platform dashboard loads, separate from any hospital's own workspace."
+T4-09,Tester 4,Platform Overview,Super Admin,Review platform-wide metrics,1. Open the Overview screen.,"Total hospital count, MRR, and revenue trend reflect the test hospital created in T1-02."
+T4-10,Tester 4,All Hospitals,Super Admin,Inspect the test hospital,"1. Open All Hospitals.
+2. Find and open the hospital created in T1-02.","Subscription status, seat count, and invoice history are shown correctly."
+T4-11,Tester 4,All Hospitals > Suspend,Super Admin,Test enforcement,"1. Suspend the test hospital.
+2. In a separate/incognito session, attempt to log in as any of that hospital's staff.",Staff login/access is blocked while the hospital is suspended.
+T4-12,Tester 4,All Hospitals > Reactivate,Super Admin,Undo suspension,1. Reactivate the hospital.,Staff can log in normally again.
+T4-13,Tester 4,Platform Settings > Maintenance,Super Admin,Test the platform-wide kill switch,"1. Open Platform Settings.
+2. Toggle Maintenance Mode on; check a hospital session.
+3. Toggle it back off.","While on, hospital users see a maintenance notice instead of the app; platform routes remain reachable; toggling off restores normal access immediately."
+T4-14,Tester 4,Platform Activity,Super Admin,Verify traceability,1. Open the Platform Activity feed.,The suspend/reactivate actions (and any other platform actions taken) are logged with operator name and timestamp.

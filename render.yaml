@@ -1,13 +1,20 @@
-# Render Blueprint for OudHealth (oudmed.com).
+# Render Blueprint for OudHealth's API (oudmed.com). The web app is on Fly.io
+# (see fly.toml) - this file declares the API service only.
 #
-# This declares the two services; it does NOT create the database or object
-# storage (Neon and Cloudflare R2 are external - see docs/DEPLOY.md) and it does
-# NOT run the one-time database bootstrap (migrate + seed + RLS - also in
-# docs/DEPLOY.md). Read that file before applying this blueprint.
+# This does NOT create the database or object storage (Neon and Cloudflare R2
+# are external - see docs/DEPLOYMENT.md) and it does NOT run the one-time
+# database bootstrap (migrate + RLS + first platform user - also in
+# docs/DEPLOYMENT.md). Read that file before applying this blueprint.
 #
 # Apply: Render dashboard -> New -> Blueprint -> point at this repo/branch.
 # Every `sync: false` var is a secret you paste into the Render dashboard after
-# the blueprint creates the services (never commit real secrets here).
+# the blueprint creates the service (never commit real secrets here).
+#
+# Plan: NOT `free`. The nightly bed-charge job and the three subscription-
+# renewal crons (@Cron in bed-charges.service.ts / renewal.service.ts) only
+# fire while the process is alive - a free instance that has spun down from
+# 15 minutes of idle simply skips that day's run. Use at least the `starter`
+# plan (always-on, no sleep) for production.
 
 services:
   - type: web
@@ -15,7 +22,7 @@ services:
     runtime: docker
     dockerfilePath: apps/api/Dockerfile
     dockerContext: .
-    plan: free
+    plan: starter
     region: frankfurt # closest Render region to the initial market; change freely
     branch: main
     healthCheckPath: /api/health

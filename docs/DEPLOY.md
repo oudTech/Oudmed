@@ -1,10 +1,13 @@
-# Deployment
+# Deployment (staging)
 
-> Status: hosting target chosen - **Render**, on the **oudmed.com** domain, with
-> Neon (Postgres) and Cloudflare R2 (object storage) as the two external managed
-> services Render's free tier doesn't provide. `render.yaml` at the repo root is
-> the blueprint. This document is the runbook to go from a fresh checkout to a
-> live `https://oudmed.com` a team can log into.
+> **This document now describes STAGING only.** Production moved to a
+> different topology - web on Fly.io, API on Render, a separate new Neon
+> project - see `docs/DEPLOYMENT.md` for the production runbook. The Neon
+> project this document refers to is the one production used to share before
+> the split; it is staging from here on, and the all-Render two-service
+> `render.yaml` setup described below no longer matches the repo's current
+> `render.yaml` (API-only now). Keep this document for standing up/rebuilding
+> a staging environment; don't follow it for production.
 
 ## What a deploy needs (the contract)
 
