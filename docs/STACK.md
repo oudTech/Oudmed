@@ -43,7 +43,7 @@ as `import type` only.
 | Dev services | Docker Compose: Postgres + MinIO |
 | CI | GitHub Actions (`.github/workflows/ci.yml`): install, dash scan, typecheck, web build, migrate + RLS, API test suite |
 | Container images | `apps/*/Dockerfile` (structurally complete, not yet built in CI) |
-| Hosting / secrets / observability | not chosen yet, see [DEPLOY.md](DEPLOY.md) |
+| Hosting | web on Fly.io, API on Render, see [DEPLOYMENT.md](DEPLOYMENT.md) |
 
 ## Multi-tenancy model
 Shared database, shared schema, every tenant-scoped row carries `tenantId`, with

@@ -1,5 +1,14 @@
 # Hospital Management System - Complete System Flow & Operations Guide
 
+> **Superseded for product/module/role content by
+> [OUDHEALTH_SYSTEM_GUIDE.md](OUDHEALTH_SYSTEM_GUIDE.md).** This document
+> predates the inpatient (F1) and pay-before-dispense (F2) modules and the
+> platform admin console (section 6 below is stale - a real, fully
+> cross-tenant platform console now exists). What's still current and not
+> duplicated elsewhere: the disaster-recovery drill procedure (section 9)
+> and the local-dev verify checklist (section 9). For everything else,
+> read the system guide instead.
+
 Consolidated reference for how OudHealth actually behaves today, what has been
 verified versus assumed, and how to run and troubleshoot it in production. This
 is the single "state of the system" document; deeper detail on any one area
