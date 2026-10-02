@@ -10,6 +10,7 @@ import {
   CreateClaimDto,
   CreateRemittanceDto,
   EligibleVisitsQueryDto,
+  GenerateAdmissionClaimDto,
   GenerateClaimsDto,
   ListQueryDto,
   OpenClaimsQueryDto,
@@ -129,8 +130,12 @@ export class ClaimsController {
   }
 
   @Post('generate-for-admission/:admissionId')
-  generateForAdmission(@CurrentUser() u: AuthUser, @Param('admissionId') admissionId: string) {
-    return this.claims.generateForAdmission(actor(u), admissionId);
+  generateForAdmission(
+    @CurrentUser() u: AuthUser,
+    @Param('admissionId') admissionId: string,
+    @Body() dto: GenerateAdmissionClaimDto,
+  ) {
+    return this.claims.generateForAdmission(actor(u), admissionId, dto);
   }
 
   @Get(':id')

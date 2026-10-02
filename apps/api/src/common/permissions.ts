@@ -45,7 +45,8 @@ export type Action =
   | 'staff:manage'
   | 'admin:settings'
   | 'reports:view'
-  | 'claims:manage';
+  | 'claims:manage'
+  | 'claims:generate-without-pa';
 
 const R = Role;
 
@@ -106,6 +107,10 @@ export const MATRIX: Record<Action, Role[]> = {
   'admin:settings': [R.HOSPITAL_ADMIN],
   'reports:view': [R.HOSPITAL_ADMIN, R.ACCOUNTANT],
   'claims:manage': [R.HOSPITAL_ADMIN, R.ACCOUNTANT],
+  // Generating an admission claim without its pre-authorization code is a
+  // deliberate exception to a normally-required control - narrower than
+  // claims:manage itself, HOSPITAL_ADMIN only (F1d).
+  'claims:generate-without-pa': [R.HOSPITAL_ADMIN],
 };
 
 export function can(role: string | null | undefined, action: Action): boolean {

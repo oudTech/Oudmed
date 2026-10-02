@@ -477,7 +477,7 @@ export class AdmissionsService {
       const admission = await tx.admission.findFirst({ where: { id }, include: ADMISSION_INCLUDE });
       if (!admission) throw new NotFoundException('Admission not found');
 
-      const [invoices, deposits, pendingRefunds] = await Promise.all([
+      const [invoices, deposits, pendingRefunds, admissionClaim] = await Promise.all([
         tx.invoice.findMany({
           where: { admissionId: id },
           include: { lines: true, payments: true, claim: { select: { id: true, claimNumber: true, status: true } } },
@@ -485,6 +485,13 @@ export class AdmissionsService {
         }),
         tx.admissionDeposit.findMany({ where: { admissionId: id }, orderBy: { receivedAt: 'desc' } }),
         tx.admissionRefund.findMany({ where: { admissionId: id, status: 'PENDING' } }),
+        // An admission-scoped claim (generateForAdmission) sets admissionId,
+        // not invoiceId - never shows up via an Invoice's own `claim`
+        // relation above, so it is looked up separately here.
+        tx.insuranceClaim.findFirst({
+          where: { admissionId: id, status: { not: 'CANCELLED' } },
+          select: { id: true, claimNumber: true, status: true, authCode: true, paOverrideReason: true },
+        }),
       ]);
 
       const totalCharged = invoices.reduce((s, i) => s.add(i.totalAmount), D0());
@@ -535,6 +542,15 @@ export class AdmissionsService {
         totalDeposited: totalDeposited.toString(),
         pendingRefund: pendingRefundTotal.gt(0) ? pendingRefundTotal.toString() : null,
         balance: balance.toString(),
+        admissionClaim: admissionClaim
+          ? {
+              id: admissionClaim.id,
+              claimNumber: admissionClaim.claimNumber,
+              status: admissionClaim.status,
+              authCode: admissionClaim.authCode,
+              paOverrideReason: admissionClaim.paOverrideReason,
+            }
+          : null,
       };
     });
   }

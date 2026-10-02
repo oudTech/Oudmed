@@ -119,11 +119,16 @@ export interface ClaimDetailDTO {
   visitId: string | null
   invoiceId: string | null
   invoiceNumber: string | null
+  admissionId: string | null
   batchId: string | null
   batchNumber: string | null
   memberName: string
   memberNumber: string
   authCode: string | null
+  /** Set only when this claim was generated without a pre-authorization
+   * code via the Hospital Admin override (F1d) - authCode is null whenever
+   * this is set. */
+  paOverrideReason: string | null
   serviceDate: string
   diagnosisCode: string | null
   diagnosisSummary: string | null

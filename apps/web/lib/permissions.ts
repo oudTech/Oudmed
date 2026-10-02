@@ -42,6 +42,7 @@ export type Action =
   | 'admin:settings'
   | 'reports:view'
   | 'claims:manage'
+  | 'claims:generate-without-pa'
 
 // Mirror of apps/api/src/common/permissions.ts MATRIX. Kept in lockstep by
 // apps/api/src/common/permissions.drift.spec.ts.
@@ -88,6 +89,7 @@ export const MATRIX: Record<Action, string[]> = {
   'admin:settings': ['HOSPITAL_ADMIN'],
   'reports:view': ['HOSPITAL_ADMIN', 'ACCOUNTANT'],
   'claims:manage': ['HOSPITAL_ADMIN', 'ACCOUNTANT'],
+  'claims:generate-without-pa': ['HOSPITAL_ADMIN'],
 }
 
 export function can(role: string | null | undefined, action: Action): boolean {

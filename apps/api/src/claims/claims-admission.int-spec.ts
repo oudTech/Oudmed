@@ -24,6 +24,7 @@ describe('ClaimsService.generateForAdmission (integration - F1d)', () => {
   let tenantId: string;
   let nurseActor: { tenantId: string; userId: string; role: string };
   let claimsActor: { tenantId: string; userId: string; role: string };
+  let accountantActor: { tenantId: string; userId: string; role: string };
   let providerId: string;
 
   beforeAll(async () => {
@@ -40,6 +41,7 @@ describe('ClaimsService.generateForAdmission (integration - F1d)', () => {
     await ownerPrisma.tenant.update({ where: { id: tenant.id }, data: { shortStayChargeMode: 'NONE' } });
     nurseActor = actorFor(tenantId, (await makeUser(tenantId, 'NURSE')).id, 'NURSE');
     claimsActor = actorFor(tenantId, (await makeUser(tenantId, 'HOSPITAL_ADMIN')).id, 'HOSPITAL_ADMIN');
+    accountantActor = actorFor(tenantId, (await makeUser(tenantId, 'ACCOUNTANT')).id, 'ACCOUNTANT');
     providerId = (
       await ownerPrisma.insuranceProvider.create({
         data: { tenantId, name: 'Admission HMO', kind: 'HMO', defaultCoPayPct: 20 },
@@ -95,6 +97,68 @@ describe('ClaimsService.generateForAdmission (integration - F1d)', () => {
     );
     await admissions.discharge(nurseActor, a2.id, { status: 'DISCHARGED' } as any);
     await expect(claims.generateForAdmission(claimsActor, a2.id)).rejects.toThrow(/pre-authorization/);
+  });
+
+  it('F1d: a Hospital Admin can generate a claim without a PA code by giving a reason; ACCOUNTANT cannot', async () => {
+    const { admission } = await admitHmoPatient('');
+    await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToAdmission(tx, {
+        tenantId, userId: nurseActor.userId, admissionId: admission.id, patientId: admission.patientId,
+        description: 'PA override charge', quantity: 1, unitPrice: 10000, category: 'Inpatient',
+      }),
+    );
+    await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
+
+    // ACCOUNTANT has claims:manage (can generate when a PA code IS present)
+    // but not claims:generate-without-pa - rejected even with a reason.
+    await expect(
+      claims.generateForAdmission(accountantActor, admission.id, { overridePaReason: 'no time to wait for pre-auth' }),
+    ).rejects.toThrow();
+
+    // Hospital Admin, no reason given: still blocked, same as before.
+    await expect(claims.generateForAdmission(claimsActor, admission.id)).rejects.toThrow(/pre-authorization/);
+
+    // Hospital Admin, with a reason: succeeds.
+    const { id: claimId } = await claims.generateForAdmission(claimsActor, admission.id, {
+      overridePaReason: 'emergency admission, authorization pending from the HMO',
+    });
+    const claim = await claims.getClaim(claimsActor, claimId);
+    expect(claim.authCode).toBeNull();
+    expect(claim.paOverrideReason).toBe('emergency admission, authorization pending from the HMO');
+
+    const log = await ownerPrisma.auditLog.findFirst({
+      where: { tenantId, entityId: claimId, action: 'CREATE', entityType: 'InsuranceClaim' },
+    });
+    expect((log?.metadata as any)?.paOverrideReason).toBe('emergency admission, authorization pending from the HMO');
+
+    // a second claim can never be generated for the same admission, override or not
+    await expect(
+      claims.generateForAdmission(claimsActor, admission.id, { overridePaReason: 'retry' }),
+    ).rejects.toThrow(/already exists/);
+  });
+
+  it('F1d: a PA-overridden claim is flagged "No PA code" on the batch export, not left blank', async () => {
+    const { admission } = await admitHmoPatient('');
+    await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToAdmission(tx, {
+        tenantId, userId: nurseActor.userId, admissionId: admission.id, patientId: admission.patientId,
+        description: 'CSV override charge', quantity: 1, unitPrice: 5000, category: 'Inpatient',
+      }),
+    );
+    await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
+    const { id: claimId } = await claims.generateForAdmission(claimsActor, admission.id, {
+      overridePaReason: 'verbal authorization, written confirmation to follow',
+    });
+    await claims.submitClaim(claimsActor, claimId, {});
+    const batch = await claims.createBatch(claimsActor, {
+      providerId,
+      periodStart: new Date(Date.now() - 86_400_000).toISOString().slice(0, 10),
+      periodEnd: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+      claimIds: [claimId],
+    } as any);
+    const csv = await claims.batchCsv(claimsActor, batch.id);
+    expect(csv).toContain('No PA code');
+    expect(csv).toContain('verbal authorization, written confirmation to follow');
   });
 
   it('one claim spans every invoice an admission\'s bill carries, including a supplementary one', async () => {

@@ -695,6 +695,11 @@ model InsuranceClaim {
   memberName       String
   memberNumber     String
   authCode         String?
+  // Set only when generateForAdmission() was allowed to proceed without a
+  // pre-authorization code (Hospital Admin override, F1d). null authCode +
+  // null paOverrideReason never happens by construction - generation is
+  // blocked unless one of the two is present.
+  paOverrideReason String?
   serviceDate      DateTime
   diagnosisCode    String?
   diagnosisSummary String?

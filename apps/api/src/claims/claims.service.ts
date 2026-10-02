@@ -310,11 +310,13 @@ export class ClaimsService {
         visitId: c.visitId,
         invoiceId: c.invoiceId,
         invoiceNumber: c.invoice?.invoiceNumber ?? null,
+        admissionId: c.admissionId,
         batchId: c.batchId,
         batchNumber: c.batch?.batchNumber ?? null,
         memberName: c.memberName,
         memberNumber: c.memberNumber,
         authCode: c.authCode,
+        paOverrideReason: c.paOverrideReason,
         serviceDate: c.serviceDate.toISOString(),
         diagnosisCode: c.diagnosisCode,
         diagnosisSummary: c.diagnosisSummary,
@@ -543,8 +545,9 @@ export class ClaimsService {
    * write-off logic above (resolveClaimInvoices/splitProportionally) is what
    * lets this claim's lines span more than one invoice safely.
    */
-  async generateForAdmission(actor: Actor, admissionId: string) {
+  async generateForAdmission(actor: Actor, admissionId: string, dto?: { overridePaReason?: string }) {
     assertCan(actor.role, 'claims:manage');
+    let paOverrideReason: string | null = null;
     return this.prisma.forTenant(actor.tenantId, async (tx) => {
       const admission = await tx.admission.findFirst({
         where: { id: admissionId },
@@ -555,7 +558,14 @@ export class ClaimsService {
         throw new BadRequestException('Only a discharged admission can be claimed - the bill is not final yet');
       }
       if (!admission.authCode?.trim()) {
-        throw new BadRequestException('A pre-authorization code is required before generating a claim for this admission');
+        if (!dto?.overridePaReason?.trim()) {
+          throw new BadRequestException({
+            message: 'A pre-authorization code is required before generating a claim for this admission. Generate anyway with a reason, if a Hospital Admin.',
+            code: 'PA_CODE_REQUIRED',
+          });
+        }
+        assertCan(actor.role, 'claims:generate-without-pa');
+        paOverrideReason = dto.overridePaReason.trim();
       }
       const existing = await tx.insuranceClaim.findFirst({
         where: { admissionId, status: { not: 'CANCELLED' } },
@@ -628,7 +638,11 @@ export class ClaimsService {
           admissionId: admission.id,
           memberName: `${admission.patient.firstName} ${admission.patient.lastName}`.trim(),
           memberNumber: admission.patient.hmoNumber ?? admission.patient.insuranceNumber ?? '',
-          authCode: admission.authCode,
+          // Normalised: a blank string is "no code", same as null - never
+          // stored verbatim, or the "No PA code" fallback below would never
+          // trigger for it.
+          authCode: admission.authCode?.trim() || null,
+          paOverrideReason,
           serviceDate: admission.admittedAt,
           diagnosisCode: dx.find((d) => d.code)?.code ?? null,
           diagnosisSummary: dx.map((d) => d.description).join('; ') || null,
@@ -654,7 +668,13 @@ export class ClaimsService {
         action: 'CREATE',
         entityType: 'InsuranceClaim',
         entityId: claim.id,
-        metadata: { claimNumber, source: 'generateForAdmission', admissionId, invoiceCount: invoices.length },
+        metadata: {
+          claimNumber,
+          source: 'generateForAdmission',
+          admissionId,
+          invoiceCount: invoices.length,
+          ...(paOverrideReason ? { paOverrideReason, action: 'PA_CODE_OVERRIDE' } : {}),
+        },
       });
       return { id: claim.id, claimNumber };
     });
@@ -1065,7 +1085,10 @@ export class ClaimsService {
           `${c.patient.firstName} ${c.patient.lastName}`.trim(),
           c.patient.patientNumber,
           c.memberNumber,
-          c.authCode ?? '',
+          // An admission claim can be generated without a PA code via the
+          // Hospital Admin override (F1d) - never leave that blank on the
+          // payer-facing export, flag it plainly instead.
+          c.authCode ?? (c.paOverrideReason ? `No PA code - override: ${c.paOverrideReason}` : 'No PA code'),
           c.serviceDate.toISOString().slice(0, 10),
           c.diagnosisCode ?? c.diagnosisSummary ?? '',
           s(c.claimedAmount),

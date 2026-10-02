@@ -39,6 +39,13 @@ export class GenerateClaimsDto {
   @IsArray() @IsString({ each: true }) invoiceIds: string[];
 }
 
+export class GenerateAdmissionClaimDto {
+  // Required only when the admission has no pre-authorization code; a
+  // Hospital Admin can still generate the claim by giving a reason
+  // (claims:generate-without-pa, F1d).
+  @IsOptional() @Transform(trim) @IsString() @MinLength(2) overridePaReason?: string;
+}
+
 export class ClaimLineDto {
   @IsOptional() @IsString() invoiceLineId?: string | null;
   @IsOptional() @IsString() serviceCode?: string | null;

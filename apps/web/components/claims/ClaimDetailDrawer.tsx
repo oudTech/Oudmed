@@ -80,7 +80,18 @@ export function ClaimDetailDrawer({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
             <Info label="Patient" value={claim.patient?.name ?? claim.memberName} />
             <Info label="Member number" value={claim.memberNumber || '-'} />
-            <Info label="Authorisation" value={claim.authCode || '-'} />
+            <Info
+              label="Authorisation"
+              value={
+                claim.authCode ? (
+                  claim.authCode
+                ) : (
+                  <span className="text-amber-700">
+                    No PA code{claim.paOverrideReason ? ` - override: ${claim.paOverrideReason}` : ''}
+                  </span>
+                )
+              }
+            />
             <Info label="Service date" value={dt(claim.serviceDate)} />
             <Info label="Diagnosis" value={claim.diagnosisCode || claim.diagnosisSummary || '-'} />
             <Info label="Invoice" value={claim.invoiceNumber ?? '-'} />
@@ -211,7 +222,7 @@ export function ClaimDetailDrawer({
   )
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+function Info({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
       <span className="block text-xs text-gray-400">{label}</span>

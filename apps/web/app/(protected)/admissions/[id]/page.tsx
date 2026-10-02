@@ -22,6 +22,7 @@ import {
   listPendingRefunds,
   payAdmissionRefund,
 } from '@/lib/hospital'
+import { claimsApi, CLAIM_STATUS_META } from '@/lib/claims'
 import {
   AddDiagnosisModal,
   AddVitalsModal,
@@ -66,6 +67,7 @@ export default function AdmissionWorkspacePage() {
   const [addendumFor, setAddendumFor] = useState<string | null>(null)
   const [reopening, setReopening] = useState(false)
   const [showDischargeSummary, setShowDischargeSummary] = useState(false)
+  const [generatingClaim, setGeneratingClaim] = useState(false)
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['admission-workspace', id] })
@@ -149,6 +151,36 @@ export default function AdmissionWorkspacePage() {
               <Stat label="Deposit held" value={naira(bill.data.totalDeposited)} />
               <Stat label="Balance" value={naira(bill.data.balance)} tone={Number(bill.data.balance) > 0 ? '#DC2626' : '#047857'} />
             </div>
+            {a.payerType === 'HMO' && a.status !== 'ADMITTED' && (
+              <div className="mb-4 rounded-lg bg-gray-50 border border-gray-100 px-3 py-2 text-sm flex items-center justify-between">
+                {bill.data.admissionClaim ? (
+                  <span className="flex items-center gap-2">
+                    <span className="text-gray-700">Claim {bill.data.admissionClaim.claimNumber}</span>
+                    <span
+                      className="text-xs font-medium rounded-full px-2 py-0.5"
+                      style={{
+                        color: CLAIM_STATUS_META[bill.data.admissionClaim.status as keyof typeof CLAIM_STATUS_META]?.color,
+                        backgroundColor: CLAIM_STATUS_META[bill.data.admissionClaim.status as keyof typeof CLAIM_STATUS_META]?.bg,
+                      }}
+                    >
+                      {CLAIM_STATUS_META[bill.data.admissionClaim.status as keyof typeof CLAIM_STATUS_META]?.label ?? bill.data.admissionClaim.status}
+                    </span>
+                    {!bill.data.admissionClaim.authCode && (
+                      <span className="text-xs text-amber-700" title={bill.data.admissionClaim.paOverrideReason ?? undefined}>
+                        No PA code
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="text-gray-500">No HMO claim generated yet for this admission.</span>
+                )}
+                {!bill.data.admissionClaim && can(role, 'claims:manage') && (
+                  <button className="text-xs font-medium text-primary hover:underline" onClick={() => setGeneratingClaim(true)}>
+                    Generate HMO claim
+                  </button>
+                )}
+              </div>
+            )}
             {bill.data.pendingRefund && (
               <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800 flex items-center justify-between">
                 <span>Refund pending: {naira(bill.data.pendingRefund)}</span>
@@ -336,6 +368,13 @@ export default function AdmissionWorkspacePage() {
         admissionId={id}
         refund={payingRefund ? myPendingRefund : null}
         onClose={() => setPayingRefund(false)}
+        onDone={refresh}
+      />
+      <GenerateClaimModal
+        admissionId={id}
+        open={generatingClaim}
+        canOverride={can(role, 'claims:generate-without-pa')}
+        onClose={() => setGeneratingClaim(false)}
         onDone={refresh}
       />
     </div>
@@ -576,6 +615,78 @@ function ReopenModal({ admissionId, open, onClose, onDone }: { admissionId: stri
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button loading={m.isPending} disabled={reason.trim().length < 3} onClick={() => m.mutate()}>Reopen</Button>
         </div>
+      </div>
+    </Modal>
+  )
+}
+
+function GenerateClaimModal({
+  admissionId,
+  open,
+  canOverride,
+  onClose,
+  onDone,
+}: {
+  admissionId: string
+  open: boolean
+  canOverride: boolean
+  onClose: () => void
+  onDone: () => void
+}) {
+  const toast = useToast()
+  const [needsOverride, setNeedsOverride] = useState(false)
+  const [reason, setReason] = useState('')
+
+  const key = String(open)
+  const [seen, setSeen] = useState(key)
+  if (key !== seen) { setSeen(key); setNeedsOverride(false); setReason('') }
+
+  const m = useMutation({
+    mutationFn: (overridePaReason?: string) => claimsApi.generateForAdmission(admissionId, overridePaReason),
+    onSuccess: (res) => {
+      toast(`Claim ${res.claimNumber} generated`, 'success')
+      onClose(); onDone()
+    },
+    onError: (e: any) => {
+      if (e?.response?.data?.code === 'PA_CODE_REQUIRED' && canOverride) {
+        setNeedsOverride(true)
+        return
+      }
+      toast(e?.response?.data?.message ?? 'Could not generate the claim.', 'error')
+    },
+  })
+
+  return (
+    <Modal open={open} onClose={onClose} title="Generate HMO claim" width={440} align="center">
+      <div className="space-y-3">
+        {!needsOverride ? (
+          <>
+            <p className="text-sm text-gray-500">
+              Pools every invoice this admission's stay produced into one claim, using the co-pay split configured for
+              the linked insurer.
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="secondary" onClick={onClose}>Cancel</Button>
+              <Button loading={m.isPending} onClick={() => m.mutate(undefined)}>Generate</Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+              This admission has no pre-authorization code. As Hospital Admin you can generate the claim anyway, with a
+              reason - it will be clearly marked "No PA code" on the claim and in the batch export.
+            </div>
+            <Field label="Reason" required>
+              <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why generate without a PA code" />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="secondary" onClick={onClose}>Cancel</Button>
+              <Button loading={m.isPending} disabled={reason.trim().length < 2} onClick={() => m.mutate(reason.trim())}>
+                Generate without PA code
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   )

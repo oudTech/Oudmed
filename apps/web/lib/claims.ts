@@ -30,6 +30,10 @@ export const claimsApi = {
     api.get<EligibleVisitDTO[]>('/claims/eligible-visits', { params }).then((r) => r.data),
   generate: (invoiceIds: string[]) =>
     api.post<GenerateClaimsResultDTO>('/claims/generate', { invoiceIds }).then((r) => r.data),
+  generateForAdmission: (admissionId: string, overridePaReason?: string) =>
+    api
+      .post<{ id: string; claimNumber: string }>(`/claims/generate-for-admission/${admissionId}`, { overridePaReason })
+      .then((r) => r.data),
   update: (id: string, data: Record<string, unknown>) =>
     api.patch<ClaimDetailDTO>(`/claims/${id}`, data).then((r) => r.data),
   submit: (id: string, batchId?: string) =>

@@ -166,6 +166,20 @@ export interface AdmissionBillInvoiceDTO {
   claim: { id: string; claimNumber: string; status: string } | null
 }
 
+/** An admission-scoped HMO claim (generateForAdmission) - distinct from any
+ * per-invoice `claim` in `invoices[]`, since this kind of claim sets
+ * `admissionId` rather than a single `invoiceId` and so never shows up
+ * through an invoice's own claim relation. */
+export interface AdmissionClaimSummaryDTO {
+  id: string
+  claimNumber: string
+  status: string
+  authCode: string | null
+  /** Set only when generated without a PA code via the Hospital Admin
+   * override - authCode is null whenever this is set. */
+  paOverrideReason: string | null
+}
+
 export interface AdmissionBillDTO {
   admission: AdmissionDTO
   invoices: AdmissionBillInvoiceDTO[]
@@ -175,6 +189,7 @@ export interface AdmissionBillDTO {
   totalDeposited: string
   pendingRefund: string | null
   balance: string
+  admissionClaim: AdmissionClaimSummaryDTO | null
 }
 
 export interface DischargeSummaryDTO {
