@@ -128,6 +128,11 @@ export class ClaimsController {
     return this.claims.generate(actor(u), dto);
   }
 
+  @Post('generate-for-admission/:admissionId')
+  generateForAdmission(@CurrentUser() u: AuthUser, @Param('admissionId') admissionId: string) {
+    return this.claims.generateForAdmission(actor(u), admissionId);
+  }
+
   @Get(':id')
   get(@CurrentUser() u: AuthUser, @Param('id') id: string) {
     return this.claims.getClaim(actor(u), id);

@@ -3,6 +3,7 @@ import { Prisma, VisitStatus } from '@prisma/client';
 import type {
   ReportGranularity,
   ReportKpiDTO,
+  ReportOccupancyDTO,
   ReportsOverviewDTO,
   ReportPaymentsResponse,
 } from '@oudhealth/contracts';
@@ -88,6 +89,8 @@ export class ReportsService {
         returningPrev,
         trendPatients,
         weekdayVisits,
+        wards,
+        trendAdmissions,
       ] = await Promise.all([
         tx.payment.findMany({
           where: { paidAt: inWindow, reversedAt: null },
@@ -98,6 +101,7 @@ export class ReportsService {
           select: {
             totalAmount: true,
             subtotal: true,
+            admissionId: true,
             visit: { select: { departmentId: true, doctorId: true } },
           },
         }),
@@ -158,6 +162,14 @@ export class ReportsService {
           where: { startsAt: inWindow },
           select: { startsAt: true, status: true },
         }),
+        tx.ward.findMany({
+          where: { isActive: true },
+          select: { id: true, name: true, beds: { select: { status: true } } },
+        }),
+        tx.admission.findMany({
+          where: { admittedAt: { gte: trend.from } },
+          select: { admittedAt: true },
+        }),
       ]);
 
       // ── names for the breakdown charts ──
@@ -180,6 +192,9 @@ export class ReportsService {
         .filter((p) => p.payerType !== 'CASH')
         .reduce((s, p) => s.add(p.amount), D0());
       const revenueBilled = invoices.reduce((s, i) => s.add(i.totalAmount), D0());
+      const inpatientRevenue = invoices
+        .filter((i) => i.admissionId != null)
+        .reduce((s, i) => s.add(i.totalAmount), D0());
       const lineDiscount = num(lineAgg._sum.grossAmount) - num(lineAgg._sum.lineTotal);
       const invoiceDiscount = invoices.reduce((s, i) => s + (num(i.subtotal) - num(i.totalAmount)), 0);
       const totalDiscount = Math.max(0, lineDiscount + invoiceDiscount);
@@ -207,6 +222,7 @@ export class ReportsService {
         kpi('total_discount', 'Total Discount', String(totalDiscount), 'currency', null, 'N/A vs previous period'),
         kpi('deposits_held', 'Deposits held', String(depositsHeld), 'currency', null, 'Liability held, not revenue'),
         kpi('refunds_owed', 'Refunds owed', String(refundsOwed), 'currency', null, 'Pending payout to patients'),
+        kpi('inpatient_revenue', 'Inpatient Revenue', inpatientRevenue.toString(), 'currency', null, 'Admission-billed invoices, already included in Total Revenue'),
       ];
 
       // ── operations ──
@@ -253,6 +269,19 @@ export class ReportsService {
         kpi('female', 'Female', String(mixNow.female), 'number', deltaPct(mixNow.female, mixPrev.female)),
       ];
 
+      // ── census / bed occupancy, right now (not windowed by the report range) ──
+      const occupancyByWard: ReportOccupancyDTO[] = wards
+        .map((w) => ({
+          wardId: w.id,
+          wardName: w.name,
+          totalBeds: w.beds.length,
+          occupiedBeds: w.beds.filter((b) => b.status === 'OCCUPIED').length,
+        }))
+        .filter((w) => w.totalBeds > 0);
+
+      // ── admissions trend, same bucketing as patientTrend ──
+      const admissionsTrend = fillBuckets(trendAdmissions, trendBuckets, (a) => a.admittedAt, () => 1);
+
       // ── appointments by weekday ──
       const order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       const week = order.map((weekday) => ({ weekday, completed: 0, scheduled: 0, checkedIn: 0, missed: 0 }));
@@ -277,6 +306,8 @@ export class ReportsService {
         patientTrendGranularity: granularity,
         patientMix,
         appointmentsByWeekday: week,
+        occupancyByWard,
+        admissionsTrend,
       };
     });
   }

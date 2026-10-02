@@ -33,6 +33,13 @@ export interface ReportWeekdayDTO {
   missed: number
 }
 
+export interface ReportOccupancyDTO {
+  wardId: string
+  wardName: string
+  totalBeds: number
+  occupiedBeds: number
+}
+
 export interface ReportsOverviewDTO {
   range: { from: string; to: string; label: string; comparedTo: string | null }
   finance: ReportKpiDTO[]
@@ -45,6 +52,10 @@ export interface ReportsOverviewDTO {
   patientTrendGranularity: ReportGranularity
   patientMix: ReportKpiDTO[]
   appointmentsByWeekday: ReportWeekdayDTO[]
+  /** Beds occupied vs. total per ward, as of now (not windowed by the report's date range). */
+  occupancyByWard: ReportOccupancyDTO[]
+  /** Admissions started per bucket, same trend window/granularity as patientTrend. */
+  admissionsTrend: ReportPointDTO[]
 }
 
 export type ReportPaymentEntryType = 'PAYMENT' | 'DEPOSIT' | 'DEPOSIT_REFUND'

@@ -978,6 +978,86 @@ printout is never mistaken for the closing statement.
   method from within another transaction (which would have opened a second,
   wasteful, independently-tenant-scoped transaction).
 
+### F1c corrections (pending refunds, HMO-aware deposits)
+
+- **Discharge no longer blocks on a deposit refund.** The original
+  `DEPOSIT_REFUND_REQUIRED` throw was removed entirely. If credit remains
+  when an admission is discharged, a new `AdmissionRefund` row is created
+  (status `PENDING`) unconditionally and discharge completes regardless; a
+  `refundMethod` passed on the same call still pays it out immediately
+  (same transaction), otherwise it sits on `GET /admissions/refunds/due`
+  (a cashier/billing worklist) until `POST /admissions/:id/refunds/:refundId/pay`
+  settles it. `bill()`/`dischargeSummary()`'s balance math was corrected
+  alongside this: only deposit credit net of any pending refund still
+  offsets the balance - the raw deposited total no longer double-counts
+  money that is already committed to leave.
+- **Deposits apply only to the patient-payable portion of the bill.** A new
+  `patientPayableBalance()` resolves what the *patient* (not the HMO) still
+  owes on an admission: for a cash admission this is just the invoice
+  balance; for an HMO admission with a submitted claim, it is the balance
+  less whatever the claim still expects to recover (`claimedAmount -
+  paidAmount - writeOffAmount`, zero once the claim is `PAID`/`REJECTED`/
+  `WRITTEN_OFF`/`CANCELLED`); with no claim yet, it estimates the patient's
+  share from the linked `InsuranceProvider.defaultCoPayPct` (the same
+  primitive `claims.service.ts` uses). Both `applyDeposit()` and
+  `discharge()`'s auto-apply step cap what they draw at this figure, so a
+  deposit can never be used to prepay an amount the HMO is expected to
+  cover. If an HMO later rejects part of a claim, the patient's payable
+  share grows by exactly the rejected amount on the next read (it is
+  computed live, not cached) - a deposit still held, or a new payment, can
+  then cover the difference.
+
+### F1d implementation notes
+
+- **Admission claims shipped exactly as section 7 planned**:
+  `generateForAdmission(actor, admissionId)` is a new sibling method;
+  `generate()` itself is untouched. Gated on `AdmissionStatus ===
+  'DISCHARGED'` and a non-blank `authCode` (both failures are a clear
+  `BadRequestException`, never a silent skip). It gathers every
+  non-cancelled invoice carrying that `admissionId` (primary plus any
+  supplementaries), pools their billable lines, and creates one
+  `InsuranceClaim` (`admissionId` set, `invoiceId` left null) with one
+  `InsuranceClaimLine` per pooled line, using the same co-pay-factor math
+  `generate()` already uses. Route: `POST
+  /claims/generate-for-admission/:admissionId`.
+- **The remittance/write-off generalisation landed as two small helpers**,
+  not a rewrite of every call site: `resolveClaimInvoices(tx, claimId)`
+  groups a claim's lines by their real invoice (`InvoiceLine.invoiceId`),
+  and `splitProportionally(amount, invoices)` divides an amount across them
+  by each invoice's claimed share, with the last invoice absorbing the
+  rounding remainder. `writeOffClaim`, `createRemittance` (both the
+  payment-posting and shortfall-write-off blocks), and `reverseRemittance`
+  now loop over this split instead of posting against a single
+  `claim.invoiceId`. `splitProportionally` takes a dedicated
+  `invoices.length === 1` branch that returns the full, unrounded amount -
+  so every existing outpatient claim (always exactly one invoice) takes a
+  path that is provably identical to the old single-invoice code, not
+  merely "probably the same." `reverseRemittance` changed the most: it
+  now reverses *every* `Payment` on the claim's resolved invoices carrying
+  that remittance's note, not just the one `paymentId` stored on the
+  allocation row - verified correct for a multi-invoice admission claim by
+  a dedicated test, and unchanged for outpatient claims by the four
+  pre-existing `claims.int-spec.ts` tests, which pass with zero edits.
+- **Backfill verification ran clean.** Both queries from section 7's
+  checklist were run, as a permanent scoped integration test rather than a
+  one-off script: zero `InsuranceClaimLine` rows with a null
+  `invoiceLineId`, and zero rows whose resolved invoice disagrees with
+  their own claim's `invoiceId`. The "by construction" proof in section 7
+  held in practice; no backfill migration was needed.
+- **Full outpatient regression** (`claims-regression.int-spec.ts`):
+  generate two claims -> batch both -> submit the batch -> export the CSV
+  -> remit one claim in full -> write off the other -> check aging,
+  chained as one uninterrupted test and cross-checked against
+  hand-computed totals at every step. Every number matches what the same
+  sequence produced before F1d's generalisation.
+- **Reports** (section 10) shipped as planned: `occupancyByWard` (a live
+  `Bed.status` groupby per active ward, not windowed by the report's date
+  range) and `admissionsTrend` (same bucketing machinery as
+  `patientTrend`) are new top-level fields on `ReportsOverviewDTO`;
+  `inpatient_revenue` is a new finance KPI (sum of `Invoice.totalAmount`
+  where `admissionId != null`) shown as a visible line alongside, not
+  instead of, `total_revenue`, which already included it automatically.
+
 ## 10. Reports
 
 - **Census / bed occupancy**: a new reports panel - beds occupied vs. total

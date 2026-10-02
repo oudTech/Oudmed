@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
-import type { ReportKpiDTO } from '@oudhealth/contracts'
+import type { ReportKpiDTO, ReportOccupancyDTO } from '@oudhealth/contracts'
 import { can } from '@/lib/permissions'
 import {
   reportsApi,
@@ -72,7 +72,7 @@ export default function ReportsPage() {
       <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
         {/* ── financial KPIs ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {(d?.finance ?? skeleton(5)).map((k, i) => <KpiTile key={k?.key ?? i} kpi={k} />)}
+          {(d?.finance ?? skeleton(7)).map((k, i) => <KpiTile key={k?.key ?? i} kpi={k} />)}
         </div>
 
         {/* ── operational KPIs ── */}
@@ -149,6 +149,16 @@ export default function ReportsPage() {
         >
           {d ? <AreaLineChart points={d.patientTrend} valueFormat={(v) => String(Math.round(v))} /> : <ChartSkeleton />}
         </Card>
+
+        {/* ── inpatient: occupancy + admissions trend ── */}
+        <div className="grid lg:grid-cols-2 gap-6">
+          <Card title="Bed occupancy by ward" subtitle="Beds occupied right now, not windowed by the date range above">
+            {d ? <WardOccupancyList wards={d.occupancyByWard} /> : <ChartSkeleton short />}
+          </Card>
+          <Card title="Admissions trend" subtitle="New admissions started per period">
+            {d ? <AreaLineChart points={d.admissionsTrend} color="#8B6FD8" valueFormat={(v) => String(Math.round(v))} /> : <ChartSkeleton />}
+          </Card>
+        </div>
 
         {/* ── patient mix ── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -239,6 +249,31 @@ function MixPill({ kpi }: { kpi: ReportKpiDTO | null }) {
           </span>
         )}
       </span>
+    </div>
+  )
+}
+
+function WardOccupancyList({ wards }: { wards: ReportOccupancyDTO[] }) {
+  if (!wards.length) {
+    return <p className="text-sm text-gray-400 py-6">No active wards with beds set up yet.</p>
+  }
+  return (
+    <div className="space-y-3">
+      {wards.map((w) => {
+        const pct = w.totalBeds > 0 ? Math.round((w.occupiedBeds / w.totalBeds) * 100) : 0
+        const color = pct >= 90 ? '#E86F6F' : pct >= 70 ? '#F5C24B' : '#5FAF72'
+        return (
+          <div key={w.wardId}>
+            <div className="flex items-baseline justify-between text-sm">
+              <span className="text-gray-600">{w.wardName}</span>
+              <span className="text-xs text-gray-400">{w.occupiedBeds}/{w.totalBeds} beds ({pct}%)</span>
+            </div>
+            <div className="mt-1 h-3.5 w-full rounded-full bg-gray-50">
+              <div className="h-3.5 rounded-full" style={{ width: `${Math.max(4, pct)}%`, background: color }} />
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
