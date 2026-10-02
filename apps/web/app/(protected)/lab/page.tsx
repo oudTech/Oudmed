@@ -3,6 +3,8 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import { Button, Field, Input, Modal, Select, Textarea } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { can } from '@/lib/permissions'
 import { encountersApi, ORDER_STATUS_META, ORDER_TYPE_LABEL, ABNORMAL_FLAGS } from '@/lib/encounters'
 import { EmptyState } from '@/components/onboarding'
@@ -158,6 +160,7 @@ export default function LabPage() {
 
 function ResultModal({ order, open, onClose }: { order: Order | null; open: boolean; onClose: () => void }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const [f, setF] = useState({
     resultValue: '',
     resultUnit: '',
@@ -183,15 +186,19 @@ function ResultModal({ order, open, onClose }: { order: Order | null; open: bool
     mutationFn: () => encountersApi.updateOrder(order!.id, f),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['lab-worklist'] })
+      toast(`Result recorded for ${order!.name}`, 'success')
       onClose()
     },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
   const progress = useMutation({
     mutationFn: () => encountersApi.updateOrder(order!.id, { status: 'IN_PROGRESS' }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['lab-worklist'] })
+      toast(`${order!.name} marked in progress`, 'success')
       onClose()
     },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
 
   if (!order) return null

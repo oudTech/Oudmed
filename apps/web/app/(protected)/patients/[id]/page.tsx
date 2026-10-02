@@ -17,6 +17,7 @@ import {
   vitalFlag,
 } from '@/lib/patients'
 import { can } from '@/lib/permissions'
+import { errorMessage } from '@/lib/errors'
 import { useToast, useConfirm } from '@/components/ui/feedback'
 import { NewAppointmentModal } from '@/components/schedule/NewAppointmentModal'
 import {
@@ -729,10 +730,15 @@ function Prescriptions({ id, role, patient }: { id: string; role?: string; patie
 
 function PatientPhoto({ p, canEdit }: { p: PatientDTO; canEdit: boolean }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const ref = useRef<HTMLInputElement>(null)
   const m = useMutation({
     mutationFn: (f: File) => patientsApi.setPhoto(p.id, f),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['patient', p.id] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['patient', p.id] })
+      toast('Photo updated', 'success')
+    },
+    onError: (e) => toast(errorMessage(e, 'Could not upload the photo.'), 'error'),
   })
   return (
     <div className="relative flex-shrink-0 group">

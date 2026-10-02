@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { DrugDTO, DrugUsagePointDTO } from '@oudhealth/contracts'
 import { Button, Drawer, Field, Input, Select, Textarea } from '@/components/ui/kit'
-import { useConfirm } from '@/components/ui/feedback'
+import { useConfirm, useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { can } from '@/lib/permissions'
 import { drugsApi, DRUG_FORMS, PACKAGING_TYPES, MOVEMENT_LABEL, expiryTone } from '@/lib/pharmacy'
 
@@ -50,6 +51,7 @@ export function DrugDetailModal({
 function EditForm({ drug, canManage, onClose }: { drug: DrugDTO; canManage: boolean; onClose: () => void }) {
   const qc = useQueryClient()
   const confirm = useConfirm()
+  const toast = useToast()
   const [f, setF] = useState({
     sku: drug.sku, name: drug.name, genericName: drug.genericName ?? '',
     form: drug.form ?? 'Tablet', strength: drug.strength ?? '',
@@ -100,7 +102,9 @@ function EditForm({ drug, canManage, onClose }: { drug: DrugDTO; canManage: bool
       qc.invalidateQueries({ queryKey: ['drug', drug.id] })
       qc.invalidateQueries({ queryKey: ['drugs'] })
       qc.invalidateQueries({ queryKey: ['drug-stats'] })
+      toast(`${drug.name} updated`, 'success')
     },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
 
   const del = useMutation({
@@ -108,8 +112,10 @@ function EditForm({ drug, canManage, onClose }: { drug: DrugDTO; canManage: bool
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['drugs'] })
       qc.invalidateQueries({ queryKey: ['drug-stats'] })
+      toast(`${drug.name} removed from inventory`, 'success')
       onClose()
     },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
 
   return (
@@ -167,7 +173,6 @@ function EditForm({ drug, canManage, onClose }: { drug: DrugDTO; canManage: bool
           </Button>
         </div>
       )}
-      {save.isError && <p className="text-sm text-red-600 mt-2">{(save.error as any)?.response?.data?.message ?? 'Could not save.'}</p>}
     </div>
   )
 }

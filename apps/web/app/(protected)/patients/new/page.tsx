@@ -417,7 +417,12 @@ function StepDedupe({ onContinue, onPick }: { onContinue: () => void; onPick: (i
         Check for an existing record
       </Button>
 
-      {checked && (
+      {checked && search.isError && (
+        <p className="text-sm text-red-600">
+          Could not check for an existing record - try again before continuing, so a real duplicate isn't missed.
+        </p>
+      )}
+      {checked && !search.isError && (
         <div className="border border-gray-100 rounded-xl divide-y">
           {(search.data?.matches ?? []).length === 0 ? (
             <p className="p-3 text-sm text-gray-400">No existing record found.</p>

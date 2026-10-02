@@ -3,6 +3,8 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { reportsApi, formatNaira } from '@/lib/reports'
 import { Pagination } from '@/components/admin/AdminRowActions'
 
@@ -15,6 +17,7 @@ export function PaymentLedger({
   filter: { kind: 'department' | 'doctor'; id: string; label: string } | null
   onClearFilter: () => void
 }) {
+  const toast = useToast()
   const [page, setPage] = useState(1)
   const [downloading, setDownloading] = useState(false)
   const [customFrom, setCustomFrom] = useState('')
@@ -49,6 +52,8 @@ export function PaymentLedger({
         departmentId: params.departmentId,
         doctorId: params.doctorId,
       })
+    } catch (e) {
+      toast(errorMessage(e, 'Could not export the payment ledger.'), 'error')
     } finally {
       setDownloading(false)
     }

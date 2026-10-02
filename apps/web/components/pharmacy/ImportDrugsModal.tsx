@@ -3,10 +3,13 @@ import { useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { DrugImportResultDTO } from '@oudhealth/contracts'
 import { Button, Modal } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { drugsApi, parseCsv, IMPORT_TEMPLATE } from '@/lib/pharmacy'
 
 export function ImportDrugsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const fileRef = useRef<HTMLInputElement>(null)
   const [rows, setRows] = useState<Record<string, string>[]>([])
   const [fileName, setFileName] = useState('')
@@ -40,6 +43,7 @@ export function ImportDrugsModal({ open, onClose }: { open: boolean; onClose: ()
       qc.invalidateQueries({ queryKey: ['drugs'] })
       qc.invalidateQueries({ queryKey: ['drug-stats'] })
     },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
 
   const downloadTemplate = () => {

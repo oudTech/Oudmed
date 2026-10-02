@@ -377,6 +377,7 @@ function VCell({ flag, children }: { flag: 'low' | 'high' | null; children: Reac
 }
 
 function Complaints({ e, disabled, onDone }: { e: EncounterDTO; disabled: boolean; onDone: () => void }) {
+  const toast = useToast()
   const [text, setText] = useState('')
   const [onset, setOnset] = useState('')
   const [severity, setSeverity] = useState('')
@@ -390,8 +391,10 @@ function Complaints({ e, disabled, onDone }: { e: EncounterDTO; disabled: boolea
       }),
     onSuccess: () => {
       setText(''); setOnset(''); setSeverity('')
+      toast('Complaint added', 'success')
       onDone()
     },
+    onError: (err: any) => toast(err?.response?.data?.message ?? 'Could not add the complaint.', 'error'),
   })
   return (
     <Section title="Presenting complaint">
@@ -445,10 +448,15 @@ function Orders({
   onOpen: () => void
   onDone: () => void
 }) {
+  const toast = useToast()
   const canResult = can(role, 'order:result')
   const cancel = useMutation({
     mutationFn: (id: string) => encountersApi.updateOrder(id, { status: 'CANCELLED' }),
-    onSuccess: onDone,
+    onSuccess: () => {
+      toast('Investigation cancelled', 'success')
+      onDone()
+    },
+    onError: (err: any) => toast(err?.response?.data?.message ?? 'Could not cancel the investigation.', 'error'),
   })
   return (
     <Section

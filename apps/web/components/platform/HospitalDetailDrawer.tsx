@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Drawer, Button } from '@/components/ui/kit'
 import { useConfirm, useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { platformApiClient, naira, STATUS_BADGE, STATUS_LABEL } from '@/lib/platform'
 
 const INVOICE_STATUS_BADGE: Record<string, { color: string; bg: string }> = {
@@ -31,14 +32,17 @@ export function HospitalDetailDrawer({
   const suspend = useMutation({
     mutationFn: () => platformApiClient.tenants.suspend(tenantId),
     onSuccess: () => { invalidate(); onChanged(); toast('Hospital suspended', 'success') },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
   const reactivate = useMutation({
     mutationFn: () => platformApiClient.tenants.reactivate(tenantId),
     onSuccess: () => { invalidate(); onChanged(); toast('Hospital reactivated', 'success') },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
   const markPaid = useMutation({
     mutationFn: (invoiceId: string) => platformApiClient.subscriptions.markInvoicePaid(tenantId, invoiceId),
     onSuccess: () => { invalidate(); onChanged(); toast('Invoice marked as paid', 'success') },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
 
   const t = detail.data

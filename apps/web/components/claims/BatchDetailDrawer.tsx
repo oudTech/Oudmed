@@ -2,6 +2,8 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Drawer, Field, Input } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { claimsApi, CLAIM_BATCH_STATUS_META, CLAIM_STATUS_META, naira } from '@/lib/claims'
 
 const d = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-GB') : '-')
@@ -16,6 +18,7 @@ export function BatchDetailDrawer({
   onClose: () => void
 }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const [submitting, setSubmitting] = useState(false)
   const [ref, setRef] = useState('')
   const [err, setErr] = useState('')
@@ -41,16 +44,24 @@ export function BatchDetailDrawer({
   })
   const close = useMutation({
     mutationFn: () => claimsApi.batches.close(batchId!),
-    onSuccess: invalidate,
+    onSuccess: () => { invalidate(); toast('Batch closed', 'success') },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
   const removeClaim = useMutation({
     mutationFn: (claimId: string) => claimsApi.batches.remove(batchId!, [claimId]),
-    onSuccess: invalidate,
+    onSuccess: () => { invalidate(); toast('Claim removed from the batch', 'success') },
+    onError: (e) => toast(errorMessage(e), 'error'),
   })
 
   const download = async () => {
     setDownloading(true)
-    try { await claimsApi.batches.downloadCsv(batchId!) } finally { setDownloading(false) }
+    try {
+      await claimsApi.batches.downloadCsv(batchId!)
+    } catch (e) {
+      toast(errorMessage(e, 'Could not export the batch schedule.'), 'error')
+    } finally {
+      setDownloading(false)
+    }
   }
 
   const meta = batch ? CLAIM_BATCH_STATUS_META[batch.status] : null
