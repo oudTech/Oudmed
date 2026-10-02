@@ -18,7 +18,9 @@ import {
 } from '@/lib/patients'
 import { drugsApi } from '@/lib/pharmacy'
 import { newIdempotencyKey } from '@/lib/billing'
+import { ReceiptView } from '@/components/billing/ReceiptView'
 import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 
 function useAdd(patientId: string, key: string, fn: (data: any) => Promise<any>, onDone: () => void) {
   const qc = useQueryClient()
@@ -594,52 +596,58 @@ export function PayInvoiceModal({
   const [amount, setAmount] = useState('')
   const [method, setMethod] = useState('CASH')
   const [idemKey, setIdemKey] = useState(() => newIdempotencyKey())
+  const [receiptId, setReceiptId] = useState<string | null>(null)
   const qc = useQueryClient()
+  const toast = useToast()
   const m = useMutation({
     mutationFn: (data: { amount: number; method: string }) =>
       patientsApi.payInvoice(patientId, invoice!.id, { ...data, idempotencyKey: idemKey }),
-    onSuccess: () => {
+    onSuccess: (res: { paymentId: string }) => {
       qc.invalidateQueries({ queryKey: ['pt-invoices', patientId] })
       qc.invalidateQueries({ queryKey: ['patient', patientId] })
       setAmount('')
       setIdemKey(newIdempotencyKey())
-      onClose()
+      setReceiptId(res.paymentId)
     },
+    onError: (e) => toast(errorMessage(e, 'Could not record the payment.'), 'error'),
   })
+  const close = () => { setReceiptId(null); onClose() }
   if (!invoice) return null
   const balance = Number(invoice.balanceDue)
   return (
-    <Modal open={open} onClose={onClose} title={`Record payment · ${invoice.invoiceNumber}`} width={420} align="center">
-      <div className="space-y-3">
-        <p className="text-sm text-gray-500">
-          Balance due <span className="font-semibold text-gray-900">₦{balance.toLocaleString()}</span>
-        </p>
-        <Field label="Amount" required>
-          <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={String(balance)} />
-        </Field>
-        <Field label="Method">
-          <Select value={method} onChange={(e) => setMethod(e.target.value)}>
-            {PAYMENT_METHODS.map((x) => <option key={x} value={x}>{titleCase(x)}</option>)}
-          </Select>
-        </Field>
-        <button
-          className="text-sm text-[#0A89D3] hover:underline"
-          onClick={() => setAmount(String(balance))}
-        >
-          Pay full balance
-        </button>
-        {m.isError && <p className="text-sm text-red-600">Could not record payment.</p>}
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button
-            loading={m.isPending}
-            disabled={!amount || Number(amount) <= 0}
-            onClick={() => m.mutate({ amount: Number(amount), method })}
+    <>
+      <Modal open={open && !receiptId} onClose={close} title={`Record payment · ${invoice.invoiceNumber}`} width={420} align="center">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500">
+            Balance due <span className="font-semibold text-gray-900">₦{balance.toLocaleString()}</span>
+          </p>
+          <Field label="Amount" required>
+            <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={String(balance)} />
+          </Field>
+          <Field label="Method">
+            <Select value={method} onChange={(e) => setMethod(e.target.value)}>
+              {PAYMENT_METHODS.map((x) => <option key={x} value={x}>{titleCase(x)}</option>)}
+            </Select>
+          </Field>
+          <button
+            className="text-sm text-[#0A89D3] hover:underline"
+            onClick={() => setAmount(String(balance))}
           >
-            Record payment
-          </Button>
+            Pay full balance
+          </button>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={close}>Cancel</Button>
+            <Button
+              loading={m.isPending}
+              disabled={!amount || Number(amount) <= 0}
+              onClick={() => m.mutate({ amount: Number(amount), method })}
+            >
+              Record payment
+            </Button>
+          </div>
         </div>
-      </div>
-    </Modal>
+      </Modal>
+      <ReceiptView paymentId={receiptId} open={!!receiptId} onClose={close} />
+    </>
   )
 }

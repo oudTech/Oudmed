@@ -63,18 +63,18 @@ export function InvoiceDetailDrawer({
 
   const reverse = useMutation({
     mutationFn: (p: { id: string; reason: string }) => billingApi.reversePayment(p.id, p.reason),
-    onSuccess: () => { setReversingId(null); setReverseReason(''); invalidate() },
+    onSuccess: () => { setReversingId(null); setReverseReason(''); toast('Payment reversed', 'success'); invalidate() },
     onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not reverse.'),
   })
   const cancel = useMutation({
     mutationFn: () => billingApi.cancelInvoice(invoiceId!, cancelReason.trim()),
-    onSuccess: () => { setCancelling(false); setCancelReason(''); invalidate() },
+    onSuccess: () => { setCancelling(false); setCancelReason(''); toast('Invoice cancelled', 'success'); invalidate() },
     onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not cancel.'),
   })
   const raiseClaim = useMutation({
     mutationFn: (invId: string) => claimsApi.generate([invId]),
     onSuccess: (res) => {
-      if (res.created.length) router.push('/claims')
+      if (res.created.length) { toast('Claim raised', 'success'); router.push('/claims') }
       else setErr(res.skipped[0]?.reason ?? 'Could not raise a claim for this invoice.')
     },
     onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not raise a claim.'),

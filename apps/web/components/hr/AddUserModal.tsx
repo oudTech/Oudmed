@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Field, Input, Modal, Select, Textarea } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
 import { getDepartments } from '@/lib/hospital'
 import { staffApi, HR_ROLES } from '@/lib/hr'
 
@@ -13,6 +14,7 @@ const BLANK = {
 
 export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const [f, setF] = useState({ ...BLANK })
   const [deptIds, setDeptIds] = useState<string[]>([])
   const [err, setErr] = useState('')
@@ -37,6 +39,7 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['staff'] })
+      toast(`${f.firstName} ${f.lastName} added as ${f.role.toLowerCase()}`, 'success')
       setF({ ...BLANK }); setDeptIds([]); setErr(''); setErrors({})
       onClose()
     },

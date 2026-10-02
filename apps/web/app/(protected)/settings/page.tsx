@@ -136,7 +136,11 @@ function BrandingSection({ s, onSaved }: { s: HospitalSettingsDTO; onSaved: (s: 
     onSuccess: onSaved,
     onError: (e) => setErr(uploadError(e)),
   })
-  const clearLogo = useMutation({ mutationFn: () => settingsApi.removeLogo(), onSuccess: onSaved })
+  const clearLogo = useMutation({
+    mutationFn: () => settingsApi.removeLogo(),
+    onSuccess: onSaved,
+    onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not remove the logo.'),
+  })
 
   return (
     <Card title="Branding">

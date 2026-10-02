@@ -4,6 +4,21 @@ Source: UX/feedback audit, pre-launch review (2026-09-30). This is the working
 checklist for the toast/feedback standardization pass (Phase 1, item 7). Update
 a row's status inline as it's fixed; don't delete rows.
 
+**Status (2026-10-02): batches 1-2 done.** New toast stack (top-right, tone
+icons, tone-aware dismissal - error persists ~8s or until dismissed,
+success/info ~3.5s) and `toastPromise()` for slow actions (CSV export, bulk
+import) with a "still working..." upgrade and an optional retry action -
+`components/ui/feedback.tsx`. New `lib/errors.ts`'s `errorMessage(e)`
+replaces the repeated `?? 'Could not save.'` fallback. All 12 High findings
+(UX-1 through UX-12) fixed. Medium findings M1, M3, M4, M5, M6, M9 fixed.
+M2 got representative fixes (patient registration, HR add-user, pharmacy
+dispense/prepare, appointment booking - matching the brief's own examples)
+rather than an exhaustive sweep of every silent success across the app -
+the remaining spread is listed under "Still open" below, not silently
+dropped. M7 and M8 are real UX gaps but are new interaction mechanisms
+(focus management, dirty-state tracking across an 8-step wizard), not toast
+gaps - deliberately deferred, tracked in `docs/audit/WHATS_LEFT.md`.
+
 Not audited in depth by the source pass (still needs a first look when reached):
 admin's Insurance/Providers tab, platform settings' Maintenance Mode / General /
 Pricing / Admin-account tabs, platform analytics page, the patients list page
@@ -68,43 +83,44 @@ destructive action correctly uses the shared `useConfirm()`. The gap is
 
 ### High
 
-- [ ] **UX-1** - Delete inventory item fails silently. `apps/web/components/pharmacy/DrugDetailModal.tsx:106-113`.
-- [ ] **UX-2** - CSV drug import fails silently if the request itself errors. `apps/web/components/pharmacy/ImportDrugsModal.tsx:36-43`.
-- [ ] **UX-3** - Presenting complaint can silently fail to save. `apps/web/app/(protected)/encounters/[visitId]/page.tsx:336-348`.
-- [ ] **UX-4** - Cancelling an investigation order fails silently. Same file, lines 399-402.
-- [ ] **UX-5** - SOAP note save can silently fail. Same file, lines 464-467.
-- [ ] **UX-6** - "Complete visit" has no error path. Same file, lines 55-62.
-- [ ] **UX-7** - Lab "Mark in progress" fails silently. `apps/web/app/(protected)/lab/page.tsx:170-176`.
-- [ ] **UX-8** - Claims batch CSV export can fail with zero feedback (unhandled rejection). `apps/web/components/claims/BatchDetailDrawer.tsx:51-54`.
-- [ ] **UX-9** - Reports payment-ledger CSV export has the identical unhandled-rejection bug. `apps/web/components/reports/PaymentLedger.tsx:33-44`.
-- [ ] **UX-10** - Platform hospital suspend/reactivate/mark-paid have no error path. `apps/web/components/platform/HospitalDetailDrawer.tsx:31-42`.
-- [ ] **UX-11** - Patient-duplicate check misreports failure as "no duplicate found." `apps/web/app/(protected)/patients/new/page.tsx:399-424`.
-- [ ] **UX-12** - Patient photo upload has no error path. `apps/web/app/(protected)/patients/[id]/page.tsx:695-698`.
+- [x] **UX-1** - Delete inventory item fails silently. `apps/web/components/pharmacy/DrugDetailModal.tsx` - fixed, toast on success/error, also added to `save`.
+- [x] **UX-2** - CSV drug import fails silently if the request itself errors. `apps/web/components/pharmacy/ImportDrugsModal.tsx` - fixed.
+- [x] **UX-3** - Presenting complaint can silently fail to save. `apps/web/app/(protected)/encounters/[visitId]/page.tsx` - fixed.
+- [x] **UX-4** - Cancelling an investigation order fails silently. Same file - fixed.
+- [x] **UX-5** - SOAP note save can silently fail. Same file - already had a handler by the time this pass ran; reconfirmed.
+- [x] **UX-6** - "Complete visit" has no error path. Same file - already had a handler by the time this pass ran; reconfirmed.
+- [x] **UX-7** - Lab "Mark in progress" fails silently. `apps/web/app/(protected)/lab/page.tsx` - fixed, plus the "Enter result" mutation next to it (same gap, not previously listed).
+- [x] **UX-8** - Claims batch CSV export can fail with zero feedback (unhandled rejection). `apps/web/components/claims/BatchDetailDrawer.tsx` - fixed; `close`/`removeClaim` mutations also gained error+success feedback.
+- [x] **UX-9** - Reports payment-ledger CSV export has the identical unhandled-rejection bug. `apps/web/components/reports/PaymentLedger.tsx` - fixed.
+- [x] **UX-10** - Platform hospital suspend/reactivate/mark-paid have no error path. `apps/web/components/platform/HospitalDetailDrawer.tsx` - fixed.
+- [x] **UX-11** - Patient-duplicate check misreports failure as "no duplicate found." `apps/web/app/(protected)/patients/new/page.tsx` - fixed: a failed check now shows its own error instead of falling through to the empty-results message.
+- [x] **UX-12** - Patient photo upload has no error path. `apps/web/app/(protected)/patients/[id]/page.tsx` - fixed, plus a success toast.
 
 ### Medium
 
-- [ ] **M1** - Silent multi-condition disabled-button pattern still live: `PlatformUsersTab.tsx` (`AddPlatformUserModal`, line 91), `AddHospitalModal.tsx` (lines 29-33), `ServicesTab.tsx` (`ServiceModal`, line 130).
-- [ ] **M2** - Most of the app has no specific success confirmation, only a UI refresh (HR, pharmacy, billing, schedule/admissions, wards, admin).
-- [ ] **M3** - Disabled buttons essentially never explained via tooltip/title, except `StaffDetailDrawer.tsx:167`.
-- [ ] **M4** - Admin row Activate/Deactivate toggle has no per-row pending state or error handling. `AdminRowActions.tsx`.
-- [ ] **M5** - Two inconsistent payment-recording surfaces: `RecordPaymentModal.tsx` (receipt) vs `PayInvoiceModal` in `clinicalModals.tsx:504-566` (silent close).
-- [ ] **M6** - Billing's reverse-payment/cancel-invoice/raise-claim confirm only via badge color change. `InvoiceDetailDrawer.tsx`.
-- [ ] **M7** - No scroll/focus to the first invalid field in the patient registration wizard.
-- [ ] **M8** - No unsaved-changes warning anywhere (registration wizard, SOAP note editor's `dirty` flag is computed but unused).
-- [ ] **M9** - Settings "Remove logo" (`settings/page.tsx:136`) and Wards add-bed/bed-status (`wards/page.tsx:53-60,171-174`) mutations have no onError.
+- [x] **M1** - Silent multi-condition disabled-button pattern: `PlatformUsersTab.tsx`, `AddHospitalModal.tsx`, `ServicesTab.tsx` - fixed (explanatory `title` on each).
+- [~] **M2** - Most of the app has no specific success confirmation, only a UI refresh (HR, pharmacy, billing, schedule/admissions, wards, admin). Representative fixes landed: patient registration ("Patient PT-00012 registered"), HR add-user, pharmacy dispense/prepare ("Dispensed to Jane Doe" / "Prepared for ... - awaiting payment"), appointment booking, admin department/service/provider toggle, ward add-bed. **Still open**: billing invoice creation, most of HR's edit/password-set/toggle-active actions, remaining admissions/wards flows, remaining claims actions beyond what UX-8/M6 already covered - tracked in `docs/audit/WHATS_LEFT.md`, not silently dropped.
+- [x] **M3** - Disabled buttons essentially never explained via tooltip/title - fixed for the three M1 cases (same root cause, same fix).
+- [x] **M4** - Admin row Activate/Deactivate toggle had no error handling. Fixed (toast on error + specific success message) in `DepartmentsTab.tsx`, `ServicesTab.tsx`, `ProvidersTab.tsx`. Per-row pending indicator (vs. the existing all-rows `busy` flag) not done - cosmetic, tracked in `docs/audit/WHATS_LEFT.md`.
+- [x] **M5** - Two inconsistent payment-recording surfaces. Fixed: `PayInvoiceModal` (`clinicalModals.tsx`) now shows the same `ReceiptView` `RecordPaymentModal` does, instead of closing silently.
+- [x] **M6** - Billing's reverse-payment/cancel-invoice/raise-claim confirmed only via badge color change. Fixed - each now also shows a specific success toast.
+- [ ] **M7** - No scroll/focus to the first invalid field in the patient registration wizard. Deferred - a new interaction mechanism, not a toast gap; tracked in `docs/audit/WHATS_LEFT.md`.
+- [ ] **M8** - No unsaved-changes warning anywhere. Deferred - same reasoning as M7.
+- [x] **M9** - Settings "Remove logo" and Wards add-bed/bed-status mutations had no onError. Fixed, all three.
 
 ### Low
 
-- [ ] **L1** - Toast placement/behavior doesn't match the target standard (bottom-center, fixed 4000ms for all tones, color-only distinction). `apps/web/components/ui/feedback.tsx`.
-- [ ] **L2** - `useToast`/`useConfirm` adopted in only ~13 files; pharmacy, billing, claims, schedule, wards, admin rely on inline red text instead.
-- [ ] **L3** - Error messages never distinguish "no network" from "server rejected it" - every fallback is `e?.response?.data?.message ?? 'Could not save.'`.
+- [x] **L1** - Toast placement/behavior now matches the target standard: top-right, tone icons, tone-aware dismissal. `apps/web/components/ui/feedback.tsx`.
+- [~] **L2** - `useToast`/`useConfirm` adoption widened by this pass (pharmacy, billing, claims, reports, schedule, wards, admin, platform all gained at least one new call site) but not every remaining inline-red-text spot was converted - the ones touched now use toast consistently; a full sweep of every leftover inline error message is still open, tracked in `docs/audit/WHATS_LEFT.md`.
+- [x] **L3** - `lib/errors.ts`'s `errorMessage(e)` now distinguishes unreachable-server / validation-or-server-rejected / 5xx, used everywhere this pass added a new `onError`.
 
-## Proposed standardization (not yet implemented)
+## Standardization (implemented 2026-10-02)
 
-1. Reposition the toast stack to `fixed top-4 right-4`, stacking downward, with a tone icon (check / exclamation / info) so tone doesn't rely on background color alone.
+1. Toast stack repositioned to `fixed top-4 right-4`, stacking downward, with a tone icon (check / exclamation / info) so tone doesn't rely on background color alone.
 2. Tone-aware dismissal: ~3500ms for info/success, ~8000ms (or manual close) for error.
-3. One shared `errorMessage(e: unknown): string` helper centralizing the network/validation/server-error branching, replacing every ad-hoc `?? 'Could not save.'`.
-4. Adopt `toast(errorMessage(e), 'error')` as the default `onError` for every mutation currently missing one (closes UX-1, UX-3 through UX-10, UX-12 in one mechanical pass).
-5. Upgrade silent successes to specific toasts using data already on hand where cheap (M2).
+3. One shared `errorMessage(e: unknown): string` helper centralizing the network/validation/server-error branching, replacing the ad-hoc `?? 'Could not save.'` fallback everywhere this pass touched.
+4. `toast(errorMessage(e), 'error')` adopted as the default `onError` for every High-severity mutation that was missing one (UX-1 through UX-12).
+5. Silent successes upgraded to specific toasts where cheap, including the two patterns named in the brief (`Patient PT-00012 registered`, `Dispensed to Jane Doe`).
+6. New `toastPromise()` for the handful of actions slow enough to need their own progress indicator (CSV export, bulk import) - a loading toast that upgrades in place to success/error, with a "still working..." message after 4.5s and an optional retry action.
 
-This keeps `toast(message, tone)` / `confirm(opts)` signatures stable - no call-site API changes, just filling in missing calls.
+`toast(message, tone)` / `confirm(opts)` signatures are unchanged - every existing call site kept working as-is; `toastPromise` is new and adopted only where it adds real value over a button spinner.

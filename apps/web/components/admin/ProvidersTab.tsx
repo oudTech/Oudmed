@@ -3,11 +3,14 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { InsuranceProviderDTO } from '@oudhealth/contracts'
 import { Button, Field, Input, Modal, Select, Textarea } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { adminApi, INSURANCE_KINDS, KIND_BADGE, KIND_LABEL } from '@/lib/admin'
 import { AdminRowActions, Pagination, StatusPill } from './AdminRowActions'
 
 export function ProvidersTab() {
   const qc = useQueryClient()
+  const toast = useToast()
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState('')
   const [status, setStatus] = useState('all')
@@ -20,7 +23,15 @@ export function ProvidersTab() {
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['admin-providers'] })
-  const toggle = useMutation({ mutationFn: (id: string) => adminApi.providers.toggle(id), onSuccess: invalidate })
+  const toggle = useMutation({
+    mutationFn: (id: string) => adminApi.providers.toggle(id),
+    onSuccess: (_data, id) => {
+      invalidate()
+      const row = list.data?.rows.find((r) => r.id === id)
+      toast(row ? `${row.name} ${row.isActive ? 'deactivated' : 'activated'}` : 'Provider updated', 'success')
+    },
+    onError: (e) => toast(errorMessage(e, 'Could not update the provider.'), 'error'),
+  })
   const remove = useMutation({ mutationFn: (id: string) => adminApi.providers.remove(id), onSuccess: invalidate })
 
   return (

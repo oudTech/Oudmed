@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { AdmissionDTO, BoardBedDTO, WardBoardDTO } from '@oudhealth/contracts'
 import { Modal, Field, Input, Select, Button } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { getWardBoard, getAdmissions, createWard, updateWard, addBeds, updateBed } from '@/lib/hospital'
 import { naira } from '@/lib/billing'
 import { can } from '@/lib/permissions'
@@ -24,6 +26,7 @@ export default function WardsPage() {
   const role = session?.role
   const allowed = can(role, 'patient:read')
   const qc = useQueryClient()
+  const toast = useToast()
 
   const board = useQuery({ queryKey: ['wards'], queryFn: getWardBoard, enabled: allowed })
   const admissions = useQuery({
@@ -59,6 +62,7 @@ export default function WardsPage() {
       qc.invalidateQueries({ queryKey: ['wards'] })
       setBedMenu(null)
     },
+    onError: (e) => toast(errorMessage(e, 'Could not update the bed.'), 'error'),
   })
 
   if (!allowed) {
@@ -174,9 +178,14 @@ function WardSection({
   onEditRate: () => void
 }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const add = useMutation({
     mutationFn: () => addBeds(ward.id, { count: 1 }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['wards'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['wards'] })
+      toast(`Bed added to ${ward.name}`, 'success')
+    },
+    onError: (e) => toast(errorMessage(e, 'Could not add a bed.'), 'error'),
   })
   return (
     <section>

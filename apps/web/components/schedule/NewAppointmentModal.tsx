@@ -7,6 +7,7 @@ import { PatientPicker } from './PatientPicker'
 import { getDoctors, getDepartments, bookVisit, type BookVisitInput } from '@/lib/hospital'
 import { toLocalInput, fromLocalInput } from '@/lib/datetime'
 import { trackFirst } from '@/lib/onboarding/analytics'
+import { useToast } from '@/components/ui/feedback'
 
 const VISIT_TYPES = [
   { v: 'CONSULTATION', l: 'New consultation' },
@@ -26,6 +27,7 @@ export function NewAppointmentModal({
   prefill?: { doctorId?: string; startsAt?: Date; patient?: PatientPickerValue }
 }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const doctors = useQuery({ queryKey: ['doctors'], queryFn: getDoctors, enabled: open })
   const departments = useQuery({ queryKey: ['departments'], queryFn: getDepartments, enabled: open })
 
@@ -74,6 +76,7 @@ export function NewAppointmentModal({
     onSuccess: () => {
       trackFirst('first_appointment_created')
       qc.invalidateQueries({ queryKey: ['schedule'] })
+      toast(patient ? `Appointment booked for ${patient.firstName} ${patient.lastName}` : 'Appointment booked', 'success')
       onClose()
     },
     onError: (e: any) => {

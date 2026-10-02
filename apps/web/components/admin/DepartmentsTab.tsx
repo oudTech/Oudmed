@@ -3,6 +3,8 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { DepartmentAdminDTO } from '@oudhealth/contracts'
 import { Button, Field, Input, Modal, Select, Textarea } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { adminApi } from '@/lib/admin'
 import { AdminRowActions, Pagination, StatusPill } from './AdminRowActions'
 
@@ -14,6 +16,7 @@ const STATUSES = [
 
 export function DepartmentsTab() {
   const qc = useQueryClient()
+  const toast = useToast()
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
   const [page, setPage] = useState(1)
@@ -25,7 +28,15 @@ export function DepartmentsTab() {
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['admin-departments'] })
-  const toggle = useMutation({ mutationFn: (id: string) => adminApi.departments.toggle(id), onSuccess: invalidate })
+  const toggle = useMutation({
+    mutationFn: (id: string) => adminApi.departments.toggle(id),
+    onSuccess: (_data, id) => {
+      invalidate()
+      const row = list.data?.rows.find((r) => r.id === id)
+      toast(row ? `${row.name} ${row.isActive ? 'deactivated' : 'activated'}` : 'Department updated', 'success')
+    },
+    onError: (e) => toast(errorMessage(e, 'Could not update the department.'), 'error'),
+  })
   const remove = useMutation({ mutationFn: (id: string) => adminApi.departments.remove(id), onSuccess: invalidate })
 
   return (

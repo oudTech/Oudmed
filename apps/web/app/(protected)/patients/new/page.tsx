@@ -27,6 +27,7 @@ import {
 } from '@/lib/patients'
 import { COUNTRIES } from '@/lib/countries'
 import { trackFirst } from '@/lib/onboarding/analytics'
+import { useToast } from '@/components/ui/feedback'
 import { ProviderCombobox } from '@/components/admin/ProviderCombobox'
 
 const STEP_TITLES = [
@@ -59,8 +60,10 @@ function WizardInner() {
   const params = useSearchParams()
   const resumeId = params?.get('id') ?? null
 
+  const toast = useToast()
   const [step, setStep] = useState(resumeId ? 2 : 1)
   const [patientId, setPatientId] = useState<string | null>(resumeId)
+  const [patientNumber, setPatientNumber] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -89,6 +92,7 @@ function WizardInner() {
   useEffect(() => {
     if (existing.data) {
       const p = existing.data
+      setPatientNumber(p.patientNumber)
       reset({
         ...registrationDefaults,
         firstName: p.firstName, middleName: p.middleName ?? '', lastName: p.lastName,
@@ -148,16 +152,20 @@ function WizardInner() {
       if (finish) payload.completeRegistration = true
 
       let id = patientId
+      let number = patientNumber
       if (!id) {
         const created = await patientsApi.create(clean(REGISTRATION_STEP_FIELDS[2] as string[]))
         id = created.id
+        number = created.patientNumber
         setPatientId(id)
+        setPatientNumber(number)
         trackFirst('first_patient_created', { via: 'registration' })
       } else if (Object.keys(payload).length) {
         await patientsApi.update(id, payload)
       }
 
       if (finish || next > 8) {
+        toast(number ? `Patient ${number} registered` : 'Patient registered', 'success')
         router.replace(`/patients/${id}`)
         return
       }

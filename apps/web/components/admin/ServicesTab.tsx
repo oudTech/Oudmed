@@ -3,11 +3,14 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ServiceItemAdminDTO } from '@oudhealth/contracts'
 import { Button, Field, Input, Modal, Select } from '@/components/ui/kit'
+import { useToast } from '@/components/ui/feedback'
+import { errorMessage } from '@/lib/errors'
 import { adminApi, naira, SERVICE_CATEGORIES } from '@/lib/admin'
 import { AdminRowActions, Pagination, StatusPill } from './AdminRowActions'
 
 export function ServicesTab() {
   const qc = useQueryClient()
+  const toast = useToast()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
   const [status, setStatus] = useState('all')
@@ -20,7 +23,15 @@ export function ServicesTab() {
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['admin-services'] })
-  const toggle = useMutation({ mutationFn: (id: string) => adminApi.services.toggle(id), onSuccess: invalidate })
+  const toggle = useMutation({
+    mutationFn: (id: string) => adminApi.services.toggle(id),
+    onSuccess: (_data, id) => {
+      invalidate()
+      const row = list.data?.rows.find((r) => r.id === id)
+      toast(row ? `${row.name} ${row.isActive ? 'deactivated' : 'activated'}` : 'Service updated', 'success')
+    },
+    onError: (e) => toast(errorMessage(e, 'Could not update the service.'), 'error'),
+  })
   const remove = useMutation({ mutationFn: (id: string) => adminApi.services.remove(id), onSuccess: invalidate })
 
   return (
@@ -178,7 +189,12 @@ function ServiceModal({
         {err && <p className="text-sm text-red-600">{err}</p>}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button loading={m.isPending} disabled={!valid} onClick={() => m.mutate()}>
+          <Button
+            loading={m.isPending}
+            disabled={!valid}
+            title={valid ? undefined : 'Enter a name (2+ characters) and a valid, non-negative price'}
+            onClick={() => m.mutate()}
+          >
             {row ? 'Save changes' : 'Add service'}
           </Button>
         </div>

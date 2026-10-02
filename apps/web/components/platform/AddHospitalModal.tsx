@@ -97,7 +97,12 @@ export function AddHospitalModal({
         {err && <p className="text-sm text-red-600">{err}</p>}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={() => { reset(); onClose() }}>Cancel</Button>
-          <Button loading={m.isPending} disabled={!valid} onClick={() => { setErr(''); m.mutate() }}>
+          <Button
+            loading={m.isPending}
+            disabled={!valid}
+            title={valid ? undefined : 'Enter a hospital name (2+ characters), admin name, a valid email and a password of at least 8 characters'}
+            onClick={() => { setErr(''); m.mutate() }}
+          >
             Create hospital
           </Button>
         </div>

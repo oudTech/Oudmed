@@ -111,7 +111,12 @@ function AddPlatformUserModal({ onClose, onCreated }: { onClose: () => void; onC
         {err && <p className="text-sm text-red-600">{err}</p>}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button loading={m.isPending} disabled={!valid} onClick={() => { setErr(''); m.mutate() }}>
+          <Button
+            loading={m.isPending}
+            disabled={!valid}
+            title={valid ? undefined : 'Enter a full name, a valid email and a password of at least 12 characters'}
+            onClick={() => { setErr(''); m.mutate() }}
+          >
             Add user
           </Button>
         </div>

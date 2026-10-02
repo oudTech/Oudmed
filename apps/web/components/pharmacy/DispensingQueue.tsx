@@ -241,6 +241,7 @@ function DispenseModal({
   const canOverridePrice = can(session?.role, 'billing:manage')
   const canEmergencyOverride = can(session?.role, 'pharmacy:dispense-emergency-override')
   const qc = useQueryClient()
+  const toast = useToast()
   const [lines, setLines] = useState<
     Record<string, { quantity: string; unitPrice: string; overriding: boolean; overrideReason: string }>
   >({})
@@ -307,6 +308,11 @@ function DispenseModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['pharmacy-queue'] })
       qc.invalidateQueries({ queryKey: ['drugs'] })
+      const patientLabel = `${rx!.patient.firstName} ${rx!.patient.lastName}`
+      toast(
+        gateOn && !emergency ? `Prepared for ${patientLabel} - awaiting payment` : `Dispensed to ${patientLabel}`,
+        'success',
+      )
       reset()
       onClose()
     },
