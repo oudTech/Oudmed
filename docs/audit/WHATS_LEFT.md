@@ -1,0 +1,85 @@
+# What's left (2026-10-02)
+
+Single prioritised list of everything not done at launch: the backlog,
+Phase 2 items, pre-launch audit findings not yet fixed, what Part 1's
+production-readiness check found, and pending product decisions. No item
+below is Critical (a Critical finding would have been reported
+immediately and fixed before launch, per this session's own working
+rule - see the Part 1 report). Everything here is safe to ship without,
+in order of recommended attention after launch.
+
+**Severity** here means risk to the hospital while the item stays open,
+not difficulty. **Effort**: S (hours), M (a day or two), L (a real
+feature-sized piece of work).
+
+## Security
+
+| ID | Description | Severity | Risk while open | Workaround today | Effort |
+|---|---|---|---|---|---|
+| SEC-3 | No session revocation. A JWT is valid for 7 days with no way to invalidate one specific stolen/leaked session early - the only lever is deactivating the whole user account, which also blocks their legitimate access. | Medium | A compromised token (lost device, shared computer) stays usable for up to 7 days. | Deactivate the account if a token is known to be compromised (blunt, but works); reduce `TTL.session` manually if this becomes urgent before the real fix. | M - needs a token-version or denylist check added to the auth guard. |
+| SEC-4 | Super Admin (platform console) has no MFA. `PlatformUser` accounts control suspend/reactivate for every hospital on the platform - the blast radius of one compromised platform credential is the whole business, not one hospital. | Medium | Account-takeover risk for the highest-privilege identity in the system. | Keep the list of platform-operator accounts small; strong, unique passwords; restrict who has the login URL. | M - TOTP enrollment + verification step on platform login. |
+| SEC-6 | CSV exports (claims batch schedule, payment ledger) only escape double-quotes - a cell value starting with `=`, `+`, `-` or `@` (e.g. a patient or provider name someone typed that way) could execute as a formula if the CSV is opened in a spreadsheet app with formula execution enabled. | Low | Requires a specific value already in the data and a permissive spreadsheet config to open it in; narrow but real. | Don't open hospital-exported CSVs with macros/formula auto-execution enabled - treat them the same trust level as the database itself. | S - prefix a leading `=`/`+`/`-`/`@` with a `'` (or strip it) before writing each cell. |
+| SEC-7 | No standard security response headers (CSP, `X-Frame-Options`, `X-Content-Type-Options`, etc.) on either app. | Medium | Missing a cheap, standard layer of browser-side protection (clickjacking, MIME-sniffing) - not a known active exploit path today, just an absent baseline. | None needed today; not a known live risk. | S - `helmet` on the API, Next.js's own header config on web. |
+
+## Correctness
+
+| ID | Description | Severity | Risk while open | Workaround today | Effort |
+|---|---|---|---|---|---|
+| FUNC-5 | `createRemittance` has no advisory lock on the claim/batch, unlike every other money-mutating path in this codebase (charge posting, payment posting, bed charges all take one). Two concurrent remittance submissions against the same claim (e.g. two browser tabs, or a double-click the UI's own pending-disable doesn't catch because it's two separate sessions) could both read the claim's pre-remittance state and double-allocate a payment. | Medium | Real but narrow - needs two concurrent submissions against the exact same claim, which single-operator billing desks rarely produce. | None process-level; the UI's `isPending` disable prevents the single-tab double-click case, which is the common one. | S - same one-line `pg_advisory_xact_lock` pattern already used everywhere else; a mechanical fix once flagged. |
+
+## Missing features (pre-launch audit, not fixed this round)
+
+| ID | Description | Severity | Risk while open | Workaround today | Effort |
+|---|---|---|---|---|---|
+| MISS-4 | A clinical note (SOAP) edited while the visit is still open has no version history - only the latest text survives. (Addenda cover the *post-completion* case correctly; this is about edits made before completion.) | Medium | A "what did the note say before it was changed" question has no answer for a note edited pre-completion. | Encourage doctors to use the note sparingly until near-final, or add an addendum rather than editing once something is recorded. | M - a `NoteRevision` table + a small history UI. |
+| MISS-6 | No patient merge or deactivate/archive mechanism - `Patient` has no `isActive` field at all. A duplicate created despite the dedupe check, or a patient who should be marked deceased/inactive, has no in-product resolution path. | Medium | Duplicate or stale patient records accumulate with no cleanup path; a genuine duplicate silently fragments one person's history across two chart records. | None in-product; would need direct database correction (not something to hand to hospital staff). | M-L - deactivate is straightforward; merge is genuinely complex (every FK pointing at the losing patient record needs re-pointing, transactionally). |
+| MISS-7 | Reads of a patient's chart are not audited at all (writes are, extensively), and there is no UI to browse even the audit log that does exist - it's a database table only. | Medium | Cannot answer "who looked at this patient's record and when" for a compliance inquiry; cannot self-serve review any audit trail without direct DB access. | None in-product. | L - read-audit has real volume/performance implications to design around; a log-viewer UI is the easier half. |
+| MISS-8 | No self-serve "export everything this hospital owns" capability. Individual reports (the payment ledger) export to CSV; there is nothing comprehensive. | Low-Medium | A hospital that wants an offline backup of its own data, or is leaving the platform, has no built-in way to get it. | Export what exists per-report; anything beyond that needs a manual data pull from the team running OudHealth. | L - needs a per-tenant export job across every module, not just one table. |
+
+## Product-scope / design decisions
+
+| ID | Description | Severity | Risk while open | Workaround today | Effort |
+|---|---|---|---|---|---|
+| F2-DECISION | **Pending decision, not a bug.** F2's co-pay item currently splits by *quantity* - e.g. a quantity of 10 at 30% co-pay dispenses 7 immediately (HMO-covered) and gates only 3 until the patient pays their share (see `docs/features/F2-pay-before-dispense.md`'s implementation notes for why this interpretation was chosen - the design doc's own wording was physically ambiguous between a money-only split and a quantity split). The alternative the brief raises: hold the **whole item** back until the patient's share is paid, never partially releasing it. The quantity-split is simpler for the patient (gets most of the drugs right away) but means two separate `InvoiceLine`s and two separate physical hand-overs per co-pay item; the hold-the-whole-item alternative is simpler for pharmacy staff to reason about ("nothing moves until it's paid") but means a patient gets *none* of an otherwise-mostly-insured drug until they've paid their smaller share. | Low (a design trade-off, not a defect) | None today - current behaviour is internally consistent and tested. | N/A | S-M to switch - remove the quantity-split helper, treat any `coPayPct > 0` item as fully gated (same as the already-existing 100%-co-pay / no-insurer case). |
+| F3 | Bulk patient import (CSV/Excel, dry run, duplicate detection, legacy patient numbers, undo) is not built. | Medium | Staff register patients one at a time through the wizard or quick-add - fine for ongoing use, real friction for migrating an existing hospital's patient list from a prior system at onboarding. | Manual registration per patient. | M - design doc exists (`docs/features/F3-bulk-import.md`), not yet built. |
+| Per-HMO tariffs | Every charge uses one catalogue price regardless of payer (`docs/audit/pricing-notes.md`) - no concept of a negotiated rate per insurance provider. | Medium | A hospital whose HMO contracts specify different rates than its cash price cannot reflect that today - claims are generated off the same catalogue price everyone pays. | Set the catalogue price to whichever rate is operationally more important, or handle the difference manually outside the system. | L - a real schema-level `Tariff`/`PriceListEntry` concept, not a patch. |
+| BL-4 | A dedicated pharmacy-only invoice (so a patient could pay just for drugs without clearing an unrelated charge on the same visit) was considered and deliberately deferred during F2's design - see `docs/features/F2-pay-before-dispense.md`. | Low | The whole-invoice payment gate means a patient must clear an entire invoice, including unrelated charges, to release a gated drug - real friction only if that proves common in practice. | None needed unless the friction proves real. | M - a category-filtered variant of the existing invoice-resolution logic. |
+| BL-3 | Timezone is hardcoded to Africa/Lagos (`common/lagos-time.ts`'s fixed +1h, no-DST arithmetic) across reports, scheduling, pharmacy expiry, and the dashboard. | Low | Fine while every hospital is in Nigeria; breaks the moment one outside it onboards (a DST-observing timezone can't use the fixed-offset shortcut this relies on). | None needed until a non-Nigerian hospital onboards. | M - `Tenant.timezone` + an IANA-aware date library. |
+| BL-1 | `NEXT_PUBLIC_STORAGE_ORIGIN` is an orphaned env var - `next.config.js` no longer reads it (image optimization was disabled globally for SEC-2), but it's still documented/provisioned across 6 files (`render.yaml`, `fly.toml`, `.env.example`, CI, the Dockerfile, deploy docs). | Low | None - harmless if left set. | None needed. | S - a cleanup pass across the 6 files, or restore its use once the Next 15 upgrade re-enables image optimization. |
+
+## Infrastructure / operations
+
+| ID | Description | Severity | Risk while open | Workaround today | Effort |
+|---|---|---|---|---|---|
+| - | No provider-independent backup. Neon's point-in-time restore is the only backup mechanism - full reliance on one vendor's own backup system, with no nightly `pg_dump` to object storage as a second line of defence. | Medium | A Neon-side failure or account issue would have no fallback recovery path. | The restore-drill procedure (`docs/DEPLOYMENT.md` section 8) at least proves the one mechanism that does exist works. | S-M - a scheduled job + R2 upload. |
+| - | Distributed rate limiting is in-memory, per API instance (`@nestjs/throttler`). | Low | Fine for a single-instance deployment (the launch plan); running more than one API replica multiplies the effective limit. | None needed until horizontal scaling. | M - a Redis-backed store. |
+| - | No automated frontend (web) test suite - web correctness is verified by TypeScript strict mode, real builds, and manual click-through only. | Medium | A web-only regression could ship without a failing automated check to catch it. | The usability test plan (`USABILITY_TEST_PLAN.md`) is the manual backstop. | L - component or e2e test infrastructure from scratch. |
+| - | `JWT_SECRET` has no rotation mechanism that avoids a mass logout. | Low | Rotating the secret today logs out every signed-in user at once. | Acceptable for a planned, announced rotation; not acceptable for an urgent one. | M - a dual-key grace-period verification window. |
+| - | Next.js 15 upgrade not done. The two critical advisories this was tracking are confirmed not reachable today (prod is Docker/Linux, so the Windows-specific one doesn't apply; every real remote-image usage already used `unoptimized`) - this is a housekeeping upgrade, not an open vulnerability. | Low | None currently live. | None needed. | M - a real framework major-version bump, needs its own regression pass. |
+| - | `apps/web`'s Docker build could not be verified end-to-end on this machine (a 30-minute `pnpm install` hang during this session, almost certainly local network/registry throttling, not a Dockerfile defect - the Dockerfile's own header already flagged this as an open risk). `apps/api`'s Dockerfile is independently verified. | Low | The real test is the first `fly deploy`, which builds remotely on Fly's own infrastructure; flagged in `docs/DEPLOYMENT.md`'s go-live checklist as the point to actually confirm this. | None needed - just don't skip watching the first real deploy's build output. | None - verification, not a fix. |
+| - | Two small platform UX reports from earlier audit work, not independently reverified this session: Super Admin/platform login feels slow (#8), and a brief flash of the real app before the maintenance-mode redirect kicks in (#9). | Low | Cosmetic/perceived-performance only. | None needed. | S-M each, once reproduced and profiled. |
+| - | `rls.sql`'s "deliberately not listed" comment block doesn't mention `PlatformAuditLog` (it has a nullable `tenantId` but is genuinely platform-global, confirmed in Part 1 of this round - never touched inside a tenant-scoped transaction, never reachable from a tenant session). Not a leak, just an undocumented exclusion next to three others that are documented. | Low (cosmetic) | None - confirmed not a real tenant-isolation gap. | None needed. | S - one comment line. |
+
+## Feedback/UX polish not covered by this round's toast pass
+
+| ID | Description | Severity | Risk while open | Workaround today | Effort |
+|---|---|---|---|---|---|
+| M7 | No scroll/focus to the first invalid field in the 8-step patient registration wizard. | Low | A validation error off-screen can be missed, especially on a long step. | Scroll manually to find the error. | S-M - needs a ref per field plus a "scroll into view" on failed validation. |
+| M8 | No unsaved-changes warning anywhere (the registration wizard, the SOAP note editor's own `dirty` flag is computed but unused). | Low | Navigating away mid-edit silently loses unsaved input. | Save/submit each step deliberately before navigating. | S-M - a `beforeunload` handler plus a router-level guard. |
+| M2 (remaining) | The toast/feedback pass (this round) fixed all 12 High findings and representative Medium ones; a full sweep of every remaining silent-success spot (most of HR's edit/toggle flows beyond what was touched, several admissions/wards actions, the rest of claims) is still open. | Low | Inconsistent feedback quality across the app - a working action with no confirmation, not a broken one. | None needed - these are UX polish, not defects. | M - mechanical, just a lot of files. |
+| L2 (remaining) | Some modules still use inline red error text instead of the shared toast system, inconsistent with the now-standardized pattern. | Low | Cosmetic inconsistency only. | None needed. | M - mechanical. |
+| M4 (remaining) | Admin row Activate/Deactivate toggle has no *per-row* pending indicator (it shares one list-wide `busy` flag with Delete) - fixed for error handling this round, not for the spinner's granularity. | Low (cosmetic) | None - purely a loading-indicator precision issue. | None needed. | S. |
+
+---
+
+## Recommended order after launch
+
+1. **FUNC-5** (remittance advisory lock) - S effort, closes a real money-correctness race, same pattern already proven everywhere else in the codebase.
+2. **SEC-6** (CSV formula injection) and **SEC-7** (security headers) - both S effort, standard hardening, no reason to leave them open once there's a moment to spend an afternoon on them.
+3. **Nightly `pg_dump` backup** - S-M effort, removes single-vendor backup dependency before real patient data accumulates further.
+4. **SEC-3** (session revocation) and **SEC-4** (platform MFA) - M effort each, the two highest-blast-radius security gaps; worth doing before the platform console/hospital count grows.
+5. **F2-DECISION** - no effort to leave as-is; revisit only if real-world use of the pay-before-dispense gate surfaces the quantity-split behaviour as confusing to pharmacy staff in practice.
+6. **MISS-6** (patient deactivate, at least - merge can wait) - M effort, a real operational gap once enough patients exist for duplicates to actually occur.
+7. **F3** (bulk import) - M effort, matters most if/when a second hospital onboards with an existing patient list to migrate; low urgency for a single pilot hospital starting from zero.
+8. **MISS-4** (note history) and **MISS-7** (read audit + viewer) - M/L effort, compliance-flavoured items worth doing before scaling to more hospitals or any regulatory scrutiny, not necessarily before that.
+9. Everything else (per-HMO tariffs, BL-3 per-tenant timezone, BL-4 pharmacy-only invoice, distributed rate limiting, frontend test suite, Next.js 15, MISS-8 data export, the remaining feedback/UX polish) - genuinely later-release items, revisit as the business actually needs them (a second hospital, a non-Nigerian hospital, real horizontal scale, an HMO with negotiated tariffs) rather than on a fixed schedule.
