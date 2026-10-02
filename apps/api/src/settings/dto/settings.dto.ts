@@ -18,4 +18,5 @@ export class UpdateSettingsDto {
   @IsOptional() @IsIn(['MIDNIGHT_CENSUS', 'ROLLING_24H']) inpatientChargeRule?: string;
   @IsOptional() @IsIn(['NONE', 'MINIMUM_FULL_DAY', 'DAY_CASE_RATE']) shortStayChargeMode?: string;
   @IsOptional() @IsBoolean() requireSettledBillAtDischarge?: boolean;
+  @IsOptional() @IsBoolean() requirePaymentBeforeDispense?: boolean;
 }

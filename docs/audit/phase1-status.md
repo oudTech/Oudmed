@@ -36,7 +36,7 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 | F1b | Daily charges (both rules + short-stay setting), transfers, charges posted during the stay, interim bill | Done |
 | F1c | Discharge (settlement setting, override), final bill, deposit application and refund, discharge summary, admission reopen, admission ward-round notes. Two corrections after approval: refund-pending-never-blocks-discharge, deposits apply only to the patient-payable (non-HMO) share | Done |
 | F1d | Admission claims (`generateForAdmission`, remittance generalisation, backfill verification), occupancy/inpatient revenue reports; F1 usability cases added to the test plan | **Done.** `generateForAdmission` + `resolveClaimInvoices`/`splitProportionally` generalise remittance/write-off/reversal across a multi-invoice admission claim, provably identical for every existing (single-invoice) outpatient claim; backfill-verification queries ran clean (zero orphans); full outpatient generate->batch->CSV->remittance->write-off->aging regression passes unchanged. Reports gained `occupancyByWard`, `admissionsTrend`, and an `inpatient_revenue` KPI. See `docs/features/F1-inpatient-billing.md`'s F1d implementation notes and `docs/audit/usability-test-plan.md`'s F1 section (25 cases). |
-| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | Approved as designed. One report. Build after F1 (depends on `resolveBillingTarget`/`postCharge`). |
+| F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | **Done.** `requirePaymentBeforeDispense` (off by default); `prepare()`/`release()`/`cancel-preparation()` state machine (charge posted, stock held back until the invoice is `PAID`); co-pay splits proportionally into an immediately-dispensed covered share and a gated co-pay share; an admitted patient or an HMO-covered item skips the gate entirely; `pharmacy:dispense-emergency-override` (PHARMACIST/HOSPITAL_ADMIN) still dispenses in the old one-step way, audited, for a genuine emergency. See `docs/features/F2-pay-before-dispense.md`'s implementation notes and `docs/audit/usability-test-plan.md`'s F2 section. |
 | F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Approved as designed. One report. Independent of F1/F2. |
 
 ## Remaining, in order
@@ -44,7 +44,7 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 | Item | What | Status |
 |---|---|---|
 | F1a-d | See table above | F1a+F1b+F1c+F1d done |
-| F2 | One report | Not started |
+| F2 | One report | Done |
 | F3 | One report | Not started |
 | 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts; cover all new F1-F3 screens | Not started |
 | Final | Regression pass, extended usability test plan (original 44 cases + new F1/F2/F3 cases), launch report | Not started |
@@ -54,9 +54,10 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 All items above complete, all tests passing, no open Critical findings, and
 the full usability test plan (`docs/audit/usability-test-plan.md`) - the
 original 44 cases plus the new F1 (admit through discharge and HMO claim,
-25 cases, written), F2 (setting on/off, payment gate, exemptions, emergency
-override) and F3 (template, dry run, duplicates, undo) cases - passes on
-staging.
+25 cases, written), the FUNC2/INV/PRINT cases for items 4/9/10 (written),
+F2 (setting on/off, payment gate, exemptions, emergency override, 13 cases,
+written) and F3 (template, dry run, duplicates, undo, not yet written)
+cases - passes on staging.
 
 ## New findings since the scope freeze
 

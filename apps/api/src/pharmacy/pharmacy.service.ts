@@ -11,12 +11,35 @@ import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
 import { assertCan, can } from '../common/permissions';
 import { lagosCalendarDate } from '../common/lagos-time';
-import { DispenseDto } from './dto/pharmacy.dto';
+import { DispenseDto, PrepareDto, CancelPreparationDto } from './dto/pharmacy.dto';
 
 interface Actor {
   tenantId: string;
   userId: string;
   role: string;
+}
+
+const D0 = () => new Prisma.Decimal(0);
+
+type PrescriptionRow = { id: string; visitId: string | null; admissionId: string | null; patientId: string; notes: string | null; dispensedById: string | null; dispensedAt: Date | null };
+type PrescriptionItemRow = { id: string; drugId: string | null; drugName: string; strengthConc: string | null; dispensedQty: number | null; preparedQty: number; preparedUnitPrice: Prisma.Decimal | null; preparedInvoiceLineId: string | null };
+
+/**
+ * A prescription's dispenseStatus is derived, never set directly, from the
+ * combined dispensedQty/preparedQty of every item on it (F2) - computed the
+ * same way PARTIAL/DISPENSED already were before F2 existed, just now aware
+ * of the prepared-but-unreleased state too. AWAITING_PAYMENT takes priority
+ * over PARTIAL/DISPENSED whenever at least one item has something prepared
+ * and no item is still fully untouched, exactly as the design calls for.
+ */
+function computeDispenseStatus(items: { dispensedQty: number | null; preparedQty: number | null }[]) {
+  const hasPrepared = items.some((it) => (it.preparedQty ?? 0) > 0);
+  const hasDispensed = items.some((it) => (it.dispensedQty ?? 0) > 0);
+  const allTouched = items.every((it) => (it.dispensedQty ?? 0) > 0 || (it.preparedQty ?? 0) > 0);
+  if (hasPrepared && allTouched) return 'AWAITING_PAYMENT' as const;
+  if (allTouched && hasDispensed) return 'DISPENSED' as const;
+  if (hasDispensed || hasPrepared) return 'PARTIAL' as const;
+  return 'PENDING' as const;
 }
 
 @Injectable()
@@ -32,7 +55,7 @@ export class PharmacyService {
   async queue(tenantId: string, status?: string) {
     return this.prisma.forTenant(tenantId, async (tx) => {
       const where: Prisma.PrescriptionWhereInput = {
-        dispenseStatus: status ? (status as any) : { in: ['PENDING', 'PARTIAL'] },
+        dispenseStatus: status ? (status as any) : { in: ['PENDING', 'PARTIAL', 'AWAITING_PAYMENT'] },
       };
       const rows = await tx.prescription.findMany({
         where,
@@ -48,6 +71,22 @@ export class PharmacyService {
         ? await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } })
         : [];
       const nm = new Map(users.map((u) => [u.id, u.fullName]));
+
+      // F2: "paid, ready to dispense" vs "awaiting payment" is computed live
+      // by joining every prepared line to its invoice's current status here,
+      // never cached on the item itself - a payment reversal is reflected
+      // immediately on the next read, with no separate reconciliation step.
+      const lineIds = [
+        ...new Set(rows.flatMap((r) => r.items.map((it) => it.preparedInvoiceLineId).filter((x): x is string => !!x))),
+      ];
+      const lines = lineIds.length
+        ? await tx.invoiceLine.findMany({
+            where: { id: { in: lineIds } },
+            select: { id: true, invoice: { select: { status: true } } },
+          })
+        : [];
+      const paidByLineId = new Map(lines.map((l) => [l.id, l.invoice.status === 'PAID']));
+
       return rows.map((r) => ({
         id: r.id,
         status: r.status,
@@ -71,6 +110,13 @@ export class PharmacyService {
           dispenseUnitPrice: it.dispenseUnitPrice ? it.dispenseUnitPrice.toString() : null,
           sellPrice: it.drug?.sellPrice ? it.drug.sellPrice.toString() : null,
           quantityOnHand: it.drug?.quantityOnHand ?? null,
+          preparedQty: it.preparedQty,
+          preparedUnitPrice: it.preparedUnitPrice ? it.preparedUnitPrice.toString() : null,
+          // true = paid, ready to release; false = still awaiting payment;
+          // null = nothing prepared, or a zero-price preparation with no
+          // invoice line to check at all (releases unconditionally).
+          preparedInvoicePaid:
+            it.preparedQty > 0 ? (it.preparedInvoiceLineId ? paidByLineId.get(it.preparedInvoiceLineId) ?? false : true) : null,
         })),
       }));
     });
@@ -89,6 +135,27 @@ export class PharmacyService {
       if (!rx) throw new NotFoundException('Prescription not found');
       if (rx.dispenseStatus === 'DISPENSED' || rx.dispenseStatus === 'CANCELLED') {
         throw new BadRequestException('This prescription is already closed');
+      }
+
+      // F2: while the gate is on, this one-step dispense is only reachable as
+      // a flagged, audited emergency override - everyone else goes through
+      // prepare()/release() instead. Checked here, not in the controller, so
+      // it is enforced regardless of caller.
+      const tenant = await tx.tenant.findUnique({
+        where: { id: actor.tenantId },
+        select: { requirePaymentBeforeDispense: true },
+      });
+      if (tenant?.requirePaymentBeforeDispense && !dto.emergencyOverride) {
+        throw new BadRequestException({
+          code: 'PAYMENT_GATE_ACTIVE',
+          message: 'This hospital requires payment before dispensing. Use Prepare instead, or dispense now as a flagged emergency override.',
+        });
+      }
+      if (dto.emergencyOverride) {
+        if (!dto.emergencyReason?.trim()) {
+          throw new BadRequestException('A reason is required to dispense as an emergency override');
+        }
+        assertCan(actor.role, 'pharmacy:dispense-emergency-override');
       }
 
       const byId = new Map(rx.items.map((it) => [it.id, it]));
@@ -197,15 +264,13 @@ export class PharmacyService {
         }
       }
 
-      const allDispensed = rx.items.every((it) => {
-        const line = dto.items.find((l) => l.itemId === it.id);
-        return line ? line.quantity > 0 : (it.dispensedQty ?? 0) > 0;
-      });
+      const freshItems = await tx.prescriptionItem.findMany({ where: { prescriptionId: id } });
+      const status = computeDispenseStatus(freshItems);
 
       const updated = await tx.prescription.update({
         where: { id },
         data: {
-          dispenseStatus: allDispensed ? 'DISPENSED' : 'PARTIAL',
+          dispenseStatus: status,
           dispensedById: actor.userId,
           dispensedAt: new Date(),
           notes: dto.note ? appendNote(rx.notes, dto.note) : rx.notes,
@@ -217,7 +282,368 @@ export class PharmacyService {
         entityType: 'Prescription', entityId: id,
         metadata: { status: updated.dispenseStatus },
       });
+      if (dto.emergencyOverride) {
+        await this.audit.record({
+          tenantId: actor.tenantId, userId: actor.userId, action: 'EMERGENCY_DISPENSE_OVERRIDE',
+          entityType: 'Prescription', entityId: id,
+          metadata: { reason: dto.emergencyReason, items: plan.filter((p) => p.delta > 0).map((p) => ({ itemId: p.it.id, drugName: p.it.drugName, quantity: p.delta, unitPrice: p.unitPrice })) },
+        });
+      }
       return updated;
+    });
+  }
+
+  /**
+   * F2: the gated entry point used whenever `requirePaymentBeforeDispense` is
+   * on. No stock moves here - only a charge is posted, recorded against the
+   * item as `preparedQty` rather than `dispensedQty`, until `release()`
+   * confirms the carrying invoice is actually paid. The three exemptions
+   * (inpatient, HMO-covered, zero-price) still dispense immediately within
+   * this same call, exactly as they would with the setting off - they are
+   * not a separate code path, so there is nothing to "skip" to.
+   *
+   * Co-pay split (coPayPct between 0 and 100): the requested delta quantity
+   * itself splits proportionally into an immediately-dispensed covered
+   * share and a gated co-pay share (rounded to whole units, since stock is
+   * drawn in whole units) - not a money-only split on one combined line -
+   * so `dispensedQty`/`preparedQty` each reflect a real, physical quantity
+   * rather than one quantity double-counted two ways.
+   */
+  async prepare(actor: Actor, id: string, dto: PrepareDto) {
+    assertCan(actor.role, 'prescription:dispense');
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${id}, 0))`;
+
+      const rx = await tx.prescription.findFirst({ where: { id }, include: { items: true } });
+      if (!rx) throw new NotFoundException('Prescription not found');
+      if (rx.dispenseStatus === 'DISPENSED' || rx.dispenseStatus === 'CANCELLED') {
+        throw new BadRequestException('This prescription is already closed');
+      }
+
+      const byId = new Map(rx.items.map((it) => [it.id, it]));
+      const canOverridePrice = can(actor.role, 'billing:manage');
+
+      // Same admission precedence as dispense(): a recorded admissionId/visitId
+      // on the prescription wins outright; only a chart-only script falls back
+      // to the patient's currently-open admission.
+      const admissionId = rx.admissionId
+        ?? (rx.visitId ? null : await this.billing.resolveBillingTarget(tx, rx.patientId));
+      const coPayPct = admissionId ? 0 : await this.resolveCoPay(tx, rx);
+
+      const drugIds = [...new Set(rx.items.filter((it) => it.drugId).map((it) => it.drugId as string))].sort();
+      for (const drugId of drugIds) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${drugId}, 0))`;
+      }
+
+      for (const line of dto.items) {
+        const it = byId.get(line.itemId);
+        if (!it) throw new BadRequestException('Unknown prescription item');
+        const alreadyActioned = (it.dispensedQty ?? 0) + (it.preparedQty ?? 0);
+        const delta = line.quantity - alreadyActioned;
+        if (delta <= 0) continue;
+
+        const unitPrice = await this.resolveDispensePrice(tx, actor, rx.visitId, it, line, delta, canOverridePrice);
+        const { coveredQty, coPayQty } = this.splitCoPayQty(delta, coPayPct);
+
+        if (coveredQty > 0) {
+          if (it.drugId) {
+            await this.drawStockFefo(tx, {
+              tenantId: actor.tenantId, userId: actor.userId, drugId: it.drugId,
+              quantity: coveredQty, unitPrice, prescriptionId: rx.id, visitId: rx.visitId,
+            });
+          }
+          if (unitPrice > 0) {
+            await this.chargeDelta(tx, actor, rx, it, coveredQty, unitPrice, admissionId);
+          }
+          await tx.prescriptionItem.update({
+            where: { id: it.id },
+            data: { dispensedQty: (it.dispensedQty ?? 0) + coveredQty, dispenseUnitPrice: new Prisma.Decimal(unitPrice) },
+          });
+        }
+
+        if (coPayQty > 0) {
+          let preparedInvoiceLineId: string | null = null;
+          if (unitPrice > 0) {
+            const posted = await this.chargeDelta(tx, actor, rx, it, coPayQty, unitPrice, admissionId);
+            preparedInvoiceLineId = posted.lineId;
+          }
+          await tx.prescriptionItem.update({
+            where: { id: it.id },
+            data: {
+              preparedQty: (it.preparedQty ?? 0) + coPayQty,
+              preparedUnitPrice: new Prisma.Decimal(unitPrice),
+              preparedInvoiceLineId,
+              preparedAt: new Date(),
+              preparedById: actor.userId,
+            },
+          });
+          await this.audit.record({
+            tenantId: actor.tenantId, userId: actor.userId, action: 'PREPARE_DISPENSE',
+            entityType: 'PrescriptionItem', entityId: it.id,
+            metadata: { drugName: it.drugName, quantity: coPayQty, unitPrice, invoiceLineId: preparedInvoiceLineId },
+          });
+        }
+      }
+
+      const freshItems = await tx.prescriptionItem.findMany({ where: { prescriptionId: id } });
+      const status = computeDispenseStatus(freshItems);
+      return tx.prescription.update({
+        where: { id },
+        data: {
+          dispenseStatus: status,
+          notes: dto.note ? appendNote(rx.notes, dto.note) : rx.notes,
+        },
+        include: { items: true },
+      });
+    });
+  }
+
+  /** Given the visit's (or, with no visit, the patient's own) linked
+   * InsuranceProvider, the patient's co-pay percentage - same resolution
+   * order `ClaimsService.generate()` uses. A patient with no linked provider
+   * at all is a cash patient: 100, the whole charge is gated, not exempt. */
+  private async resolveCoPay(tx: Prisma.TransactionClient, rx: { visitId: string | null; patientId: string }): Promise<number> {
+    if (rx.visitId) {
+      const visit = await tx.visit.findFirst({
+        where: { id: rx.visitId },
+        include: { patient: true, insuranceProvider: { select: { id: true, defaultCoPayPct: true } } },
+      });
+      if (visit) {
+        let providerId = visit.insuranceProviderId ?? visit.patient.insuranceProviderId ?? null;
+        let coPayPct = visit.insuranceProvider?.defaultCoPayPct ?? null;
+        if (!providerId) {
+          const nameGuess = visit.hmoName ?? visit.patient.hmoName ?? visit.patient.insuranceProvider;
+          if (nameGuess) {
+            const match = await tx.insuranceProvider.findFirst({
+              where: { name: { equals: nameGuess, mode: 'insensitive' }, isActive: true },
+              select: { id: true, defaultCoPayPct: true },
+            });
+            if (match) { providerId = match.id; coPayPct = match.defaultCoPayPct; }
+          }
+        }
+        return providerId ? Number(coPayPct ?? 0) : 100;
+      }
+    }
+    const patient = await tx.patient.findFirst({
+      where: { id: rx.patientId },
+      include: { insurer: { select: { id: true, defaultCoPayPct: true } } },
+    });
+    if (!patient) return 100;
+    let providerId = patient.insuranceProviderId ?? null;
+    let coPayPct = patient.insurer?.defaultCoPayPct ?? null;
+    if (!providerId && patient.insuranceProvider) {
+      const match = await tx.insuranceProvider.findFirst({
+        where: { name: { equals: patient.insuranceProvider, mode: 'insensitive' }, isActive: true },
+        select: { id: true, defaultCoPayPct: true },
+      });
+      if (match) { providerId = match.id; coPayPct = match.defaultCoPayPct; }
+    }
+    return providerId ? Number(coPayPct ?? 0) : 100;
+  }
+
+  /** Splits a delta quantity into an immediately-dispensed covered share and
+   * a gated co-pay share, rounded to whole units (fractional stock cannot be
+   * drawn). 0% -> fully covered, no gate; 100% (including no insurer at all,
+   * a cash patient) -> fully gated, nothing exempt. */
+  private splitCoPayQty(delta: number, coPayPct: number): { coveredQty: number; coPayQty: number } {
+    if (coPayPct <= 0) return { coveredQty: delta, coPayQty: 0 };
+    if (coPayPct >= 100) return { coveredQty: 0, coPayQty: delta };
+    const coveredQty = Math.round(delta * (1 - coPayPct / 100));
+    return { coveredQty, coPayQty: delta - coveredQty };
+  }
+
+  /** Posts one item's charge to wherever this prescription's charges go -
+   * same admission/visit/chart-only routing `dispense()` uses, factored out
+   * so `prepare()` can post the covered and co-pay portions of one item as
+   * two independent charges. */
+  private async chargeDelta(
+    tx: Prisma.TransactionClient,
+    actor: Actor,
+    rx: { visitId: string | null; patientId: string },
+    it: { drugName: string; strengthConc: string | null },
+    qty: number,
+    unitPrice: number,
+    admissionId: string | null,
+  ): Promise<{ invoiceId: string; lineId: string }> {
+    const description = `${it.drugName}${it.strengthConc ? ` ${it.strengthConc}` : ''} x${qty}`;
+    if (admissionId) {
+      return this.billing.postCharge(tx, {
+        tenantId: actor.tenantId, userId: actor.userId, admissionId, patientId: rx.patientId,
+        description, quantity: qty, unitPrice, category: 'Pharmacy',
+      });
+    }
+    if (rx.visitId) {
+      return this.billing.postChargeToVisit(tx, {
+        tenantId: actor.tenantId, userId: actor.userId, visitId: rx.visitId, patientId: rx.patientId,
+        description, quantity: qty, unitPrice, category: 'Pharmacy',
+      });
+    }
+    const invoice = await this.billing.createInvoiceTx(tx, actor.tenantId, actor.userId, {
+      patientId: rx.patientId,
+      category: 'Pharmacy',
+      lines: [{ category: 'Pharmacy', description, quantity: qty, unitPrice }],
+    } as any);
+    return { invoiceId: invoice.id, lineId: invoice.lines[0].id };
+  }
+
+  /**
+   * F2: for every item with `preparedQty > 0`, re-fetches its specific
+   * `preparedInvoiceLineId`'s parent invoice (never a cached "paid" flag) and
+   * releases it - draws stock, bumps `dispensedQty`, clears the prepared
+   * state - only once that invoice is genuinely `PAID`. All-or-nothing per
+   * item: an invoice still `UNPAID`/`PARTIAL` leaves that item untouched and
+   * reported back, never a partial stock draw against a partially-settled bill.
+   */
+  async release(actor: Actor, id: string) {
+    assertCan(actor.role, 'prescription:dispense');
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${id}, 0))`;
+      const rx = await tx.prescription.findFirst({ where: { id }, include: { items: true } });
+      if (!rx) throw new NotFoundException('Prescription not found');
+
+      const preparedItems = rx.items.filter((it) => (it.preparedQty ?? 0) > 0);
+      const released: string[] = [];
+      const stillAwaiting: { itemId: string; drugName: string; reason: string }[] = [];
+
+      const drugIds = [...new Set(preparedItems.filter((it) => it.drugId).map((it) => it.drugId as string))].sort();
+      for (const drugId of drugIds) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${drugId}, 0))`;
+      }
+
+      for (const it of preparedItems) {
+        let paid = true;
+        let balance = D0();
+        if (it.preparedInvoiceLineId) {
+          const line = await tx.invoiceLine.findFirst({ where: { id: it.preparedInvoiceLineId }, select: { invoiceId: true } });
+          const invoice = line
+            ? await tx.invoice.findFirst({
+                where: { id: line.invoiceId },
+                select: { status: true, totalAmount: true, payments: { select: { amount: true, reversedAt: true } } },
+              })
+            : null;
+          if (invoice) {
+            paid = invoice.status === 'PAID';
+            if (!paid) {
+              const totalPaid = invoice.payments.filter((p) => !p.reversedAt).reduce((s, p) => s.add(p.amount), D0());
+              balance = invoice.totalAmount.sub(totalPaid);
+            }
+          }
+        }
+        // no preparedInvoiceLineId at all means the item was prepared at a
+        // zero price (nothing was ever charged) - nothing to check payment
+        // against, so it releases unconditionally.
+        if (!paid) {
+          stillAwaiting.push({ itemId: it.id, drugName: it.drugName, reason: `Invoice not fully paid (balance: ${balance.toString()})` });
+          continue;
+        }
+        await this.releaseItem(tx, actor, rx, it);
+        released.push(it.id);
+      }
+
+      const freshItems = await tx.prescriptionItem.findMany({ where: { prescriptionId: id } });
+      const status = computeDispenseStatus(freshItems);
+      await tx.prescription.update({
+        where: { id },
+        data: {
+          dispenseStatus: status,
+          ...(released.length ? { dispensedById: actor.userId, dispensedAt: new Date() } : {}),
+        },
+      });
+      return { released, stillAwaiting };
+    });
+  }
+
+  private async releaseItem(tx: Prisma.TransactionClient, actor: Actor, rx: PrescriptionRow, it: PrescriptionItemRow) {
+    if (it.drugId && it.preparedQty > 0) {
+      await this.drawStockFefo(tx, {
+        tenantId: actor.tenantId, userId: actor.userId, drugId: it.drugId,
+        quantity: it.preparedQty, unitPrice: Number(it.preparedUnitPrice ?? 0),
+        prescriptionId: rx.id, visitId: rx.visitId,
+      });
+    }
+    await tx.prescriptionItem.update({
+      where: { id: it.id },
+      data: {
+        dispensedQty: (it.dispensedQty ?? 0) + it.preparedQty,
+        dispenseUnitPrice: it.preparedUnitPrice,
+        preparedQty: 0, preparedUnitPrice: null, preparedInvoiceLineId: null, preparedAt: null, preparedById: null,
+      },
+    });
+    await this.audit.record({
+      tenantId: actor.tenantId, userId: actor.userId, action: 'RELEASE_DISPENSE',
+      entityType: 'PrescriptionItem', entityId: it.id,
+      metadata: { drugName: it.drugName, quantity: it.preparedQty },
+    });
+  }
+
+  /**
+   * If the patient never pays: void the preparation. The prepared charge is
+   * an ordinary, still-unlocked InvoiceLine (nothing has paid it yet, by
+   * construction - that is the whole point of the gate), so this reuses the
+   * exact same primitive `BillingService.removeInvoiceLine` deletes with
+   * (`voidInvoiceLine`) rather than going through that actor-gated method
+   * itself, since a PHARMACIST has `prescription:dispense` but not
+   * `billing:manage` - the dispense permission already covers authorizing
+   * this specific action. One edge case `removeInvoiceLine` does not need to
+   * handle but this does: if the prepared line is the invoice's only line,
+   * the invoice is cancelled outright instead of being left with zero lines,
+   * since pharmacy staff have no separate "cancel this invoice" tool to
+   * reach for afterward.
+   */
+  async cancelPreparation(actor: Actor, id: string, itemId: string, dto: CancelPreparationDto) {
+    assertCan(actor.role, 'prescription:dispense');
+    if (!dto.reason?.trim()) {
+      throw new BadRequestException({ code: 'REASON_REQUIRED', message: 'A reason is required to cancel a preparation' });
+    }
+    return this.prisma.forTenant(actor.tenantId, async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${id}, 0))`;
+      const rx = await tx.prescription.findFirst({ where: { id }, include: { items: true } });
+      if (!rx) throw new NotFoundException('Prescription not found');
+      const it = rx.items.find((x) => x.id === itemId);
+      if (!it) throw new NotFoundException('Prescription item not found');
+      if ((it.preparedQty ?? 0) <= 0) {
+        throw new BadRequestException('This item has no prepared quantity to cancel');
+      }
+
+      if (it.preparedInvoiceLineId) {
+        const line = await tx.invoiceLine.findFirst({ where: { id: it.preparedInvoiceLineId }, select: { invoiceId: true } });
+        if (line) {
+          const invoice = await tx.invoice.findFirst({
+            where: { id: line.invoiceId },
+            include: { payments: true, claim: true, lines: true },
+          });
+          if (invoice) {
+            const locked = invoice.payments.some((p) => !p.reversedAt) || !!invoice.claim;
+            if (locked) {
+              throw new BadRequestException('This invoice already has a payment or claim on it and can no longer be edited - reverse it first.');
+            }
+            if (invoice.lines.length <= 1) {
+              await tx.invoice.update({ where: { id: invoice.id }, data: { status: 'CANCELLED' } });
+              await this.audit.record({
+                tenantId: actor.tenantId, userId: actor.userId, action: 'CANCEL', entityType: 'Invoice', entityId: invoice.id,
+                metadata: { reason: dto.reason, source: 'cancel-preparation' },
+              });
+            } else {
+              await this.billing.voidInvoiceLine(tx, it.preparedInvoiceLineId);
+            }
+          }
+        }
+      }
+
+      await tx.prescriptionItem.update({
+        where: { id: it.id },
+        data: { preparedQty: 0, preparedUnitPrice: null, preparedInvoiceLineId: null, preparedAt: null, preparedById: null },
+      });
+      await this.audit.record({
+        tenantId: actor.tenantId, userId: actor.userId, action: 'CANCEL_PREPARATION',
+        entityType: 'PrescriptionItem', entityId: it.id,
+        metadata: { drugName: it.drugName, quantity: it.preparedQty, reason: dto.reason },
+      });
+
+      const freshItems = await tx.prescriptionItem.findMany({ where: { prescriptionId: id } });
+      const status = computeDispenseStatus(freshItems);
+      await tx.prescription.update({ where: { id }, data: { dispenseStatus: status } });
+      return { ok: true };
     });
   }
 
@@ -408,6 +834,41 @@ export class PharmacyService {
           prices: [...v.prices].sort((a, b) => Number(a) - Number(b)),
         }))
         .sort((a, b) => b.count - a.count);
+    });
+  }
+
+  /** Hospital-Admin-facing review of every emergency dispense override in a
+   * date range (F2) - mirrors `BillingService.lineEditsReport`'s shape for
+   * the same accountability reason: the roles who can trigger an override
+   * can also review every one that happened. */
+  async dispenseOverridesReport(tenantId: string, q: { from?: string; to?: string }) {
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const where: Prisma.AuditLogWhereInput = {
+        entityType: 'Prescription', action: 'EMERGENCY_DISPENSE_OVERRIDE',
+      };
+      if (q.from || q.to) {
+        where.createdAt = {
+          ...(q.from ? { gte: new Date(q.from) } : {}),
+          ...(q.to ? { lt: new Date(new Date(q.to).getTime() + 86_400_000) } : {}),
+        };
+      }
+      const entries = await tx.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: 1000 });
+      const userIds = [...new Set(entries.map((e) => e.userId).filter((x): x is string => !!x))];
+      const users = userIds.length
+        ? await tx.user.findMany({ where: { id: { in: userIds } }, select: { id: true, fullName: true } })
+        : [];
+      const nm = new Map(users.map((u) => [u.id, u.fullName]));
+      return entries.map((e) => {
+        const m = (e.metadata ?? {}) as Record<string, unknown>;
+        return {
+          id: e.id,
+          createdAt: e.createdAt,
+          prescriptionId: e.entityId,
+          userName: e.userId ? nm.get(e.userId) ?? null : null,
+          reason: (m.reason as string) ?? null,
+          items: (m.items as unknown[]) ?? [],
+        };
+      });
     });
   }
 

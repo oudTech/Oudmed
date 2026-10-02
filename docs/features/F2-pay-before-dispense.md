@@ -370,5 +370,58 @@ Both `permissions.ts` and `apps/web/lib/permissions.ts` need the new action.
 **Overall: Medium** - smaller than F1 because it reuses F1's billing-target
 resolution and item 9's line-removal/audit machinery rather than building
 new primitives; the main real work is the prepare/release state machine and
-the queue UI. Should be built **after** F1 so the inpatient exemption has
-something to call.
+the queue UI. Built **after** F1, so the inpatient exemption had
+`resolveBillingTarget` ready to call.
+
+## 12. Implementation notes
+
+- **The co-pay split is a quantity split, not a money-only split on one
+  combined line.** Section 5's wording ("the item's own `dispensedQty`
+  reflects the exempt portion immediately, and `preparedQty` tracks the
+  co-pay portion separately") only holds together physically if those two
+  fields track two different, real quantities of the same drug - stock
+  cannot be half-drawn against one money total. Built as: `coveredQty =
+  round(delta * (1 - coPayPct / 100))`, `coPayQty = delta - coveredQty`,
+  each posted as its own `InvoiceLine` at the same unit price. A delta of 10
+  at 30% co-pay becomes 7 covered (dispensed immediately, stock drawn now)
+  and 3 gated (charged now, stock drawn only at `release()`), confirmed by
+  a dedicated test. 0% and 100% co-pay are the two edges of the same
+  formula, not special-cased separately.
+- **No insurance provider linked at all resolves to 100% co-pay (fully
+  gated), not "exempt."** Section 5's "`coPayPct` is 0 or unset -> exempt"
+  describes a *resolved* HMO provider with no co-pay percentage set, not a
+  cash patient with no provider at all - the latter is precisely who F2
+  exists to gate. `resolveCoPay()` returns 100 whenever no `InsuranceProvider`
+  resolves (by id or by name-match), and only reads `defaultCoPayPct` (0
+  treated as fully exempt) once a provider is actually found.
+- **`dispense()`'s status computation was refactored to use the same
+  `computeDispenseStatus()` helper `prepare()`/`release()`/
+  `cancelPreparation()` use**, rather than keeping its own narrower
+  `allDispensed` check. The old and new logic agree exactly whenever no
+  item has ever been prepared (every pre-existing `pharmacy.int-spec.ts`
+  test still passes unchanged); the refactor only matters once a
+  prescription can have some items dispensed and others still prepared at
+  the same time, which the old logic had no way to represent.
+- **`cancel-preparation` reuses `BillingService.voidInvoiceLine` directly,
+  not the actor-gated `removeInvoiceLine`.** A PHARMACIST has
+  `prescription:dispense` but not `billing:manage`, so calling the public,
+  permission-checked `removeInvoiceLine` with a pharmacy actor would be
+  rejected outright - `prescription:dispense` is the correct gate for this
+  specific action, the same reasoning `BillingService.postPaymentTx`
+  already established for a system-level write with no actor check of its
+  own. One edge case `removeInvoiceLine` does not need to handle but this
+  does: if the prepared line is the invoice's only line, the invoice is
+  cancelled outright instead of being left at zero lines, since pharmacy
+  staff have no separate "cancel this invoice" tool to reach for afterward.
+- **The admin-facing overrides report** (section 5) shipped as
+  `GET /pharmacy/dispense-overrides-report`, gated `pharmacy:manage` like
+  `off-formulary-report` already is, mirroring
+  `BillingService.lineEditsReport`'s shape rather than extending it - the
+  two audit trails (invoice line edits vs. emergency dispense overrides)
+  are different entity types with different metadata, so a clean sibling
+  endpoint reads better than a shared one with optional fields.
+- **"Paid, ready to dispense" is computed on every `queue()` read**, not
+  stored - a batched join from every returned prescription's prepared
+  `InvoiceLine`s to their parent invoices' current `status`, so a payment
+  reversal is reflected on the very next queue read with nothing to
+  reconcile separately, exactly as section 6 specifies.

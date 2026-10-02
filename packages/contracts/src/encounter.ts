@@ -155,5 +155,13 @@ export interface PharmacyQueueItemDTO {
     dispenseUnitPrice: string | null
     sellPrice: string | null
     quantityOnHand: number | null
+    /** F2: charged and awaiting release - stock not yet drawn for this much. */
+    preparedQty: number
+    preparedUnitPrice: string | null
+    /** true = its invoice is PAID, ready to release; false = still awaiting
+     * payment; null = nothing prepared, or a zero-price preparation with no
+     * invoice to check (releases unconditionally). Computed live on every
+     * read, never cached. */
+    preparedInvoicePaid: boolean | null
   }[]
 }

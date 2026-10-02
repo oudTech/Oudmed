@@ -16,6 +16,7 @@ const PROFILE_FIELDS = [
   'name', 'address', 'phone', 'contactEmail', 'website', 'rcNumber', 'taxId',
   'primaryColor', 'invoicePrefix', 'receiptPrefix', 'documentFooter',
   'inpatientChargeRule', 'shortStayChargeMode', 'requireSettledBillAtDischarge',
+  'requirePaymentBeforeDispense',
 ] as const;
 
 @Injectable()
@@ -48,6 +49,7 @@ export class SettingsService {
       inpatientChargeRule: t.inpatientChargeRule,
       shortStayChargeMode: t.shortStayChargeMode,
       requireSettledBillAtDischarge: t.requireSettledBillAtDischarge,
+      requirePaymentBeforeDispense: t.requirePaymentBeforeDispense,
     };
   }
 

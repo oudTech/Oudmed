@@ -50,3 +50,65 @@ a NURSE and an ACCOUNTANT/HOSPITAL_ADMIN demo login.
 | F1-24 | Inpatient revenue report | Compare Reports' "Inpatient Revenue" KPI against "Total Revenue" for a period with both outpatient and inpatient activity | Inpatient Revenue shows only admission-billed invoices and is visibly smaller than or equal to Total Revenue, never double-counted or missing |
 | F1-25 | Admissions trend | Admit a new patient today, reload Reports | Today's bucket on the admissions trend chart increments by one |
 
+## FUNC2: visit reopen, supplementary invoices, note addenda
+
+Pre-dates F1/F2 (phase1-status.md item 4) but was never written up as its
+own usability cases - added now since it sits right next to the F1 reopen
+flow above and is easy to conflate with it.
+
+| # | Case | Steps | Expected |
+|---|---|---|---|
+| FUNC2-1 | Reopen a completed visit | Complete a visit, then reopen it as the attending doctor with a reason | Clinical entry unblocks (orders, prescriptions, note edits); a non-attending doctor without admin rights cannot reopen it |
+| FUNC2-2 | Late charge after reopen creates a supplementary invoice | After reopening, add a billable order/prescription to a visit whose invoice was already paid or claimed | A new supplementary invoice carries the new charge; the original locked invoice is untouched |
+| FUNC2-3 | Reopen flag on billing | Open the billing screen for a reopened visit's invoice | A visible "reopened" flag/banner on the invoice until explicitly acknowledged |
+| FUNC2-4 | Note addendum, not an edit | On a completed (or reopened) visit, add an addendum to the clinical note rather than editing it | The original note is unchanged; the addendum appears as a separate, timestamped, authored entry underneath it |
+
+## INV: invoice line edits (billing desk)
+
+phase1-status.md item 9 - the manual invoice line editor and its audit
+trail.
+
+| # | Case | Steps | Expected |
+|---|---|---|---|
+| INV-1 | Add a missed charge | From an unlocked invoice, add a line for a catalogue item | Line added at the catalogue price with no reason required; invoice total updates |
+| INV-2 | Price override requires a reason | Add or edit a line at a price different from the catalogue | Blocked until a reason is given; once given, the edit is saved and marked "Edited" |
+| INV-3 | Remove a line requires a reason | Remove any existing line from an unlocked invoice | Blocked until a reason is given; invoice total updates once confirmed |
+| INV-4 | Locked invoice cannot be edited | Attempt to add/edit/remove a line on an invoice that has a payment or a claim on it | Blocked with a message naming why (has a payment / has a claim); a supplementary invoice can still be edited normally |
+| INV-5 | Edit history | Open the edit-history panel on an invoice that has had lines added, overridden and removed | Every edit listed with who, when, before/after values and the reason given |
+| INV-6 | Admin review report | As Hospital Admin, open the billing edits report for a date range | Every manual price override and discount across all invoices in that range, reviewable in one place |
+
+## PRINT: printable prescriptions and lab results
+
+phase1-status.md item 10.
+
+| # | Case | Steps | Expected |
+|---|---|---|---|
+| PRINT-1 | Print a prescription | From a dispensed (or pending) prescription, print it | A4, hospital-branded, patient details, prescriber name, date; one page per prescription |
+| PRINT-2 | Print a resulted lab/imaging order | From a resulted lab or imaging order, print it | A4, hospital-branded, patient details, ordering/lab staff name, date, result values; one page per order |
+| PRINT-3 | Print before results are in | Attempt to print an order that has not been resulted yet | Either unavailable or clearly marked as pending, never a blank/misleading result printout |
+
+## F2: pay before dispensing
+
+Run against a seeded staging tenant with `requirePaymentBeforeDispense`
+toggleable in Settings, at least one drug in the formulary, one
+`InsuranceProvider` with a `defaultCoPayPct` between 0 and 100, and both a
+PHARMACIST and a HOSPITAL_ADMIN demo login. Confirm the control case first
+(F2-1) before turning the setting on, so a failure elsewhere in this
+section is never mistaken for the setting having always been this way.
+
+| # | Case | Steps | Expected |
+|---|---|---|---|
+| F2-1 | Setting off (control) | With the setting off, dispense a cash patient's prescription | Dispensed immediately in one step, exactly as before F2 existed - no Prepare step, no gating |
+| F2-2 | Turn the setting on | In Settings > Pharmacy, enable "Require payment before dispensing" | Saves; the dispensing queue's action button changes from "Dispense" to "Prepare" for pending items |
+| F2-3 | Prepare a cash charge | With the setting on, Prepare a cash patient's prescription | Charge posted to the patient's invoice; prescription shows "Awaiting payment"; stock levels unchanged |
+| F2-4 | Payment gate blocks release | Attempt to release the F2-3 prescription before the invoice is paid | Blocked, reported as still awaiting payment; no stock drawn |
+| F2-5 | Payment clears the gate | Pay the F2-3 invoice in full at billing, then return to the pharmacy queue | Item now shows "Paid - ready to dispense"; Release draws stock and hands the item over |
+| F2-6 | Partial payment still gates | Pay only part of the F2-3-style invoice's balance | Item stays "Awaiting payment", not released, even though some money has been paid |
+| F2-7 | HMO co-pay split | Prepare a prescription for a patient with a co-pay percent between 0 and 100 | The covered share dispenses immediately (stock drawn now); only the co-pay share is gated and shows awaiting payment |
+| F2-8 | Fully HMO-covered item | Prepare an item for a patient whose provider has 0% co-pay | Dispensed immediately in full, no gated portion, no "awaiting payment" state at all |
+| F2-9 | Inpatient exemption | With the setting on, dispense to a currently admitted patient's prescription | Dispensed immediately regardless of the setting - the gate never applies to an open admission |
+| F2-10 | Cancel an unpaid preparation | On an item still awaiting payment, cancel the preparation with a reason | Charge is voided off the invoice; stock was never touched; item returns to its prior (pending) state |
+| F2-11 | Emergency override | As Pharmacist or Hospital Admin, dispense directly with "Emergency override" and a reason, bypassing Prepare | Dispensed immediately in the old one-step way; appears in the overrides report with the reason and who did it |
+| F2-12 | Emergency override needs a reason | Attempt the emergency override without typing a reason | Blocked until a reason is given |
+| F2-13 | Overrides report | As Hospital Admin, open the dispense-overrides report | Every emergency override listed with who, when, items and reason |
+

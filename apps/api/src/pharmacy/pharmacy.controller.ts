@@ -15,7 +15,7 @@ import { assertCan, can } from '../common/permissions';
 import { CurrentUser, AuthUser } from '../common/current-user.decorator';
 import { PharmacyService } from './pharmacy.service';
 import { PharmacyInventoryService } from './inventory.service';
-import { DispenseDto } from './dto/pharmacy.dto';
+import { DispenseDto, PrepareDto, CancelPreparationDto } from './dto/pharmacy.dto';
 import {
   AdjustStockDto,
   CreateDrugDto,
@@ -49,6 +49,26 @@ export class PharmacyController {
     return this.pharmacy.dispense(actor(u), id, dto);
   }
 
+  @Post('prescriptions/:id/prepare')
+  prepare(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: PrepareDto) {
+    return this.pharmacy.prepare(actor(u), id, dto);
+  }
+
+  @Post('prescriptions/:id/release')
+  release(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.pharmacy.release(actor(u), id);
+  }
+
+  @Post('prescriptions/:id/items/:itemId/cancel-preparation')
+  cancelPreparation(
+    @CurrentUser() u: AuthUser,
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: CancelPreparationDto,
+  ) {
+    return this.pharmacy.cancelPreparation(actor(u), id, itemId, dto);
+  }
+
   @Patch('prescriptions/:id/cancel')
   cancel(@CurrentUser() u: AuthUser, @Param('id') id: string) {
     return this.pharmacy.cancel(actor(u), id);
@@ -58,6 +78,12 @@ export class PharmacyController {
   offFormularyReport(@CurrentUser() u: AuthUser) {
     assertCan(u.role, 'pharmacy:manage');
     return this.pharmacy.offFormularyReport(u.tenantId);
+  }
+
+  @Get('dispense-overrides-report')
+  dispenseOverridesReport(@CurrentUser() u: AuthUser, @Query('from') from?: string, @Query('to') to?: string) {
+    assertCan(u.role, 'pharmacy:manage');
+    return this.pharmacy.dispenseOverridesReport(u.tenantId, { from, to });
   }
 
   // ── drug inventory (static routes before :id) ──

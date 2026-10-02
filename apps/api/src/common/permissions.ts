@@ -36,6 +36,7 @@ export type Action =
   | 'prescription:write'
   | 'prescription:dispense'
   | 'pharmacy:manage'
+  | 'pharmacy:dispense-emergency-override'
   | 'note:write'
   | 'order:create'
   | 'order:result'
@@ -94,6 +95,10 @@ export const MATRIX: Record<Action, Role[]> = {
   'prescription:write': [R.DOCTOR, R.HOSPITAL_ADMIN],
   'prescription:dispense': [R.PHARMACIST, R.HOSPITAL_ADMIN],
   'pharmacy:manage': [R.PHARMACIST, R.HOSPITAL_ADMIN],
+  // F2: the one path that still dispenses in the old, one-step way while
+  // requirePaymentBeforeDispense is on - a genuine emergency where stopping
+  // to collect payment first is not acceptable.
+  'pharmacy:dispense-emergency-override': [R.PHARMACIST, R.HOSPITAL_ADMIN],
   'note:write': [R.DOCTOR, R.HOSPITAL_ADMIN],
   'order:create': [R.DOCTOR, R.HOSPITAL_ADMIN],
   'order:result': [R.LAB_STAFF, R.DOCTOR, R.HOSPITAL_ADMIN],

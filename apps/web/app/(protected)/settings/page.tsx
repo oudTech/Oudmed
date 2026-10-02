@@ -62,6 +62,7 @@ function SettingsPageInner() {
             <BrandingSection s={q.data} onSaved={refresh} />
             <DocumentsSection s={q.data} onSaved={refresh} />
             <InpatientBillingSection s={q.data} onSaved={refresh} />
+            <PharmacySection s={q.data} onSaved={refresh} />
             <BillingSection />
           </>
         )}
@@ -257,6 +258,43 @@ function InpatientBillingSection({ s, onSaved }: { s: HospitalSettingsDTO; onSav
           <span className="block text-xs text-gray-400">
             Off by default - discharge is never blocked by billing on its own. When on, a balance remaining after
             deposit credit is auto-applied needs a Hospital Admin override with a reason to discharge anyway.
+          </span>
+        </span>
+      </label>
+      {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
+      <div className="mt-4 flex justify-end">
+        <Button loading={m.isPending} onClick={() => { setErr(''); m.mutate() }}>Save</Button>
+      </div>
+    </Card>
+  )
+}
+
+function PharmacySection({ s, onSaved }: { s: HospitalSettingsDTO; onSaved: (s: HospitalSettingsDTO) => void }) {
+  const { form, set } = useSectionForm({
+    requirePaymentBeforeDispense: s.requirePaymentBeforeDispense,
+  })
+  const [err, setErr] = useState('')
+  const m = useMutation({
+    mutationFn: () => settingsApi.update(form),
+    onSuccess: onSaved,
+    onError: (e: any) => setErr(e?.response?.data?.message ?? 'Could not save.'),
+  })
+  return (
+    <Card title="Pharmacy" subtitle="Whether a patient must pay before drugs leave the pharmacy.">
+      <label className="flex items-start gap-2 text-sm text-gray-700">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={form.requirePaymentBeforeDispense}
+          onChange={(e) => set('requirePaymentBeforeDispense', e.target.checked)}
+        />
+        <span>
+          Require payment before dispensing
+          <span className="block text-xs text-gray-400">
+            Off by default. When on, a cash or co-pay charge is prepared and charged but held back from stock
+            until its invoice is fully paid; an HMO-covered portion, a currently admitted patient's charges, and
+            a flagged emergency override (Pharmacist or Hospital Admin, with a reason) all still dispense
+            immediately regardless of this setting.
           </span>
         </span>
       </label>

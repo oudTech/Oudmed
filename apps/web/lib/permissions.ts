@@ -32,6 +32,7 @@ export type Action =
   | 'prescription:write'
   | 'prescription:dispense'
   | 'pharmacy:manage'
+  | 'pharmacy:dispense-emergency-override'
   | 'note:write'
   | 'order:create'
   | 'order:result'
@@ -79,6 +80,7 @@ export const MATRIX: Record<Action, string[]> = {
   'prescription:write': ['DOCTOR', 'HOSPITAL_ADMIN'],
   'prescription:dispense': ['PHARMACIST', 'HOSPITAL_ADMIN'],
   'pharmacy:manage': ['PHARMACIST', 'HOSPITAL_ADMIN'],
+  'pharmacy:dispense-emergency-override': ['PHARMACIST', 'HOSPITAL_ADMIN'],
   'note:write': ['DOCTOR', 'HOSPITAL_ADMIN'],
   'order:create': ['DOCTOR', 'HOSPITAL_ADMIN'],
   'order:result': ['LAB_STAFF', 'DOCTOR', 'HOSPITAL_ADMIN'],

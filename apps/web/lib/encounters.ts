@@ -72,8 +72,23 @@ export const pharmacyApi = {
     data: {
       items: { itemId: string; quantity: number; unitPrice?: number; overrideReason?: string }[]
       note?: string
+      emergencyOverride?: boolean
+      emergencyReason?: string
     },
   ) => api.post(`/pharmacy/prescriptions/${id}/dispense`, data).then((r) => r.data),
+  prepare: (
+    id: string,
+    data: {
+      items: { itemId: string; quantity: number; unitPrice?: number; overrideReason?: string }[]
+      note?: string
+    },
+  ) => api.post(`/pharmacy/prescriptions/${id}/prepare`, data).then((r) => r.data),
+  release: (id: string) =>
+    api.post<{ released: string[]; stillAwaiting: { itemId: string; drugName: string; reason: string }[] }>(
+      `/pharmacy/prescriptions/${id}/release`, {},
+    ).then((r) => r.data),
+  cancelPreparation: (id: string, itemId: string, reason: string) =>
+    api.post(`/pharmacy/prescriptions/${id}/items/${itemId}/cancel-preparation`, { reason }).then((r) => r.data),
   cancel: (id: string) =>
     api.patch(`/pharmacy/prescriptions/${id}/cancel`).then((r) => r.data),
 }
@@ -96,6 +111,7 @@ export const DISPENSE_STATUS_META: Record<string, { label: string; color: string
   PARTIAL: { label: 'Part dispensed', color: '#4338CA', bg: '#EEF0FF' },
   DISPENSED: { label: 'Dispensed', color: '#047857', bg: '#EAF7F0' },
   CANCELLED: { label: 'Cancelled', color: '#6B7280', bg: '#F3F4F6' },
+  AWAITING_PAYMENT: { label: 'Awaiting payment', color: '#B45309', bg: '#FFF6E5' },
 }
 
 export const ABNORMAL_FLAGS = ['Normal', 'Low', 'High', 'Critical']

@@ -245,7 +245,7 @@ export interface PrescriptionItemDTO {
   durationNumber: number | null
   instructions: string | null
 }
-export type DispenseStatus = 'PENDING' | 'PARTIAL' | 'DISPENSED' | 'CANCELLED'
+export type DispenseStatus = 'PENDING' | 'PARTIAL' | 'DISPENSED' | 'CANCELLED' | 'AWAITING_PAYMENT'
 
 export interface PrescriptionDTO {
   id: string

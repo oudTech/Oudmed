@@ -21,6 +21,7 @@ export interface HospitalSettingsDTO {
   inpatientChargeRule: InpatientChargeRule
   shortStayChargeMode: ShortStayChargeMode
   requireSettledBillAtDischarge: boolean
+  requirePaymentBeforeDispense: boolean
 }
 
 export interface UpdateHospitalSettingsDTO {
@@ -38,6 +39,7 @@ export interface UpdateHospitalSettingsDTO {
   inpatientChargeRule?: InpatientChargeRule
   shortStayChargeMode?: ShortStayChargeMode
   requireSettledBillAtDischarge?: boolean
+  requirePaymentBeforeDispense?: boolean
 }
 
 export const INPATIENT_CHARGE_RULES: { value: InpatientChargeRule; label: string; hint: string }[] = [

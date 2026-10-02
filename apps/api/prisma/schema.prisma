@@ -175,6 +175,10 @@ enum DispenseStatus {
   PARTIAL
   DISPENSED
   CANCELLED
+  // F2: at least one item has a prepared-but-unreleased quantity and no item
+  // is still fully untouched - computed the same way PARTIAL/DISPENSED are,
+  // never set directly without checking the item set first.
+  AWAITING_PAYMENT
 }
 
 enum OrderType {
@@ -240,6 +244,9 @@ model Tenant {
   inpatientChargeRule           InpatientChargeRule @default(MIDNIGHT_CENSUS)
   shortStayChargeMode           ShortStayChargeMode @default(MINIMUM_FULL_DAY)
   requireSettledBillAtDischarge Boolean             @default(false)
+
+  // ── Pay-before-dispense (F2) ──
+  requirePaymentBeforeDispense Boolean @default(false)
 
   users                User[]
   patients             Patient[]
@@ -1224,6 +1231,13 @@ model PrescriptionItem {
   instructions      String?
   dispensedQty      Int?
   dispenseUnitPrice Decimal?     @db.Decimal(12, 2)
+
+  // ── Pay-before-dispense (F2): charged and prepared, stock not yet drawn ──
+  preparedQty           Int       @default(0)
+  preparedUnitPrice     Decimal?  @db.Decimal(12, 2)
+  preparedInvoiceLineId String?
+  preparedAt            DateTime?
+  preparedById          String?
 
   @@index([tenantId])
 }
