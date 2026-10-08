@@ -20,9 +20,16 @@ const startsWithAny = (path: string, list: string[]) =>
 // matcher itself.
 const CRAWLER_FILES = ['/robots.txt', '/sitemap.xml']
 
+// Next's generated-image metadata routes (app/opengraph-image.tsx,
+// app/apple-icon.tsx). These are served at a bare path with no file
+// extension, so the matcher's own image-extension exclusion below never
+// catches them - without this they 307 to / (apex) or /login (tenant) for
+// every logged-out visitor, which is exactly who a link-preview bot is.
+const METADATA_IMAGE_FILES = ['/opengraph-image', '/apple-icon']
+
 export default auth((req) => {
   const { pathname } = req.nextUrl
-  if (CRAWLER_FILES.includes(pathname)) return NextResponse.next()
+  if (CRAWLER_FILES.includes(pathname) || METADATA_IMAGE_FILES.includes(pathname)) return NextResponse.next()
 
   const host = req.headers.get('host')
   const sub = subdomainFromHost(host)
