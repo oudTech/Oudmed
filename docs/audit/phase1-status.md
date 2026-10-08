@@ -37,24 +37,38 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 | F1c | Discharge (settlement setting, override), final bill, deposit application and refund, discharge summary, admission reopen, admission ward-round notes. Two corrections after approval: refund-pending-never-blocks-discharge, deposits apply only to the patient-payable (non-HMO) share | Done |
 | F1d | Admission claims (`generateForAdmission`, remittance generalisation, backfill verification), occupancy/inpatient revenue reports; F1 usability cases added to the test plan | **Done.** `generateForAdmission` + `resolveClaimInvoices`/`splitProportionally` generalise remittance/write-off/reversal across a multi-invoice admission claim, provably identical for every existing (single-invoice) outpatient claim; backfill-verification queries ran clean (zero orphans); full outpatient generate->batch->CSV->remittance->write-off->aging regression passes unchanged. Reports gained `occupancyByWard`, `admissionsTrend`, and an `inpatient_revenue` KPI. See `docs/features/F1-inpatient-billing.md`'s F1d implementation notes and `docs/audit/USABILITY_TEST_PLAN.md`'s T4 (inpatient) track. |
 | F2 | Per-hospital setting: require payment before dispensing, with HMO/inpatient/emergency-override exemptions | **Done.** `requirePaymentBeforeDispense` (off by default); `prepare()`/`release()`/`cancel-preparation()` state machine (charge posted, stock held back until the invoice is `PAID`); co-pay splits proportionally into an immediately-dispensed covered share and a gated co-pay share; an admitted patient or an HMO-covered item skips the gate entirely; `pharmacy:dispense-emergency-override` (PHARMACIST/HOSPITAL_ADMIN) still dispenses in the old one-step way, audited, for a genuine emergency. See `docs/features/F2-pay-before-dispense.md`'s implementation notes and `docs/audit/USABILITY_TEST_PLAN.md`'s T3 (pharmacy/billing/claims) track. |
-| F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Approved as designed. One report. Independent of F1/F2. |
+| F3 | Bulk patient import (CSV/Excel, dry run, duplicates, legacy patient numbers, undo) | Approved as designed. Not started. Independent of F1/F2. |
 
 ## Remaining, in order
 
 | Item | What | Status |
 |---|---|---|
-| F1a-d | See table above | F1a+F1b+F1c+F1d done |
-| F2 | One report | Done |
-| F3 | One report | Not started |
-| 7 | Toast/feedback pass, sub-steps (a)-(f); include supplementary-invoice notice in dispense/order success toasts; cover all new F1-F3 screens | Not started |
-| Final | Regression pass, extended usability test plan (original 44 cases + new F1/F2/F3 cases), launch report | Not started |
+| F1a-d | See table above | Done |
+| F2 | See table above | Done |
+| 7 | Toast/feedback pass - new top-right toast stack with tone icons and tone-aware dismissal, shared `errorMessage(e)` helper, `toastPromise()` for slow actions; closed all 12 High findings and most Medium findings in `docs/audit/feedback-coverage.md` across 3 batches; explicitly re-audited the F1/F2 screens | **Done** (2026-10-02, as part of the production-release pass). M7/M8 (scroll-to-error, unsaved-changes warning) and the remaining M2 spread were deliberately deferred - tracked in `docs/audit/WHATS_LEFT.md`, not silently dropped. |
+| Final - test plan | Usability test plan rewritten and expanded | **Done.** `docs/audit/USABILITY_TEST_PLAN.md` / `.csv` - 82 cases across 6 connected tester tracks plus a feedback spot-check section, covering outpatient cash/HMO, inpatient cash/HMO, pay-before-dispense, supplementary invoices and line edits, the full claims lifecycle, reports, admin/settings, and the platform console, with a 19-case go-live smoke test marked. Supersedes `usability-test-plan.md`. F3 has no cases yet since it isn't built. |
+| Final - regression pass | A full, explicit regression sign-off | **Done in substance, not as a standalone pass.** The production-release work's Part 1 readiness check plus the full `pnpm test` suite re-run after every change this phase covers the same ground; no dedicated "regression pass" report was separately produced. |
+| Final - launch report | What's in v1, known limitations, `WHATS_LEFT.md` summary | **Not done.** Scheduled as step 4 of the current pre-F3 punch list (2026-10-08), after the HMO-claims investigation, the F2 co-pay change, and automated smoke tests. |
+| F3 | Bulk patient import | **Not started.** Next after the pre-F3 punch list below. |
+
+## Pre-F3 punch list (2026-10-08)
+
+Before F3, in this order, each reported and stopped for go-ahead before the
+next: (1) investigate "HMO claims not reflecting on claims" - Critical until
+proven otherwise; (2) F2 co-pay: change release from a quantity split to
+holding the whole item until the patient's share is paid (approved,
+supersedes the description in the F2 row above once done); (3) automate the
+19 go-live smoke cases as e2e tests with one run-everything command, add CI
+if none exists; (4) launch report, then tag `v1.0`. Safety rules for this
+list: tag `v1.0-baseline` before starting, one fix per commit, additive
+migrations only, full suite after every change, state the risk before each
+fix.
 
 ## Definition of done (per the user's own bar)
 
 All items above complete, all tests passing, no open Critical findings, and
 the full usability test plan (`docs/audit/USABILITY_TEST_PLAN.md` /
-`.csv`, the 2026-10-02 rewrite - supersedes `usability-test-plan.md`) -
-82 cases across 6 connected tester tracks plus a feedback spot-check
+`.csv`) - 82 cases across 6 connected tester tracks plus a feedback spot-check
 section, covering outpatient cash/HMO, inpatient cash/HMO, pay-before-
 dispense, supplementary invoices and line edits, the full claims
 lifecycle, reports, admin/settings, and the platform console, with a
