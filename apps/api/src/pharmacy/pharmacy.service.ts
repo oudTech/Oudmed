@@ -299,16 +299,20 @@ export class PharmacyService {
    * on. No stock moves here - only a charge is posted, recorded against the
    * item as `preparedQty` rather than `dispensedQty`, until `release()`
    * confirms the carrying invoice is actually paid. The three exemptions
-   * (inpatient, HMO-covered, zero-price) still dispense immediately within
-   * this same call, exactly as they would with the setting off - they are
-   * not a separate code path, so there is nothing to "skip" to.
+   * (inpatient, fully HMO-covered at 0% co-pay, zero-price) still dispense
+   * immediately within this same call, exactly as they would with the
+   * setting off - they are not a separate code path, so there is nothing to
+   * "skip" to.
    *
-   * Co-pay split (coPayPct between 0 and 100): the requested delta quantity
-   * itself splits proportionally into an immediately-dispensed covered
-   * share and a gated co-pay share (rounded to whole units, since stock is
-   * drawn in whole units) - not a money-only split on one combined line -
-   * so `dispensedQty`/`preparedQty` each reflect a real, physical quantity
-   * rather than one quantity double-counted two ways.
+   * Co-pay (any coPayPct > 0): the WHOLE item is held - full quantity, full
+   * charge, one invoice line - until the invoice is paid, then the full
+   * quantity releases at once. No splitting the quantity or the charge
+   * between a covered share and a co-pay share (that was the design before
+   * 2026-10-08; changed because a patient-facing "why did only some of my
+   * tablets come out" partial release was worse than just holding the whole
+   * item). The invoice line still carries the item's real full price, so
+   * ClaimsService.generate() computes the correct HMO/patient split later
+   * from the pooled invoice total, same as any other billable line.
    */
   async prepare(actor: Actor, id: string, dto: PrepareDto) {
     assertCan(actor.role, 'prescription:dispense');
@@ -344,34 +348,40 @@ export class PharmacyService {
         if (delta <= 0) continue;
 
         const unitPrice = await this.resolveDispensePrice(tx, actor, rx.visitId, it, line, delta, canOverridePrice);
-        const { coveredQty, coPayQty } = this.splitCoPayQty(delta, coPayPct);
 
-        if (coveredQty > 0) {
+        if (coPayPct <= 0) {
+          // Fully HMO-covered (or exempt, e.g. an admission) - the whole
+          // delta dispenses now, no gate at all.
           if (it.drugId) {
             await this.drawStockFefo(tx, {
               tenantId: actor.tenantId, userId: actor.userId, drugId: it.drugId,
-              quantity: coveredQty, unitPrice, prescriptionId: rx.id, visitId: rx.visitId,
+              quantity: delta, unitPrice, prescriptionId: rx.id, visitId: rx.visitId,
             });
           }
           if (unitPrice > 0) {
-            await this.chargeDelta(tx, actor, rx, it, coveredQty, unitPrice, admissionId);
+            await this.chargeDelta(tx, actor, rx, it, delta, unitPrice, admissionId);
           }
           await tx.prescriptionItem.update({
             where: { id: it.id },
-            data: { dispensedQty: (it.dispensedQty ?? 0) + coveredQty, dispenseUnitPrice: new Prisma.Decimal(unitPrice) },
+            data: { dispensedQty: (it.dispensedQty ?? 0) + delta, dispenseUnitPrice: new Prisma.Decimal(unitPrice) },
           });
-        }
-
-        if (coPayQty > 0) {
+        } else {
+          // Any co-pay at all (even a small one) holds the WHOLE item - full
+          // quantity, full charge, one invoice line - until the invoice is
+          // paid. No splitting the quantity or the charge between a covered
+          // share and a co-pay share; the full amount still lets
+          // ClaimsService.generate() compute the real HMO/patient split
+          // later from the pooled invoice total, exactly as it does for any
+          // other billable line on an HMO visit.
           let preparedInvoiceLineId: string | null = null;
           if (unitPrice > 0) {
-            const posted = await this.chargeDelta(tx, actor, rx, it, coPayQty, unitPrice, admissionId);
+            const posted = await this.chargeDelta(tx, actor, rx, it, delta, unitPrice, admissionId);
             preparedInvoiceLineId = posted.lineId;
           }
           await tx.prescriptionItem.update({
             where: { id: it.id },
             data: {
-              preparedQty: (it.preparedQty ?? 0) + coPayQty,
+              preparedQty: (it.preparedQty ?? 0) + delta,
               preparedUnitPrice: new Prisma.Decimal(unitPrice),
               preparedInvoiceLineId,
               preparedAt: new Date(),
@@ -381,7 +391,7 @@ export class PharmacyService {
           await this.audit.record({
             tenantId: actor.tenantId, userId: actor.userId, action: 'PREPARE_DISPENSE',
             entityType: 'PrescriptionItem', entityId: it.id,
-            metadata: { drugName: it.drugName, quantity: coPayQty, unitPrice, invoiceLineId: preparedInvoiceLineId },
+            metadata: { drugName: it.drugName, quantity: delta, unitPrice, invoiceLineId: preparedInvoiceLineId },
           });
         }
       }
@@ -435,21 +445,8 @@ export class PharmacyService {
     return resolved ? resolved.coPayPct : 100;
   }
 
-  /** Splits a delta quantity into an immediately-dispensed covered share and
-   * a gated co-pay share, rounded to whole units (fractional stock cannot be
-   * drawn). 0% -> fully covered, no gate; 100% (including no insurer at all,
-   * a cash patient) -> fully gated, nothing exempt. */
-  private splitCoPayQty(delta: number, coPayPct: number): { coveredQty: number; coPayQty: number } {
-    if (coPayPct <= 0) return { coveredQty: delta, coPayQty: 0 };
-    if (coPayPct >= 100) return { coveredQty: 0, coPayQty: delta };
-    const coveredQty = Math.round(delta * (1 - coPayPct / 100));
-    return { coveredQty, coPayQty: delta - coveredQty };
-  }
-
   /** Posts one item's charge to wherever this prescription's charges go -
-   * same admission/visit/chart-only routing `dispense()` uses, factored out
-   * so `prepare()` can post the covered and co-pay portions of one item as
-   * two independent charges. */
+   * same admission/visit/chart-only routing `dispense()` uses. */
   private async chargeDelta(
     tx: Prisma.TransactionClient,
     actor: Actor,

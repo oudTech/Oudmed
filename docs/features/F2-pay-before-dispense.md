@@ -197,23 +197,30 @@ step, exactly as it works with the setting off.
 
 ### HMO-covered portion
 
-Resolved identically to `ClaimsService.generate()`'s existing co-pay logic
-(`claims.service.ts:392-413`), reused rather than reinvented: given the
+Resolved through the shared `resolveInsuranceProvider()` (originally
+`ClaimsService.generate()`'s co-pay logic, factored out into
+`src/common/insurance-provider-resolver.ts` during the 2026-10-08 HMO-
+claims investigation - see `docs/audit/phase1-status.md`): given the
 visit's (or patient's) linked `InsuranceProvider`, read `defaultCoPayPct`.
 
 - **`coPayPct` is 0 or unset** → the entire line is HMO-covered → exempt,
   dispensed immediately, no gate at all.
-- **`coPayPct` is between 0 and 100** → the charge is split into two
-  `InvoiceLine`s for that item: a covered portion
-  (`lineTotal * (1 - coPayPct/100)`), dispensed immediately and exempt from
-  the gate, and a co-pay portion (`lineTotal * coPayPct/100`), which goes
-  through the normal prepare/await-payment/release flow like a cash charge.
-  Both lines reference the same `PrescriptionItem` for traceability; the
-  item's own `dispensedQty` reflects the exempt (covered) portion
-  immediately, and `preparedQty` tracks the co-pay portion separately until
-  released - the item can therefore show as partially-dispensed-partially-
-  awaiting, which the queue surfaces plainly (section 7) rather than
-  collapsing into one ambiguous status.
+- **`coPayPct` is any value above 0** → the WHOLE item is held - full
+  quantity, full charge, one `InvoiceLine` at the item's real price - until
+  the carrying invoice is paid, then the full quantity releases at once.
+  **Changed 2026-10-08** from an earlier design that split both the charge
+  and the quantity proportionally into an immediately-dispensed covered
+  share and a gated co-pay share: in practice a patient watching only part
+  of their prescription come out of the bag, with no clear reason why,
+  was worse than just holding the whole item - see item 12 for the exact
+  mechanics and why this does not affect claim amounts. **An unconfigured
+  provider is not meant to be the same as a genuine 0% co-pay, even though
+  it resolves the same way today** (`defaultCoPayPct` left blank reads as
+  0, per `insurance-provider-resolver.ts` - see
+  `docs/audit/phase1-status.md`'s co-pay-field finding): the item dispenses
+  immediately, fully exempt, same as a real 0%-co-pay provider, silently
+  billing the insurer for the whole amount. Set every provider's co-pay
+  before go-live - see `docs/DEPLOYMENT.md` section 5.
 
 ### Inpatient, billed to the admission's running bill (depends on F1)
 
@@ -264,10 +271,10 @@ preparation" (with the mandatory reason field, same inline pattern as item
 Two things that already exist compose cleanly here, by design rather than
 by accident:
 
-- **Co-pay** splits one item's charge into an exempt line and a gated line
-  (section 5) - both can land on the same open invoice for the visit, since
-  both `postCharge` calls happen inside the same transaction against the
-  same resolved invoice.
+- **Co-pay** (section 5) either dispenses an item exempt and immediate (0%
+  co-pay) or holds the whole item gated (any co-pay above 0) - either way
+  it is one `postCharge` call against the visit's currently-open invoice,
+  same as any other charge.
 - **Supplementary invoices** (FUNC-2): if the invoice carrying an earlier
   preparation becomes locked before this item is released (a payment or
   claim lands on it for unrelated reasons), the *next* preparation for that
@@ -337,9 +344,10 @@ Both `permissions.ts` and `apps/web/lib/permissions.ts` need the new action.
 - Integration: cancel-preparation voids the invoice line (reusing
   `removeInvoiceLine`), requires a reason, is audited, and resets the item
   back to `PENDING` with zero stock impact.
-- Integration: HMO item with `coPayPct = 30` splits into an immediately-
-  dispensed covered line and a gated co-pay line; `coPayPct = 0` dispenses
-  the whole item immediately with no gated line at all.
+- Integration: HMO item with `coPayPct = 30` holds the whole item gated
+  (nothing dispensed, nothing drawn), then releases the full quantity in
+  one step once the invoice is paid; `coPayPct = 0` dispenses the whole
+  item immediately with no gate at all.
 - Integration: a patient with an active `ADMITTED` admission bypasses the
   gate entirely regardless of the tenant setting (depends on F1's
   `resolveBillingTarget`).
@@ -375,18 +383,26 @@ the queue UI. Built **after** F1, so the inpatient exemption had
 
 ## 12. Implementation notes
 
-- **The co-pay split is a quantity split, not a money-only split on one
-  combined line.** Section 5's wording ("the item's own `dispensedQty`
-  reflects the exempt portion immediately, and `preparedQty` tracks the
-  co-pay portion separately") only holds together physically if those two
-  fields track two different, real quantities of the same drug - stock
-  cannot be half-drawn against one money total. Built as: `coveredQty =
-  round(delta * (1 - coPayPct / 100))`, `coPayQty = delta - coveredQty`,
-  each posted as its own `InvoiceLine` at the same unit price. A delta of 10
-  at 30% co-pay becomes 7 covered (dispensed immediately, stock drawn now)
-  and 3 gated (charged now, stock drawn only at `release()`), confirmed by
-  a dedicated test. 0% and 100% co-pay are the two edges of the same
-  formula, not special-cased separately.
+- **Whole-item hold, not a quantity or money split (changed 2026-10-08).**
+  The original design split both the quantity and the charge
+  proportionally (`coveredQty = round(delta * (1 - coPayPct / 100))`,
+  `coPayQty = delta - coveredQty`, two separate `InvoiceLine`s) so that a
+  30%-co-pay delta of 10 became 7 dispensed immediately and 3 gated. In
+  practice this meant a patient could watch part of their prescription
+  come out of the bag with no clear reason why only some of it did, and
+  the queue had to represent a single item as simultaneously
+  dispensed-and-awaiting. Replaced with a binary branch in `prepare()`:
+  `coPayPct <= 0` dispenses the whole delta now (unchanged); any co-pay
+  above 0 posts **one** `InvoiceLine` for the full delta at the item's
+  real price and holds the full quantity as `preparedQty` - nothing
+  dispenses, no stock moves, until `release()` confirms the invoice is
+  paid, at which point the full quantity draws and dispenses in one step.
+  `splitCoPayQty()` was deleted rather than kept dead. This does not
+  change what a claim later charges the HMO: the invoice line still
+  carries the item's full real price, and `ClaimsService.generate()`
+  computes the HMO/patient split from the pooled invoice total afterward,
+  exactly as it already does for every other billable line on an HMO
+  visit - the split was never something pharmacy needed to pre-compute.
 - **No insurance provider linked at all resolves to 100% co-pay (fully
   gated), not "exempt."** Section 5's "`coPayPct` is 0 or unset -> exempt"
   describes a *resolved* HMO provider with no co-pay percentage set, not a

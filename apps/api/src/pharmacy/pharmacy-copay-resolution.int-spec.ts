@@ -87,13 +87,15 @@ describe('PharmacyService.prepare - co-pay resolution for a real booking-flow vi
     });
     const item = rx.items[0];
 
-    // 30% co-pay -> 70% covered: round(10*0.7) = 7 covered immediately, 3 gated.
-    // Before the fix this resolved to 0% co-pay: all 10 would dispense
-    // immediately with nothing gated, silently skipping the patient's share.
+    // Any co-pay > 0% holds the WHOLE item (whole-item-hold design,
+    // 2026-10-08 - see pharmacy.service.ts's prepare()): all 10 gated, none
+    // dispensed yet. Before the co-pay resolution fix this resolved to 0%
+    // co-pay: all 10 would have dispensed immediately with nothing gated,
+    // silently skipping the patient's share entirely.
     const prepared = await pharmacy.prepare(pharmacistActor, rx.id, { items: [{ itemId: item.id, quantity: 10 }] });
     const preparedItem = prepared.items.find((it: any) => it.id === item.id);
     expect(preparedItem).toBeDefined();
-    expect(preparedItem!.dispensedQty).toBe(7);
-    expect(preparedItem!.preparedQty).toBe(3);
+    expect(preparedItem!.dispensedQty).toBeFalsy();
+    expect(preparedItem!.preparedQty).toBe(10);
   });
 });

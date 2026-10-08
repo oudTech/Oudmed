@@ -166,7 +166,7 @@ describe('PharmacyService.prepare/release/cancelPreparation (integration - F2)',
     expect(log).not.toBeNull();
   });
 
-  it('HMO co-pay split: 30% co-pay dispenses the covered share immediately and gates only the co-pay share; 0% co-pay gates nothing', async () => {
+  it('HMO co-pay: any co-pay > 0% holds the WHOLE item until paid, then releases the full quantity; 0% co-pay gates nothing', async () => {
     const provider30 = await ownerPrisma.insuranceProvider.create({
       data: { tenantId, name: 'Split HMO', kind: 'HMO', defaultCoPayPct: 30 },
     });
@@ -177,11 +177,25 @@ describe('PharmacyService.prepare/release/cancelPreparation (integration - F2)',
 
     const preparedA = await pharmacy.prepare(pharmacistActor, rxA.id, { items: [{ itemId: itemA.id, quantity: 10 }] });
     const itemAAfter = preparedA.items.find((i) => i.id === itemA.id)!;
-    // 30% co-pay -> 70% covered: round(10*0.7) = 7 covered immediately, 3 gated
-    expect(itemAAfter.dispensedQty).toBe(7);
-    expect(itemAAfter.preparedQty).toBe(3);
+    // Whole-item hold (2026-10-08): no quantity split between a covered
+    // share and a co-pay share - the full 10 is held, nothing dispenses yet.
+    expect(itemAAfter.dispensedQty).toBeFalsy();
+    expect(itemAAfter.preparedQty).toBe(10);
     const batchAAfter = await ownerPrisma.drugBatch.findUniqueOrThrow({ where: { id: batchA.id } });
-    expect(batchAAfter.quantity).toBe(13); // only the covered 7 drawn now
+    expect(batchAAfter.quantity).toBe(20); // nothing drawn yet
+
+    // Paying the invoice in full releases the full quantity at once.
+    const lineA = await ownerPrisma.invoiceLine.findFirstOrThrow({ where: { id: itemAAfter.preparedInvoiceLineId! } });
+    await prisma.forTenant(tenantId, (tx) =>
+      billing.postPaymentTx(tx, { tenantId, invoiceId: lineA.invoiceId, amount: Number(lineA.lineTotal), method: 'CASH', payerType: 'HMO', receivedById: pharmacistActor.userId }),
+    );
+    const releasedA = await pharmacy.release(pharmacistActor, rxA.id);
+    expect(releasedA.released).toContain(itemA.id);
+    const itemAFinal = await ownerPrisma.prescriptionItem.findUniqueOrThrow({ where: { id: itemA.id } });
+    expect(itemAFinal.dispensedQty).toBe(10);
+    expect(itemAFinal.preparedQty).toBe(0);
+    const batchAFinal = await ownerPrisma.drugBatch.findUniqueOrThrow({ where: { id: batchA.id } });
+    expect(batchAFinal.quantity).toBe(10); // the full 10 drawn now, in one release
 
     const provider0 = await ownerPrisma.insuranceProvider.create({
       data: { tenantId, name: 'Full Cover HMO', kind: 'HMO', defaultCoPayPct: 0 },
