@@ -117,4 +117,32 @@ describe('ClaimsService.generate - co-pay resolution for a real booking-flow vis
     expect(Number(claim.claimedAmount)).toBe(6000); // 60% claimed, 40% co-pay
     expect(Number(claim.patientResponsibility)).toBe(4000);
   });
+
+  it('eligibleVisits flags an unconfigured provider so the Generate Claims screen can warn - a configured one is not flagged', async () => {
+    const unconfigured = await ownerPrisma.insuranceProvider.create({
+      data: { tenantId, name: 'Unconfigured Copay HMO', kind: 'HMO' }, // no defaultCoPayPct
+    });
+    const configured = await ownerPrisma.insuranceProvider.create({
+      data: { tenantId, name: 'Configured Copay HMO', kind: 'HMO', defaultCoPayPct: 15 },
+    });
+    const patientA = await makePatient(tenantId, { insuranceProviderId: unconfigured.id, hmoName: 'Unconfigured Copay HMO' });
+    const patientB = await makePatient(tenantId, { insuranceProviderId: configured.id, hmoName: 'Configured Copay HMO' });
+
+    const visitA = await schedule.create(actor, { patientId: patientA.id, startsAt: new Date().toISOString(), payerType: 'HMO' as any } as any);
+    const visitB = await schedule.create(actor, { patientId: patientB.id, startsAt: new Date().toISOString(), payerType: 'HMO' as any } as any);
+
+    const { invoiceId: invoiceA } = await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToVisit(tx, { tenantId, userId: actor.userId, visitId: visitA.id, patientId: patientA.id, description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation' }),
+    );
+    const { invoiceId: invoiceB } = await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToVisit(tx, { tenantId, userId: actor.userId, visitId: visitB.id, patientId: patientB.id, description: 'Consultation', quantity: 1, unitPrice: 5000, category: 'Consultation' }),
+    );
+    await prisma.forTenant(tenantId, (tx) => tx.visit.updateMany({ where: { id: { in: [visitA.id, visitB.id] } }, data: { status: 'COMPLETED' } }));
+
+    const eligible: any[] = await claims.eligibleVisits(actor, {} as any);
+    const rowA = eligible.find((e) => e.invoiceId === invoiceA);
+    const rowB = eligible.find((e) => e.invoiceId === invoiceB);
+    expect(rowA.providerCoPayConfigured).toBe(false);
+    expect(rowB.providerCoPayConfigured).toBe(true);
+  });
 });

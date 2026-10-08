@@ -264,8 +264,15 @@ features silently produce wrong numbers (not errors) if these are skipped:
 5. **Wards and bed rates** (`/wards`, if the hospital admits inpatients) -
    `dailyRate`/`dayCaseRate` per ward; a ward with no rate silently holds bed
    charges rather than posting a wrong price (confirmed in `bed-charges.ts`).
-6. **Insurance providers** (`/admin` -> Insurance) - name, co-pay percentage,
-   for every HMO the hospital works with.
+6. **Insurance providers** (`/admin` -> Insurance) - name, co-pay
+   percentage, for every HMO/NHIS/company the hospital works with. A
+   provider left without a co-pay is not "0% patient share" by design - it
+   is unconfigured, and claims/pharmacy resolution falls back to 0%
+   anyway, so every claim against that provider silently bills the insurer
+   for the whole amount and never asks the patient for their share until
+   someone sets the real figure. Both the provider list and the Generate
+   Claims screen show a warning on any provider missing this - do not
+   leave it blank "to fill in later."
 7. **Staff accounts** (`/hr`) - create accounts for reception, nurses,
    doctors, pharmacist, lab staff, accountant as needed; the admin sets each
    person's initial password directly (no invite email).

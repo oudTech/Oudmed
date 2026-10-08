@@ -167,6 +167,10 @@ export interface EligibleVisitDTO {
   patientNumber: string
   providerId: string | null
   providerName: string | null
+  /** Null when there's no resolved provider at all; false when the
+   * provider exists but has no co-pay percentage configured (treated as
+   * 0% - bills the insurer in full); true once it's actually set. */
+  providerCoPayConfigured: boolean | null
   serviceDate: string
   invoiceTotal: string
 }

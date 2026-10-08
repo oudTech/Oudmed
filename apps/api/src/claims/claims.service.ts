@@ -387,7 +387,7 @@ export class ClaimsService {
           visit: {
             include: {
               patient: { select: { firstName: true, lastName: true, patientNumber: true } },
-              insuranceProvider: { select: { id: true, name: true } },
+              insuranceProvider: { select: { id: true, name: true, defaultCoPayPct: true } },
             },
           },
         },
@@ -405,6 +405,11 @@ export class ClaimsService {
           patientNumber: inv.visit!.patient.patientNumber,
           providerId: inv.visit!.insuranceProvider?.id ?? null,
           providerName: inv.visit!.insuranceProvider?.name ?? inv.visit!.hmoName ?? null,
+          // Unset (null), not 0 - lets the picker warn "no co-pay configured"
+          // distinctly from a provider genuinely configured at 0%.
+          providerCoPayConfigured: inv.visit!.insuranceProvider
+            ? inv.visit!.insuranceProvider.defaultCoPayPct != null
+            : null,
           serviceDate: inv.visit!.startsAt.toISOString(),
           invoiceTotal: s(inv.totalAmount),
         }));

@@ -314,13 +314,19 @@ currently admitted patient's charges (an admission's bill is settled in
 aggregate at discharge, not item-by-item), and a flagged, audited
 **emergency override** (`pharmacy:dispense-emergency-override` - Pharmacist
 or Hospital Admin, with a mandatory reason, reviewable afterward in a
-dedicated overrides report). A co-pay item's quantity itself splits
-proportionally: at 30% co-pay, a quantity of 10 becomes 7 dispensed
-immediately (the HMO-covered share) and 3 held until the patient's own
-30% is paid - both are independently traceable to their own invoice line.
-If the patient never pays, the held preparation can be cancelled (reason
-required, audited) - the charge is voided and nothing was ever drawn from
-stock, since stock only ever moves at release.
+dedicated overrides report). Any co-pay above 0% holds the **whole item** -
+full quantity, one invoice line at its real price - until the invoice is
+paid, then the full quantity releases at once; nothing dispenses, nothing
+draws from stock, partially. (Before 2026-10-08 this split both the
+quantity and the charge proportionally - 30% co-pay on a quantity of 10
+meant 7 dispensed immediately and 3 held - changed because a patient
+watching only part of their prescription come out, with no clear reason
+why, was worse than a single clear wait.) An **unconfigured** provider
+(no co-pay % set in Admin > Insurance) is not "0% decided" - it resolves
+to 0% by default and dispenses exempt the same as a genuine 0%-co-pay
+provider would; see 3.13. If the patient never pays, the held preparation
+can be cancelled (reason required, audited) - the charge is voided and
+nothing was ever drawn from stock, since stock only ever moves at release.
 
 **Who can.** `prescription:dispense` / `pharmacy:manage` - Pharmacist,
 Hospital Admin.
@@ -485,6 +491,15 @@ providers (name, co-pay percentage, used throughout registration/billing/
 claims). Deletes are guarded when a record is actually in use (an IN_USE
 error suggests deactivating instead), and every change is audited.
 
+**Set the co-pay for every insurance provider before go-live.** A provider
+left without one is not treated as "0% patient share" by convention - it
+is unconfigured, and claims/pharmacy resolution falls back to 0% co-pay
+until someone sets the real figure, meaning the claim bills the insurer
+for the whole amount and the patient is never asked for their share. The
+provider list and the Generate Claims screen both show a warning on any
+provider with no co-pay set, specifically so this is never missed silently
+on a real claim.
+
 **Who can.** `admin:settings` - Hospital Admin only.
 
 ### 3.14 HR
@@ -534,7 +549,9 @@ role tiering within the platform console today.
 Every example below uses the HMO co-pay convention this codebase uses
 throughout: `defaultCoPayPct` is **the patient's own share**. A provider
 configured at 20% means the HMO covers 80% and the patient covers 20% -
-`claimedAmount = gross * (1 - coPayPct / 100)`.
+`claimedAmount = gross * (1 - coPayPct / 100)`. An unconfigured provider
+(`defaultCoPayPct` left blank) resolves to 0% co-pay, not "not yet
+decided" - see 3.13.
 
 ### 4.1 Outpatient, cash patient
 

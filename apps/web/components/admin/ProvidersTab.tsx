@@ -95,7 +95,16 @@ export function ProvidersTab() {
                     <td className="px-3 py-2.5 text-gray-600">{row.phone ?? '-'}</td>
                     <td className="px-3 py-2.5 text-gray-600">{row.contactPerson ?? '-'}</td>
                     <td className="px-3 py-2.5 text-gray-600">
-                      {row.defaultCoPayPct != null ? `${Number(row.defaultCoPayPct)}%` : <span className="text-amber-600">Not set</span>}
+                      {row.defaultCoPayPct != null ? (
+                        `${Number(row.defaultCoPayPct)}%`
+                      ) : (
+                        <span
+                          className="text-amber-600 font-medium"
+                          title={`No co-pay configured for ${row.name} - claims will bill 100% to the insurer.`}
+                        >
+                          Not set
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-gray-600">{row.patientCount}</td>
                     <td className="px-3 py-2.5"><StatusPill active={row.isActive} /></td>

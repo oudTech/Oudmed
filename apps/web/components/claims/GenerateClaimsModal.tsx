@@ -47,6 +47,9 @@ export function GenerateClaimsModal({ open, onClose }: { open: boolean; onClose:
     })
   const rows = eligible.data ?? []
   const allPicked = rows.length > 0 && rows.every((r) => picked.has(r.invoiceId))
+  const noCoPayProviders = [...new Set(
+    rows.filter((r) => r.providerCoPayConfigured === false && r.providerName).map((r) => r.providerName as string),
+  )]
 
   return (
     <Modal open={open} onClose={onClose} title="Generate claims" width={720} align="center">
@@ -60,6 +63,14 @@ export function GenerateClaimsModal({ open, onClose }: { open: boolean; onClose:
         <p className="text-xs text-gray-500">
           Completed HMO / NHIS / company visits in this window whose invoice has no claim yet.
         </p>
+
+        {noCoPayProviders.length > 0 && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+            No co-pay configured for {noCoPayProviders.join(', ')} - claims against{' '}
+            {noCoPayProviders.length === 1 ? 'it' : 'them'} will bill 100% to the insurer. Set it in Admin &gt;
+            Insurance before generating, if that is not intended.
+          </div>
+        )}
 
         <div className="border border-gray-100 rounded-xl overflow-x-auto max-h-72 overflow-y-auto">
           <table className="w-full text-sm whitespace-nowrap">
@@ -89,7 +100,12 @@ export function GenerateClaimsModal({ open, onClose }: { open: boolean; onClose:
                     <td className="px-3 py-2 text-gray-800">
                       {r.patientName}<span className="block text-xs text-gray-400">{r.patientNumber}</span>
                     </td>
-                    <td className="px-3 py-2 text-gray-600">{r.providerName ?? <span className="text-amber-600">no provider</span>}</td>
+                    <td className="px-3 py-2 text-gray-600">
+                      {r.providerName ?? <span className="text-amber-600">no provider</span>}
+                      {r.providerCoPayConfigured === false && (
+                        <span className="block text-[10px] uppercase tracking-wide text-amber-600">No co-pay set</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-gray-500">
                       {new Date(r.serviceDate).toLocaleDateString('en-GB')}
                       {r.isSupplementary && <span className="block text-[10px] uppercase tracking-wide text-amber-600">Supplementary</span>}
