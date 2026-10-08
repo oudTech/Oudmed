@@ -634,6 +634,7 @@ function GenerateClaimModal({
   onDone: () => void
 }) {
   const toast = useToast()
+  const qc = useQueryClient()
   const [needsOverride, setNeedsOverride] = useState(false)
   const [reason, setReason] = useState('')
 
@@ -644,6 +645,13 @@ function GenerateClaimModal({
   const m = useMutation({
     mutationFn: (overridePaReason?: string) => claimsApi.generateForAdmission(admissionId, overridePaReason),
     onSuccess: (res) => {
+      // Same claims-list cache invalidation every other claim-generating
+      // mutation does (GenerateClaimsModal, ClaimDetailDrawer, etc.) - this
+      // one was missing it, so a newly generated admission claim could exist
+      // correctly in the database but not show up on /claims until something
+      // unrelated forced a refetch.
+      qc.invalidateQueries({ queryKey: ['claims'] })
+      qc.invalidateQueries({ queryKey: ['claim-receivables'] })
       toast(`Claim ${res.claimNumber} generated`, 'success')
       onClose(); onDone()
     },
