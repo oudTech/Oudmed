@@ -140,11 +140,11 @@ const MAIN_NAV: {
   { href: '/wards',     label: 'Wards & Beds',     Icon: WardIcon,    action: 'patient:read' },
   { href: '/pharmacy',  label: 'Pharmacy',         Icon: PharmacyIcon, action: 'pharmacy:manage' },
   { href: '/lab',       label: 'Laboratory',       Icon: LabIcon,     action: 'order:result' },
-  { href: '/hr',        label: 'Human resources',  Icon: HRIcon       },
-  { href: '/reports',   label: 'Reports',          Icon: ReportsIcon  },
+  { href: '/hr',        label: 'Human resources',  Icon: HRIcon,      action: 'staff:manage' },
+  { href: '/reports',   label: 'Reports',          Icon: ReportsIcon, action: 'reports:view' },
   { href: '/billing',   label: 'Billing',          Icon: BillingIcon, action: 'billing:manage' },
-  { href: '/claims',    label: 'Claims',           Icon: ClaimsIcon   },
-  { href: '/admin',     label: 'Administration',   Icon: AdminIcon    },
+  { href: '/claims',    label: 'Claims',           Icon: ClaimsIcon,  action: 'claims:manage' },
+  { href: '/admin',     label: 'Administration',   Icon: AdminIcon,   action: 'admin:settings' },
 ]
 
 const BOTTOM_NAV = [
