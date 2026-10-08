@@ -9,6 +9,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
 import { assertCan } from '../common/permissions';
 import { nextSequence, type SequenceKind } from '../common/sequence';
+import { resolveInsuranceProvider } from '../common/insurance-provider-resolver';
 import {
   BatchClaimsDto,
   ClaimLineDto,
@@ -431,10 +432,7 @@ export class ClaimsService {
         }
         const visit = await tx.visit.findFirst({
           where: { id: invoice.visitId },
-          include: {
-            patient: true,
-            insuranceProvider: { select: { id: true, defaultCoPayPct: true } },
-          },
+          include: { patient: true },
         });
         if (!visit) {
           skipped.push({ invoiceId, reason: 'Visit not found' });
@@ -448,28 +446,20 @@ export class ClaimsService {
           continue;
         }
 
-        // resolve the provider
-        let providerId = visit.insuranceProviderId ?? visit.patient.insuranceProviderId ?? null;
-        let coPayPct = visit.insuranceProvider?.defaultCoPayPct ?? null;
-        if (!providerId) {
-          const nameGuess = visit.hmoName ?? visit.patient.hmoName ?? visit.patient.insuranceProvider;
-          if (nameGuess) {
-            const match = await tx.insuranceProvider.findFirst({
-              where: { name: { equals: nameGuess, mode: 'insensitive' }, isActive: true },
-              select: { id: true, defaultCoPayPct: true },
-            });
-            if (match) {
-              providerId = match.id;
-              coPayPct = match.defaultCoPayPct;
-            }
-          }
-        }
-        if (!providerId) {
+        const resolved = await resolveInsuranceProvider(tx, {
+          tenantId: actor.tenantId,
+          ownProviderId: visit.insuranceProviderId,
+          patientProviderId: visit.patient.insuranceProviderId,
+          nameGuess: visit.hmoName ?? visit.patient.hmoName ?? visit.patient.insuranceProvider,
+          context: `ClaimsService.generate invoice ${invoiceId}`,
+        });
+        if (!resolved) {
           skipped.push({ invoiceId, reason: 'No insurance provider linked to the visit' });
           continue;
         }
+        const { providerId, coPayPct } = resolved;
 
-        const factor = dec(1).sub(dec(coPayPct ?? 0).div(100));
+        const factor = dec(1).sub(dec(coPayPct).div(100));
         const billable = invoice.lines.filter((l) => l.lineTotal.gt(0));
         if (!billable.length) {
           skipped.push({ invoiceId, reason: 'Invoice has no billable lines' });
@@ -574,33 +564,16 @@ export class ClaimsService {
         throw new BadRequestException('A claim already exists for this admission');
       }
 
-      // resolve the provider - same resolution order as generate(): the
-      // patient's own linked provider first, falling back to a name match
-      let providerId = admission.patient.insuranceProviderId ?? null;
-      let coPayPct: Prisma.Decimal | null = null;
-      if (providerId) {
-        const provider = await tx.insuranceProvider.findFirst({
-          where: { id: providerId },
-          select: { defaultCoPayPct: true },
-        });
-        coPayPct = provider?.defaultCoPayPct ?? null;
-      }
-      if (!providerId) {
-        const nameGuess = admission.hmoName ?? admission.patient.hmoName ?? admission.patient.insuranceProvider;
-        if (nameGuess) {
-          const match = await tx.insuranceProvider.findFirst({
-            where: { name: { equals: nameGuess, mode: 'insensitive' }, isActive: true },
-            select: { id: true, defaultCoPayPct: true },
-          });
-          if (match) {
-            providerId = match.id;
-            coPayPct = match.defaultCoPayPct;
-          }
-        }
-      }
-      if (!providerId) {
+      const resolved = await resolveInsuranceProvider(tx, {
+        tenantId: actor.tenantId,
+        patientProviderId: admission.patient.insuranceProviderId,
+        nameGuess: admission.hmoName ?? admission.patient.hmoName ?? admission.patient.insuranceProvider,
+        context: `ClaimsService.generateForAdmission admission ${admissionId}`,
+      });
+      if (!resolved) {
         throw new BadRequestException('No insurance provider linked to this admission');
       }
+      const { providerId, coPayPct } = resolved;
 
       const invoices = await tx.invoice.findMany({
         where: { admissionId, status: { not: 'CANCELLED' } },
@@ -612,7 +585,7 @@ export class ClaimsService {
         throw new BadRequestException('This admission has no billable charges');
       }
 
-      const factor = dec(1).sub(dec(coPayPct ?? 0).div(100));
+      const factor = dec(1).sub(dec(coPayPct).div(100));
       const lines = billable.map((l) => ({
         invoiceLineId: l.id,
         description: l.description,

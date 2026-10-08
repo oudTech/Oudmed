@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { assertCan, can } from '../common/permissions';
 import { nextSequence } from '../common/sequence';
+import { resolveInsuranceProvider } from '../common/insurance-provider-resolver';
 import { BillingService } from '../billing/billing.service';
 import { BedChargesService } from './bed-charges.service';
 import { UpsertNoteDto, AddNoteAddendumDto } from '../encounters/dto/encounter.dto';
@@ -714,25 +715,13 @@ export class AdmissionsService {
       where: { id: admissionRow.patientId },
       select: { insuranceProviderId: true, hmoName: true, insuranceProvider: true },
     });
-    let coPayPct: Prisma.Decimal | null = null;
-    if (patient?.insuranceProviderId) {
-      const provider = await tx.insuranceProvider.findFirst({
-        where: { id: patient.insuranceProviderId },
-        select: { defaultCoPayPct: true },
-      });
-      coPayPct = provider?.defaultCoPayPct ?? null;
-    }
-    if (coPayPct === null) {
-      const nameGuess = admissionRow.hmoName ?? patient?.hmoName ?? patient?.insuranceProvider;
-      if (nameGuess) {
-        const match = await tx.insuranceProvider.findFirst({
-          where: { name: { equals: nameGuess, mode: 'insensitive' }, isActive: true },
-          select: { defaultCoPayPct: true },
-        });
-        coPayPct = match?.defaultCoPayPct ?? null;
-      }
-    }
-    return balance.mul(coPayPct ?? D0()).div(100);
+    const resolved = await resolveInsuranceProvider(tx, {
+      tenantId: admission.tenantId,
+      patientProviderId: patient?.insuranceProviderId ?? null,
+      nameGuess: admissionRow.hmoName ?? patient?.hmoName ?? patient?.insuranceProvider,
+      context: `AdmissionsService.patientPayableBalance admission ${admission.id}`,
+    });
+    return balance.mul(resolved?.coPayPct ?? 0).div(100);
   }
 
   /** Shared by applyDeposit() and discharge()'s automatic step. Allocates

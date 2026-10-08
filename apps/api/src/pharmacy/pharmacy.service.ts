@@ -11,6 +11,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
 import { assertCan, can } from '../common/permissions';
 import { lagosCalendarDate } from '../common/lagos-time';
+import { resolveInsuranceProvider } from '../common/insurance-provider-resolver';
 import { DispenseDto, PrepareDto, CancelPreparationDto } from './dto/pharmacy.dto';
 
 interface Actor {
@@ -328,7 +329,7 @@ export class PharmacyService {
       // to the patient's currently-open admission.
       const admissionId = rx.admissionId
         ?? (rx.visitId ? null : await this.billing.resolveBillingTarget(tx, rx.patientId));
-      const coPayPct = admissionId ? 0 : await this.resolveCoPay(tx, rx);
+      const coPayPct = admissionId ? 0 : await this.resolveCoPay(tx, rx, actor.tenantId);
 
       const drugIds = [...new Set(rx.items.filter((it) => it.drugId).map((it) => it.drugId as string))].sort();
       for (const drugId of drugIds) {
@@ -399,46 +400,39 @@ export class PharmacyService {
   }
 
   /** Given the visit's (or, with no visit, the patient's own) linked
-   * InsuranceProvider, the patient's co-pay percentage - same resolution
-   * order `ClaimsService.generate()` uses. A patient with no linked provider
-   * at all is a cash patient: 100, the whole charge is gated, not exempt. */
-  private async resolveCoPay(tx: Prisma.TransactionClient, rx: { visitId: string | null; patientId: string }): Promise<number> {
+   * InsuranceProvider, the patient's co-pay percentage - same resolver
+   * `ClaimsService.generate()` uses. A patient with no linked provider at
+   * all is a cash patient: 100, the whole charge is gated, not exempt. */
+  private async resolveCoPay(
+    tx: Prisma.TransactionClient,
+    rx: { visitId: string | null; patientId: string },
+    tenantId: string,
+  ): Promise<number> {
     if (rx.visitId) {
       const visit = await tx.visit.findFirst({
         where: { id: rx.visitId },
-        include: { patient: true, insuranceProvider: { select: { id: true, defaultCoPayPct: true } } },
+        include: { patient: true },
       });
       if (visit) {
-        let providerId = visit.insuranceProviderId ?? visit.patient.insuranceProviderId ?? null;
-        let coPayPct = visit.insuranceProvider?.defaultCoPayPct ?? null;
-        if (!providerId) {
-          const nameGuess = visit.hmoName ?? visit.patient.hmoName ?? visit.patient.insuranceProvider;
-          if (nameGuess) {
-            const match = await tx.insuranceProvider.findFirst({
-              where: { name: { equals: nameGuess, mode: 'insensitive' }, isActive: true },
-              select: { id: true, defaultCoPayPct: true },
-            });
-            if (match) { providerId = match.id; coPayPct = match.defaultCoPayPct; }
-          }
-        }
-        return providerId ? Number(coPayPct ?? 0) : 100;
+        const resolved = await resolveInsuranceProvider(tx, {
+          tenantId,
+          ownProviderId: visit.insuranceProviderId,
+          patientProviderId: visit.patient.insuranceProviderId,
+          nameGuess: visit.hmoName ?? visit.patient.hmoName ?? visit.patient.insuranceProvider,
+          context: `PharmacyService.resolveCoPay visit ${rx.visitId}`,
+        });
+        return resolved ? resolved.coPayPct : 100;
       }
     }
-    const patient = await tx.patient.findFirst({
-      where: { id: rx.patientId },
-      include: { insurer: { select: { id: true, defaultCoPayPct: true } } },
-    });
+    const patient = await tx.patient.findFirst({ where: { id: rx.patientId } });
     if (!patient) return 100;
-    let providerId = patient.insuranceProviderId ?? null;
-    let coPayPct = patient.insurer?.defaultCoPayPct ?? null;
-    if (!providerId && patient.insuranceProvider) {
-      const match = await tx.insuranceProvider.findFirst({
-        where: { name: { equals: patient.insuranceProvider, mode: 'insensitive' }, isActive: true },
-        select: { id: true, defaultCoPayPct: true },
-      });
-      if (match) { providerId = match.id; coPayPct = match.defaultCoPayPct; }
-    }
-    return providerId ? Number(coPayPct ?? 0) : 100;
+    const resolved = await resolveInsuranceProvider(tx, {
+      tenantId,
+      patientProviderId: patient.insuranceProviderId,
+      nameGuess: patient.insuranceProvider,
+      context: `PharmacyService.resolveCoPay patient ${rx.patientId}`,
+    });
+    return resolved ? resolved.coPayPct : 100;
   }
 
   /** Splits a delta quantity into an immediately-dispensed covered share and
