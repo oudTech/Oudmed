@@ -306,9 +306,13 @@ doesn't have *enough* unexpired stock), never a silent partial dispense.
 
 **Dispensing, gate on (`requirePaymentBeforeDispense`, per-hospital
 setting, Settings > Pharmacy).** A cash or HMO co-pay charge is *prepared*
-(charged, posted to the invoice) but held back from stock until that
-invoice reaches `PAID`; the pharmacist then *releases* it, which is the
-point stock actually moves. Three things still dispense immediately
+(charged, posted to the invoice) but held back from stock until the
+**patient's own payable share** of that invoice is paid - co-pay plus any
+other uncovered charges on it, never the HMO's own share, which only
+settles weeks later by claim remittance; the pharmacist then *releases*
+it, which is the point stock actually moves. A cash patient's payable
+share is the whole invoice, same as before. Three things still dispense
+immediately
 regardless of the setting: a fully HMO-covered item (0% co-pay), a
 currently admitted patient's charges (an admission's bill is settled in
 aggregate at discharge, not item-by-item), and a flagged, audited

@@ -74,19 +74,41 @@ export class PharmacyService {
       const nm = new Map(users.map((u) => [u.id, u.fullName]));
 
       // F2: "paid, ready to dispense" vs "awaiting payment" is computed live
-      // by joining every prepared line to its invoice's current status here,
-      // never cached on the item itself - a payment reversal is reflected
-      // immediately on the next read, with no separate reconciliation step.
+      // by joining every prepared line to its invoice here, never cached on
+      // the item itself - a payment reversal is reflected immediately on
+      // the next read, with no separate reconciliation step. The gate is
+      // the PATIENT's own payable share (co-pay plus any uncovered charges
+      // on the same invoice), not the whole invoice - see
+      // patientPayableAmount()/release() for why.
       const lineIds = [
         ...new Set(rows.flatMap((r) => r.items.map((it) => it.preparedInvoiceLineId).filter((x): x is string => !!x))),
       ];
       const lines = lineIds.length
         ? await tx.invoiceLine.findMany({
             where: { id: { in: lineIds } },
-            select: { id: true, invoice: { select: { status: true } } },
+            select: {
+              id: true,
+              invoice: {
+                select: {
+                  id: true, totalAmount: true, visitId: true, patientId: true,
+                  payments: { select: { amount: true, reversedAt: true } },
+                },
+              },
+            },
           })
         : [];
-      const paidByLineId = new Map(lines.map((l) => [l.id, l.invoice.status === 'PAID']));
+      const payableByInvoiceId = new Map<string, Prisma.Decimal>();
+      for (const invoiceId of new Set(lines.map((l) => l.invoice.id))) {
+        const inv = lines.find((l) => l.invoice.id === invoiceId)!.invoice;
+        payableByInvoiceId.set(invoiceId, await this.patientPayableAmount(tx, inv, tenantId));
+      }
+      const statusByLineId = new Map(
+        lines.map((l) => {
+          const totalPaid = l.invoice.payments.filter((p) => !p.reversedAt).reduce((s, p) => s.add(p.amount), D0());
+          const outstanding = payableByInvoiceId.get(l.invoice.id)!.sub(totalPaid);
+          return [l.id, { paid: outstanding.lte(0), awaitingAmount: outstanding.gt(0) ? outstanding.toString() : null }];
+        }),
+      );
 
       return rows.map((r) => ({
         id: r.id,
@@ -113,11 +135,21 @@ export class PharmacyService {
           quantityOnHand: it.drug?.quantityOnHand ?? null,
           preparedQty: it.preparedQty,
           preparedUnitPrice: it.preparedUnitPrice ? it.preparedUnitPrice.toString() : null,
-          // true = paid, ready to release; false = still awaiting payment;
-          // null = nothing prepared, or a zero-price preparation with no
-          // invoice line to check at all (releases unconditionally).
+          // true = the patient's payable share is covered, ready to release;
+          // false = still awaiting (some of) that share; null = nothing
+          // prepared, or a zero-price preparation with no invoice line to
+          // check at all (releases unconditionally).
           preparedInvoicePaid:
-            it.preparedQty > 0 ? (it.preparedInvoiceLineId ? paidByLineId.get(it.preparedInvoiceLineId) ?? false : true) : null,
+            it.preparedQty > 0
+              ? (it.preparedInvoiceLineId ? statusByLineId.get(it.preparedInvoiceLineId)?.paid ?? false : true)
+              : null,
+          // The patient's own outstanding balance still owed before this
+          // item can release - null once paid or not applicable. Never the
+          // HMO's share.
+          preparedAwaitingAmount:
+            it.preparedQty > 0 && it.preparedInvoiceLineId
+              ? statusByLineId.get(it.preparedInvoiceLineId)?.awaitingAmount ?? null
+              : null,
         })),
       }));
     });
@@ -445,6 +477,22 @@ export class PharmacyService {
     return resolved ? resolved.coPayPct : 100;
   }
 
+  /** The portion of an invoice's total the PATIENT is responsible for -
+   * co-pay plus any uncovered charges on the same invoice - not the HMO's
+   * share, which is only settled weeks later at remittance. Reuses
+   * resolveCoPay() (the same resolution the gate itself and
+   * ClaimsService.generate() use), so "what the patient owes" can never
+   * drift from "what the gate checks". A cash patient resolves to 100%
+   * (the whole invoice), matching the pre-2026-10-09 behaviour exactly. */
+  private async patientPayableAmount(
+    tx: Prisma.TransactionClient,
+    invoice: { totalAmount: Prisma.Decimal; visitId: string | null; patientId: string },
+    tenantId: string,
+  ): Promise<Prisma.Decimal> {
+    const coPayPct = await this.resolveCoPay(tx, { visitId: invoice.visitId, patientId: invoice.patientId }, tenantId);
+    return invoice.totalAmount.mul(coPayPct).div(100);
+  }
+
   /** Posts one item's charge to wherever this prescription's charges go -
    * same admission/visit/chart-only routing `dispense()` uses. */
   private async chargeDelta(
@@ -479,11 +527,19 @@ export class PharmacyService {
 
   /**
    * F2: for every item with `preparedQty > 0`, re-fetches its specific
-   * `preparedInvoiceLineId`'s parent invoice (never a cached "paid" flag) and
-   * releases it - draws stock, bumps `dispensedQty`, clears the prepared
-   * state - only once that invoice is genuinely `PAID`. All-or-nothing per
-   * item: an invoice still `UNPAID`/`PARTIAL` leaves that item untouched and
-   * reported back, never a partial stock draw against a partially-settled bill.
+   * `preparedInvoiceLineId`'s parent invoice (never a cached "paid" flag)
+   * and releases it - draws stock, bumps `dispensedQty`, clears the
+   * prepared state - once the PATIENT's own payable share of that invoice
+   * (co-pay plus any uncovered charges, `patientPayableAmount()` - not the
+   * HMO's share, which only settles weeks later at remittance) is covered.
+   * Changed 2026-10-09: this used to require the whole invoice `PAID`,
+   * which for an HMO patient meant waiting on the insurer's remittance
+   * before the patient could ever collect drugs they had already paid
+   * their own share for. A cash patient (coPayPct resolves to 100%) still
+   * needs the whole invoice paid, unchanged. All-or-nothing per item: a
+   * patient balance still outstanding leaves that item untouched and
+   * reported back, never a partial stock draw against a partially-settled
+   * bill.
    */
   async release(actor: Actor, id: string) {
     assertCan(actor.role, 'prescription:dispense');
@@ -509,22 +565,22 @@ export class PharmacyService {
           const invoice = line
             ? await tx.invoice.findFirst({
                 where: { id: line.invoiceId },
-                select: { status: true, totalAmount: true, payments: { select: { amount: true, reversedAt: true } } },
+                select: { totalAmount: true, visitId: true, patientId: true, payments: { select: { amount: true, reversedAt: true } } },
               })
             : null;
           if (invoice) {
-            paid = invoice.status === 'PAID';
-            if (!paid) {
-              const totalPaid = invoice.payments.filter((p) => !p.reversedAt).reduce((s, p) => s.add(p.amount), D0());
-              balance = invoice.totalAmount.sub(totalPaid);
-            }
+            const totalPaid = invoice.payments.filter((p) => !p.reversedAt).reduce((s, p) => s.add(p.amount), D0());
+            const patientPayable = await this.patientPayableAmount(tx, invoice, actor.tenantId);
+            const outstanding = patientPayable.sub(totalPaid);
+            paid = outstanding.lte(0);
+            if (!paid) balance = outstanding;
           }
         }
         // no preparedInvoiceLineId at all means the item was prepared at a
         // zero price (nothing was ever charged) - nothing to check payment
         // against, so it releases unconditionally.
         if (!paid) {
-          stillAwaiting.push({ itemId: it.id, drugName: it.drugName, reason: `Invoice not fully paid (balance: ${balance.toString()})` });
+          stillAwaiting.push({ itemId: it.id, drugName: it.drugName, reason: `Awaiting patient payment (balance: ${balance.toString()})` });
           continue;
         }
         await this.releaseItem(tx, actor, rx, it);

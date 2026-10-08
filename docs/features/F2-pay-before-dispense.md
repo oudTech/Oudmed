@@ -110,31 +110,48 @@ now carries the prepared line(s) alongside whatever else is on it.
 
 **Constraint, stated plainly rather than hidden**: because this app has no
 per-line payment tracking (section 1), "has this charge been paid" is
-answered at the *invoice* level - the invoice carrying the prepared line
-must reach `PAID` status, not merely `PARTIAL`. **This means a patient must
-clear the whole invoice balance - including an unrelated consultation
-charge on the same visit - before drugs on that invoice can be released,
-not just the pharmacy amount.** This is a real trade-off of the current
-billing model, not an oversight; a future per-line reservation/payment
-model would relax it, but is out of scope here. In practice this rarely
-bites: a prepared pharmacy charge usually shares an invoice with that same
-visit's consultation/lab charges, which a patient typically settles
-together at the same billing-desk visit - but it is a real constraint when
-it does not, and both the doc and the UI say so exactly, not vaguely:
+answered at the *invoice* level - but **only for the PATIENT's own
+payable share of it, not the invoice's full total.** Changed 2026-10-09
+(`patientPayableAmount()`, section 12): the gate used to require the whole
+invoice `PAID`, which for an HMO patient meant also waiting on the HMO's
+own share - money that only arrives weeks later via claim remittance, by
+which point a patient who had already paid their own co-pay in full
+should long since have had their drugs. The gate now compares total
+payments against `invoice.totalAmount * coPayPct / 100` (the same
+resolver `ClaimsService.generate()` uses), which for a cash patient
+(coPayPct resolves to 100%) is still the whole invoice, unchanged - the
+fix is specific to HMO co-pay patients.
 
-- **"Awaiting payment" status copy** (section 6): *"Awaiting payment - the
-  full invoice balance must be cleared, including any other charges on it,
-  before these items can be released."*
-- **Release-blocked error** (if release is attempted before the invoice is
-  `PAID`): *"This invoice is not fully paid yet (balance: ₦X). Settle the
-  whole invoice, not just this prescription, before releasing these items."*
+**What is still a real constraint, correctly scoped now**: a patient must
+clear *their own* full payable share on that invoice - including an
+unrelated consultation co-pay on the same visit, not just this drug's own
+co-pay - before any item on it releases, since payments aren't tracked
+per line. A future per-line reservation/payment model would relax this
+further, but is out of scope here. In practice this rarely bites: a
+prepared pharmacy charge usually shares an invoice with that same visit's
+consultation/lab charges, settled together at the same billing-desk
+visit - but it is real when it does not, and both the doc and the UI say
+so exactly:
+
+- **"Awaiting payment" status copy** (section 6): *"Awaiting patient
+  payment - the patient's own payable share (co-pay plus any uncovered
+  charges on the same invoice) must be cleared before these items can be
+  released. An HMO's own share, settled later by claim, is never part of
+  this wait."*
+- **Release-blocked reason** (if release is attempted before the
+  patient's share clears): *"Awaiting patient payment (balance: ₦X)"* -
+  X is the patient's own remaining balance, never the HMO's.
 
 ### Alternative considered: a dedicated pharmacy-only invoice
 
-A drugs-only invoice, kept separate from that visit's consultation/lab
-invoice, would remove this friction entirely - a patient could pay for just
-their drugs without needing to clear an unrelated charge. It is a real,
-boundedly-sized alternative, not dismissed here as impractical:
+Still relevant after the 2026-10-09 patient-payable fix above - that fix
+removed the HMO-share part of this friction (a co-pay patient no longer
+waits on remittance), not the "other uncovered charges on the same
+invoice" part. A drugs-only invoice, kept separate from that visit's
+consultation/lab invoice, would remove the remaining friction entirely - a
+patient could pay for just their drugs without needing to clear an
+unrelated charge. It is a real, boundedly-sized alternative, not dismissed
+here as impractical:
 
 - **What it would take**: `prepare()` would resolve a *second*,
   category-scoped open invoice for the visit (a new
@@ -163,15 +180,16 @@ boundedly-sized alternative, not dismissed here as impractical:
 ### Release (`POST /pharmacy/prescriptions/:id/release`)
 
 For each item with `preparedQty > 0`: re-fetch `preparedInvoiceLineId`'s
-parent invoice (never trust a cached "paid" flag from the queue) and confirm
-`invoice.status === 'PAID'`. If so: draw stock via the existing
-`drawStockFefo` (same FEFO/expiry-cutoff logic, unchanged) for
-`preparedQty`, set `dispensedQty += preparedQty`, `dispenseUnitPrice =
-preparedUnitPrice`, clear the `prepared*` fields, and mark the item
-physically handed over. If the invoice is not yet `PAID`, the item is left
-untouched and reported back as still awaiting payment - release is
-all-or-nothing per item, never a partial stock draw for a partially
-resolved invoice. Audited (`RELEASE_DISPENSE`).
+parent invoice (never trust a cached "paid" flag from the queue) and
+confirm total payments on it cover `patientPayableAmount()` - the
+patient's own share, not the invoice's full total (section 12). If so:
+draw stock via the existing `drawStockFefo` (same FEFO/expiry-cutoff
+logic, unchanged) for `preparedQty`, set `dispensedQty += preparedQty`,
+`dispenseUnitPrice = preparedUnitPrice`, clear the `prepared*` fields, and
+mark the item physically handed over. If the patient's share is not yet
+covered, the item is left untouched and reported back as still awaiting
+payment - release is all-or-nothing per item, never a partial stock draw
+for a partially resolved invoice. Audited (`RELEASE_DISPENSE`).
 
 ### If the patient never pays: cancel the preparation
 
@@ -251,16 +269,19 @@ surfaced in the same admin-facing manual-overrides report item 9 built
 `DispensingQueue.tsx` and the prescriptions list already group by item. Per
 item, the status pill gains two new states on top of the existing ones:
 
-- **"Awaiting payment"** - `preparedQty > 0`, parent invoice not yet `PAID`.
-  Shown with the exact copy from section 4: *"Awaiting payment - the full
-  invoice balance must be cleared, including any other charges on it,
-  before these items can be released."* - naming the whole-invoice
-  constraint up front rather than letting a patient discover it only when
-  release is attempted.
-- **"Paid - ready to dispense"** - `preparedQty > 0`, parent invoice is
-  `PAID`. Computed live by joining to the invoice on read, never cached, so
-  a payment reversal (item 9's existing `reversePayment`) is immediately
-  reflected back to "Awaiting payment" with no separate reconciliation step.
+- **"Awaiting patient payment: ₦X"** - `preparedQty > 0`, the patient's own
+  payable share (`patientPayableAmount()`, section 12) not yet covered. X
+  is that specific outstanding balance, never the HMO's. Shown with the
+  exact copy from section 4 the first time a patient sees it: *"Awaiting
+  patient payment - the patient's own payable share (co-pay plus any
+  uncovered charges on the same invoice) must be cleared before these
+  items can be released. An HMO's own share, settled later by claim, is
+  never part of this wait."*
+- **"Paid - ready to dispense"** - `preparedQty > 0`, the patient's payable
+  share is covered. Computed live by joining to the invoice on read, never
+  cached, so a payment reversal (item 9's existing `reversePayment`) is
+  immediately reflected back to "Awaiting patient payment" with no
+  separate reconciliation step.
 
 A "Release" button appears only in the second state; a "Cancel
 preparation" (with the mandatory reason field, same inline pattern as item
@@ -311,14 +332,18 @@ Both `permissions.ts` and `apps/web/lib/permissions.ts` need the new action.
     off does not silently auto-release unpaid preparations. This is a
     deliberate safety choice - a toggle in Settings should never cause
     drugs to leave the pharmacy.
-- **Partial payment, invoice `PARTIAL` not `PAID`** → release blocked for
-  every item on that invoice (section 4's stated constraint), reported
-  clearly rather than silently doing nothing.
+- **Partial payment, less than the patient's payable share** → release
+  blocked for every item on that invoice (section 4's stated constraint),
+  reported clearly with the real outstanding amount rather than silently
+  doing nothing. Once total payments reach the patient's share, release
+  proceeds even if the invoice as a whole is still `PARTIAL` (the HMO's
+  share outstanding) - this is the 2026-10-09 fix's entire point.
 - **Two different prescriptions share one invoice, one pays, one doesn't**
   → not possible for *this* constraint to misfire, since release checks are
   per-item against that item's own specific invoice; if both prescriptions'
   prepared lines are on the same invoice, both are gated by the same
-  invoice's status (expected, since it is genuinely one unsettled bill).
+  invoice's patient-payable balance (expected, since it is genuinely one
+  unsettled bill from the patient's side).
 - **Co-pay percentage changes on the provider after a line is already
   prepared** → the already-posted `InvoiceLine`'s amounts are frozen (same
   reasoning as F1's ward-rate changes); only future preparations see the
@@ -338,9 +363,15 @@ Both `permissions.ts` and `apps/web/lib/permissions.ts` need the new action.
 
 - Unit/integration: prepare posts a charge with no stock movement
   (`DrugBatch.quantity` unchanged, `Drug.quantityOnHand` unchanged);
-  release after the invoice reaches `PAID` draws stock correctly via the
-  existing FEFO/expiry logic; release attempted while the invoice is still
-  `PARTIAL`/`UNPAID` is rejected and makes no stock change.
+  release once the patient's payable share is covered draws stock
+  correctly via the existing FEFO/expiry logic; release attempted before
+  that share is covered is rejected and makes no stock change.
+- Integration (2026-10-09): an HMO patient who pays exactly their own
+  co-pay (not the whole invoice) can release - release never waits on the
+  HMO's own share; an unrelated uncovered charge on the same invoice still
+  blocks release until the patient covers that share too; a cash patient
+  still needs the whole invoice paid, unchanged
+  (`pharmacy-patient-payable-release.int-spec.ts`).
 - Integration: cancel-preparation voids the invoice line (reusing
   `removeInvoiceLine`), requires a reason, is audited, and resets the item
   back to `PENDING` with zero stock impact.
@@ -403,6 +434,21 @@ the queue UI. Built **after** F1, so the inpatient exemption had
   computes the HMO/patient split from the pooled invoice total afterward,
   exactly as it already does for every other billable line on an HMO
   visit - the split was never something pharmacy needed to pre-compute.
+- **The release gate checks the patient's own payable share, not the
+  whole invoice (changed 2026-10-09).** Raised as a direct consequence of
+  the whole-item-hold change above: once an HMO co-pay item's `InvoiceLine`
+  carries the full gross amount (not just the patient's fraction), gating
+  on `invoice.status === 'PAID'` would mean waiting on the HMO's own share
+  too - settled only weeks later at remittance, so a patient who had
+  already paid their own co-pay in full could never collect their drugs.
+  New `patientPayableAmount()` reuses `resolveCoPay()` (the exact same
+  resolver the gate's co-pay decision and `ClaimsService.generate()` both
+  use) to compute `invoice.totalAmount * coPayPct / 100`, and `release()`/
+  `queue()` compare total payments against *that*, not the invoice's full
+  total. A cash patient (`coPayPct` resolves to 100%) still needs the
+  whole invoice paid - the fix is specific to HMO co-pay patients, and
+  does not touch BL-4's separate, still-open "other uncovered charges on
+  the same invoice" friction (the Alternative-considered note above).
 - **No insurance provider linked at all resolves to 100% co-pay (fully
   gated), not "exempt."** Section 5's "`coPayPct` is 0 or unset -> exempt"
   describes a *resolved* HMO provider with no co-pay percentage set, not a

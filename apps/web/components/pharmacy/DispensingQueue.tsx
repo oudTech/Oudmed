@@ -157,8 +157,9 @@ function ReleaseModal({
     <Modal open={open} onClose={onClose} title={`Review · ${rx.patient.firstName} ${rx.patient.lastName}`} width={560} align="center">
       <div className="space-y-3">
         <p className="text-sm text-gray-500">
-          Awaiting payment - the full invoice balance must be cleared, including any other charges on it, before
-          these items can be released.
+          Awaiting patient payment - the patient's own payable share (co-pay plus any uncovered charges on the same
+          invoice) must be cleared before these items can be released. An HMO's own share, settled later by claim,
+          is never part of this wait.
         </p>
         <div className="border border-gray-100 rounded-xl overflow-hidden divide-y divide-gray-100">
           {prepared.map((it) => {
@@ -178,7 +179,9 @@ function ReleaseModal({
                       className="text-xs font-medium rounded-full px-2 py-0.5"
                       style={ready ? { color: '#047857', backgroundColor: '#EAF7F0' } : { color: '#B45309', backgroundColor: '#FFF6E5' }}
                     >
-                      {ready ? 'Paid - ready' : 'Awaiting payment'}
+                      {ready
+                        ? 'Paid - ready'
+                        : `Awaiting patient payment${it.preparedAwaitingAmount ? `: ${naira(Number(it.preparedAwaitingAmount))}` : ''}`}
                     </span>
                     <button
                       className="text-xs text-gray-400 hover:text-red-500"
@@ -419,9 +422,10 @@ function DispenseModal({
           the visit invoice (or a new pharmacy invoice if there is no visit).
           {gateOn && !emergency && (
             <span className="block mt-1">
-              This hospital requires payment before dispensing - an HMO-covered or admitted-patient charge still
-              releases immediately; a cash or co-pay charge is prepared and charged now, then held back from stock
-              until the invoice is paid in full.
+              This hospital requires payment before dispensing - a fully HMO-covered or admitted-patient charge
+              still releases immediately; a cash or co-pay charge is prepared and charged now, then held back from
+              stock until the patient's own payable share is paid (an HMO's own share, settled later by claim, is
+              never part of the wait).
             </span>
           )}
         </p>

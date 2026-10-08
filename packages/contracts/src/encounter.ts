@@ -158,10 +158,15 @@ export interface PharmacyQueueItemDTO {
     /** F2: charged and awaiting release - stock not yet drawn for this much. */
     preparedQty: number
     preparedUnitPrice: string | null
-    /** true = its invoice is PAID, ready to release; false = still awaiting
-     * payment; null = nothing prepared, or a zero-price preparation with no
-     * invoice to check (releases unconditionally). Computed live on every
-     * read, never cached. */
+    /** true = the patient's own payable share (co-pay plus any uncovered
+     * charges on the same invoice - never the HMO's share) is covered,
+     * ready to release; false = still awaiting (some of) that share; null
+     * = nothing prepared, or a zero-price preparation with no invoice to
+     * check (releases unconditionally). Computed live on every read, never
+     * cached. */
     preparedInvoicePaid: boolean | null
+    /** The patient's own outstanding balance still owed before this item
+     * can release, as a decimal string; null once paid or not applicable. */
+    preparedAwaitingAmount: string | null
   }[]
 }
