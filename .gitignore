@@ -12,3 +12,9 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .claude/
+
+# Playwright e2e (docs/audit/phase1-status.md Step 3)
+e2e/.auth/
+e2e/.tmp/
+/playwright-report/
+/test-results/

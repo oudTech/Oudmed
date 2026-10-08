@@ -7,9 +7,19 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "test": "turbo test",
-    "lint": "turbo lint"
+    "lint": "turbo lint",
+    "e2e:seed": "ts-node --transpile-only e2e/seed.ts",
+    "e2e": "playwright test",
+    "test:all": "pnpm --filter @oudhealth/api test && pnpm playwright test"
   },
   "devDependencies": {
-    "turbo": "^2.0.0"
+    "@playwright/test": "^1.63.0",
+    "@types/bcryptjs": "^3.0.0",
+    "@types/node": "^26.6.4",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^18.0.6",
+    "ts-node": "^10.9.2",
+    "turbo": "^2.0.0",
+    "typescript": "^5.9.3"
   }
 }
