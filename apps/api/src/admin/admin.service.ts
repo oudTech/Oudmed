@@ -458,6 +458,7 @@ export class AdminService {
           address: dto.address || null,
           contactPerson: dto.contactPerson || null,
           notes: dto.notes || null,
+          defaultCoPayPct: dto.defaultCoPayPct ?? null,
           createdById: actor.userId,
         },
       });
@@ -467,7 +468,7 @@ export class AdminService {
         action: 'CREATE',
         entityType: 'InsuranceProvider',
         entityId: provider.id,
-        metadata: { name: provider.name, kind: provider.kind },
+        metadata: { name: provider.name, kind: provider.kind, defaultCoPayPct: provider.defaultCoPayPct?.toString() ?? null },
       });
       return this.shapeProvider(provider, 0);
     });
@@ -491,14 +492,22 @@ export class AdminService {
           address: dto.address !== undefined ? dto.address || null : undefined,
           contactPerson: dto.contactPerson !== undefined ? dto.contactPerson || null : undefined,
           notes: dto.notes !== undefined ? dto.notes || null : undefined,
+          defaultCoPayPct: dto.defaultCoPayPct !== undefined ? dto.defaultCoPayPct : undefined,
         },
       });
+      const metadata: Record<string, unknown> = {};
+      if (dto.defaultCoPayPct !== undefined) {
+        const before = existing.defaultCoPayPct?.toString() ?? null;
+        const after = provider.defaultCoPayPct?.toString() ?? null;
+        if (before !== after) metadata.defaultCoPayPct = { before, after };
+      }
       await this.audit.record({
         tenantId: actor.tenantId,
         userId: actor.userId,
         action: 'UPDATE',
         entityType: 'InsuranceProvider',
         entityId: id,
+        metadata: Object.keys(metadata).length ? metadata : undefined,
       });
       const patientCount = await this.providerPatientCount(tx, provider.name);
       return this.shapeProvider(provider, patientCount);
@@ -570,6 +579,7 @@ export class AdminService {
       contactPerson: p.contactPerson,
       notes: p.notes,
       isActive: p.isActive,
+      defaultCoPayPct: p.defaultCoPayPct != null ? p.defaultCoPayPct.toString() : null,
       patientCount,
     };
   }

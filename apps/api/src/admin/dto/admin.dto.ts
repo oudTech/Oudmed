@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -57,6 +58,10 @@ export class InsuranceProviderDto {
   @IsOptional() @IsString() @MaxLength(250) address?: string;
   @IsOptional() @IsString() @MaxLength(120) contactPerson?: string;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  /** The patient's share of every claimed line, 0-100. Unset means "not
+   * configured yet" (claims.service.ts treats that as 0, not 100 - see
+   * resolveInsuranceProvider), never a guess. */
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(100) defaultCoPayPct?: number;
 }
 
 export class UpdateInsuranceProviderDto {
@@ -67,4 +72,5 @@ export class UpdateInsuranceProviderDto {
   @IsOptional() @IsString() @MaxLength(250) address?: string;
   @IsOptional() @IsString() @MaxLength(120) contactPerson?: string;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(100) defaultCoPayPct?: number;
 }

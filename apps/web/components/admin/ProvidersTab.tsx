@@ -71,16 +71,16 @@ export function ProvidersTab() {
         <table className="w-full text-sm whitespace-nowrap">
           <thead className="bg-gray-50 text-gray-500">
             <tr>
-              {['Name', 'Type', 'Phone', 'Contact person', 'Patients', 'Status', ''].map((h) => (
+              {['Name', 'Type', 'Phone', 'Contact person', 'Co-pay', 'Patients', 'Status', ''].map((h) => (
                 <th key={h} className="text-left font-medium px-3 py-2.5">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {!list.data ? (
-              <tr><td colSpan={7} className="px-3 py-6 text-gray-400">Loading…</td></tr>
+              <tr><td colSpan={8} className="px-3 py-6 text-gray-400">Loading…</td></tr>
             ) : list.data.rows.length === 0 ? (
-              <tr><td colSpan={7} className="px-3 py-6 text-gray-400 text-center">No providers match this view.</td></tr>
+              <tr><td colSpan={8} className="px-3 py-6 text-gray-400 text-center">No providers match this view.</td></tr>
             ) : (
               list.data.rows.map((row) => {
                 const badge = KIND_BADGE[row.kind] ?? KIND_BADGE.HMO
@@ -94,6 +94,9 @@ export function ProvidersTab() {
                     </td>
                     <td className="px-3 py-2.5 text-gray-600">{row.phone ?? '-'}</td>
                     <td className="px-3 py-2.5 text-gray-600">{row.contactPerson ?? '-'}</td>
+                    <td className="px-3 py-2.5 text-gray-600">
+                      {row.defaultCoPayPct != null ? `${Number(row.defaultCoPayPct)}%` : <span className="text-amber-600">Not set</span>}
+                    </td>
                     <td className="px-3 py-2.5 text-gray-600">{row.patientCount}</td>
                     <td className="px-3 py-2.5"><StatusPill active={row.isActive} /></td>
                     <td className="px-3 py-2.5">
@@ -146,7 +149,10 @@ function ProviderModal({
   const [address, setAddress] = useState(row?.address ?? '')
   const [notes, setNotes] = useState(row?.notes ?? '')
   const [active, setActive] = useState(row?.isActive ?? true)
+  const [coPay, setCoPay] = useState(row?.defaultCoPayPct ?? '')
   const [err, setErr] = useState('')
+
+  const coPayInvalid = coPay.trim() !== '' && (Number.isNaN(Number(coPay)) || Number(coPay) < 0 || Number(coPay) > 100)
 
   const m = useMutation({
     mutationFn: async () => {
@@ -158,6 +164,7 @@ function ProviderModal({
         contactPerson: contactPerson.trim() || undefined,
         address: address.trim() || undefined,
         notes: notes.trim() || undefined,
+        defaultCoPayPct: coPay.trim() === '' ? null : Number(coPay),
       }
       if (row) {
         await adminApi.providers.update(row.id, payload)
@@ -192,13 +199,26 @@ function ProviderModal({
               <option value="inactive">Inactive</option>
             </Select>
           </Field>
+          <Field label="Patient co-pay %">
+            <Input
+              type="number" min={0} max={100} step="0.01"
+              value={coPay}
+              onChange={(e) => setCoPay(e.target.value)}
+              placeholder="e.g. 10"
+            />
+          </Field>
         </div>
+        <p className="text-xs text-gray-500 -mt-1">
+          The patient's share of every claimed line. Leave blank if not yet agreed with this payer - a blank co-pay
+          is never treated as 100% charged to the patient.
+        </p>
+        {coPayInvalid && <p className="text-sm text-red-600">Co-pay must be between 0 and 100.</p>}
         <Field label="Address"><Input value={address} onChange={(e) => setAddress(e.target.value)} /></Field>
         <Field label="Comments"><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
         {err && <p className="text-sm text-red-600">{err}</p>}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button loading={m.isPending} disabled={name.trim().length < 2} onClick={() => m.mutate()}>
+          <Button loading={m.isPending} disabled={name.trim().length < 2 || coPayInvalid} onClick={() => m.mutate()}>
             {row ? 'Save changes' : 'Add provider'}
           </Button>
         </div>

@@ -53,6 +53,8 @@ export interface InsuranceProviderDTO {
   contactPerson: string | null
   notes: string | null
   isActive: boolean
+  /** The patient's share of every claimed line, 0-100 as a decimal string. Null means not configured (treated as 0, never guessed). */
+  defaultCoPayPct: string | null
   patientCount: number
 }
 
