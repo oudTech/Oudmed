@@ -5,6 +5,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { BillingService } from '../billing/billing.service';
 import { assertCan, STATUS_ACTION } from '../common/permissions';
 import { startOfDayLagos, addDaysUtc } from '../common/lagos-time';
+import { resolveInsuranceProvider } from '../common/insurance-provider-resolver';
 import {
   CreateVisitDto,
   ListVisitsQueryDto,
@@ -89,6 +90,14 @@ export class ScheduleService {
         await this.assertAvailable(tx, dto.doctorId, startsAt, endsAt, undefined, dto.force);
       }
 
+      const resolvedHmoName = dto.hmoName ?? patient.hmoName;
+      const resolved = await resolveInsuranceProvider(tx, {
+        tenantId: actor.tenantId,
+        patientProviderId: patient.insuranceProviderId,
+        nameGuess: resolvedHmoName ?? patient.insuranceProvider,
+        context: `ScheduleService.create visit for patient ${patient.id}`,
+      });
+
       const visit = await tx.visit.create({
         data: {
           tenantId: actor.tenantId,
@@ -101,8 +110,9 @@ export class ScheduleService {
           reason: dto.reason,
           roomLabel: dto.roomLabel,
           payerType: dto.payerType ?? patient.payerType,
-          hmoName: dto.hmoName ?? patient.hmoName,
+          hmoName: resolvedHmoName,
           authCode: dto.authCode,
+          insuranceProviderId: resolved?.providerId ?? null,
           bookedById: actor.userId,
         },
         include: VISIT_INCLUDE,
@@ -123,6 +133,21 @@ export class ScheduleService {
       if (!existing) throw new NotFoundException('Appointment not found');
       if (dto.doctorId) await this.assertDoctor(tx, dto.doctorId);
 
+      // Only re-resolve the linked provider when the payer/HMO name is
+      // actually changing - an unrelated edit (doctor, reason, notes...)
+      // leaves whatever was already resolved alone.
+      let insuranceProviderId: string | null | undefined;
+      if (dto.payerType !== undefined || dto.hmoName !== undefined) {
+        const patient = await tx.patient.findFirst({ where: { id: existing.patientId } });
+        const resolved = await resolveInsuranceProvider(tx, {
+          tenantId: actor.tenantId,
+          patientProviderId: patient?.insuranceProviderId ?? null,
+          nameGuess: (dto.hmoName ?? existing.hmoName) ?? patient?.insuranceProvider,
+          context: `ScheduleService.update visit ${id}`,
+        });
+        insuranceProviderId = resolved?.providerId ?? null;
+      }
+
       const visit = await tx.visit.update({
         where: { id },
         data: {
@@ -135,6 +160,7 @@ export class ScheduleService {
           payerType: dto.payerType ?? undefined,
           hmoName: dto.hmoName ?? undefined,
           authCode: dto.authCode ?? undefined,
+          insuranceProviderId,
         },
         include: VISIT_INCLUDE,
       });

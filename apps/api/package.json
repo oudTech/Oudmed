@@ -9,6 +9,7 @@
     "seed": "ts-node prisma/seed.ts",
     "create-platform-user": "ts-node prisma/create-platform-user.ts",
     "dr-drill": "ts-node prisma/dr-drill.ts",
+    "backfill-visit-insurance-provider": "ts-node prisma/backfill-visit-insurance-provider.ts",
     "prisma:rls": "ts-node prisma/apply-rls.ts",
     "db:setup-role": "ts-node prisma/setup-app-role.ts",
     "db:sync": "prisma generate && pnpm prisma:rls",
