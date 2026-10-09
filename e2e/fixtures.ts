@@ -52,6 +52,33 @@ export function fieldInput(scope: Page | Locator, label: string): Locator {
     .locator('xpath=following-sibling::*[self::input or self::select or self::textarea][1]');
 }
 
+/** Logs in through the real API (not the UI) and returns an access token -
+ * for seeding steps that need to exercise real server-side business logic
+ * (e.g. ScheduleService.create()'s insurance-provider resolution) without
+ * the overhead of driving a browser for a step that isn't what the test
+ * is actually about. The UI is still used for whatever IS under test. */
+export async function apiLogin(role: keyof typeof E2E.logins): Promise<string> {
+  const res = await fetch('http://localhost:3000/api/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenantSlug: E2E.tenantSlug, email: E2E.logins[role], password: E2E.password }),
+  });
+  if (!res.ok) throw new Error(`apiLogin(${role}) failed: ${res.status} ${await res.text()}`);
+  const data = (await res.json()) as { accessToken: string };
+  return data.accessToken;
+}
+
+/** POSTs to the real API with a bearer token from apiLogin(). */
+export async function apiPost<T = any>(path: string, token: string, body: unknown): Promise<T> {
+  const res = await fetch(`http://localhost:3000/api${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
+  return res.json() as Promise<T>;
+}
+
 export { E2E };
 export const test = base;
 export { expect };
