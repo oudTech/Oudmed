@@ -147,9 +147,14 @@ const MAIN_NAV: {
   { href: '/admin',     label: 'Administration',   Icon: AdminIcon,   action: 'admin:settings' },
 ]
 
-const BOTTOM_NAV = [
+const BOTTOM_NAV: {
+  href: string
+  label: string
+  Icon: (p: { color?: string }) => JSX.Element
+  action?: Action
+}[] = [
   { href: '/support',  label: 'Support',  Icon: SupportIcon  },
-  { href: '/settings', label: 'Settings', Icon: SettingsIcon },
+  { href: '/settings', label: 'Settings', Icon: SettingsIcon, action: 'admin:settings' },
 ]
 
 /**
@@ -288,7 +293,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Bottom navigation */}
         <div className="px-3 py-4 border-t border-black/10 space-y-0.5">
-          {BOTTOM_NAV.map(({ href, label, Icon }) => {
+          {BOTTOM_NAV.filter((item) => !item.action || can(session?.role, item.action)).map(({ href, label, Icon }) => {
             const active = pathname === href
             return (
               <Link
