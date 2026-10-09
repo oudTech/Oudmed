@@ -17,12 +17,15 @@ test('T1-02/T1-03: sign up, verify by code, create the hospital, land on the das
   await page.locator('input[type="checkbox"]').check();
   await page.getByRole('button', { name: 'Create account' }).click();
 
-  await expect(page).toHaveURL(/\/verify-email/);
+  // Generous timeout, not the 5s assertion default - the registration
+  // request + redirect is the first real server round-trip of the whole
+  // test and can be slow under load with the rest of the suite running.
+  await expect(page).toHaveURL(/\/verify-email/, { timeout: 20_000 });
   const code = await waitForVerificationCode(email);
   await page.getByLabel('Enter code here').fill(code);
   await page.getByRole('button', { name: 'Confirm' }).click();
 
-  await expect(page).toHaveURL(/\/onboarding/);
+  await expect(page).toHaveURL(/\/onboarding/, { timeout: 20_000 });
   await page.getByLabel('Hospital name').fill(hospitalName);
   await page.getByLabel('Country').selectOption({ label: 'Nigeria' }).catch(() => page.getByLabel('Country').selectOption({ index: 1 }));
   await page.getByRole('button', { name: 'Continue' }).click();

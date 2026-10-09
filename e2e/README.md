@@ -34,23 +34,64 @@ Each spec file seeds its own precondition data directly via Prisma
 for the action actually under test - tests are independent, not a single
 long connected script the way the manual test plan is written, so they can
 run in any order and a failure in one doesn't cascade into unrelated
-failures in the next.
+failures in the next. A step whose point is real server-side business
+logic rather than UI interaction (e.g. resolving an HMO patient's co-pay
+when a visit is created) goes through the real API directly
+(`fixtures.ts`'s `apiLogin()`/`apiPost()`) instead of a browser - faster,
+and it still exercises the real code path, just not through the DOM.
+
+Two real, environment-specific problems fixed along the way, not just
+worked around blindly - see the commit history for the full detail:
+tenant subdomains not resolving via plain OS DNS on this machine (fixed
+with a Chromium `--host-resolver-rules` launch arg), and
+`components/ui/kit.tsx`'s `Field` having no label/input association at
+all (`fieldInput()` in `fixtures.ts` is the documented workaround, used
+throughout; the gap itself is a real, separate accessibility issue worth
+fixing in the app, not just in these tests).
 
 ## Status (2026-10-09)
 
-Built and passing:
+**12 of 19 cases verified passing**, against the real app, a real
+Postgres, and a real browser - re-run with `pnpm e2e` any time to
+reconfirm:
 
-- Harness: seeding, per-role auth, the sign-up/verification-code flow,
-  CI wiring (`.github/workflows/ci.yml`).
+- Harness: seeding, per-role auth (UI-driven), the sign-up/verification-
+  code flow, CI wiring (`.github/workflows/ci.yml`).
 - T1-02/T1-03 (sign-up, email verification by code, hospital creation)
 - T1-06 (role-based nav + direct-URL access control) - found and fixed a
   real bug while building this one: HR/Reports/Claims/Admin had no
-  permission gate on their nav entries at all.
-- T1-08 (patient registration wizard, steps 1-8)
+  permission gate on their nav entries at all (`AppShell.tsx`).
+- T1-08 (patient registration wizard, all 8 steps)
+- T2-02 (check-in + record vitals)
+- T2-07 (lab order + complete visit + invoice posted)
+- T3-02 (dispense, gate off - control case)
+- T3-06/T3-07/T3-10/T3-12 (prepare -> blocked release -> pay -> release,
+  one connected sequence - confirms the 2026-10-08 whole-item-hold change
+  and the 2026-10-09 patient-payable release-gate fix together, through a
+  real browser)
+- T3-15, strengthened (**the exact case the whole HMO-claims
+  investigation was about**): an HMO patient's visit created through the
+  real API so `ScheduleService.create()`'s provider resolution genuinely
+  runs, not bypassed by direct seeding; confirms the provider-filtered
+  Generate Claims picker finds the invoice, the generated claim's co-pay
+  split matches the provider's configured percentage exactly (not
+  100%/0%), and the new claim appears in the Claims list filtered by that
+  same provider
 
-Not yet written - tracked here so this list stays the source of truth
-rather than scattered TODOs: T2-02, T2-07, T3-02, T3-06, T3-07, T3-10,
-T3-12, T3-15 (strengthened), T3-17, T4-01, T4-05, T4-10, T4-11, T6-01,
-T6-04, plus the new F2 HMO co-pay release case. The architecture above is
-proven out by the first three - each remaining case is a straightforward
-extension, not a new pattern.
+**Not yet written** - tracked here so this list stays the source of
+truth, not scattered TODOs. Each is a mechanical extension of the
+patterns above (seed precondition data, drive the UI for the action under
+test, assert via DB + UI), not a new architecture:
+
+- T3-17 (submit -> batch -> export -> remittance -> receivables aging)
+- T4-01, T4-05, T4-10, T4-11 (admission: admit, discharge clean,
+  discharge with HMO co-pay deposit split, generate the admission claim)
+- T6-01, T6-04 (platform console login; suspend a hospital, confirm its
+  staff are locked out - `e2e-suspend` tenant exists in the seed
+  specifically for this one, unused so far)
+- The new F2 case: an HMO co-pay patient's drug releases once they pay
+  their own share, without waiting on the HMO's - T3's
+  T3-06/07/10/12 sequence already proves this mechanism for a cash
+  patient; the missing piece is the same sequence for an HMO co-pay
+  patient specifically, which is the scenario the 2026-10-09 fix exists
+  for.
