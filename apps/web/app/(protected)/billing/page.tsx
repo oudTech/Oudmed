@@ -72,6 +72,9 @@ function BillingInner() {
         <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
         {can(session?.role, 'billing:manage') && (
           <div className="flex items-center gap-4">
+            <Link href="/billing/admissions" className="text-sm font-medium text-gray-500 hover:text-primary hover:underline">
+              Inpatient billing
+            </Link>
             {can(session?.role, 'admission:deposit-refund') && (
               <Link href="/billing/refunds-due" className="text-sm font-medium text-gray-500 hover:text-primary hover:underline">
                 Refunds due

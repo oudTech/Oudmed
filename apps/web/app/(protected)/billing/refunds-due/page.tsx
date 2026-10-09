@@ -18,6 +18,7 @@ const dt = (iso: string) => new Date(iso).toLocaleString('en-GB')
 export default function RefundsDuePage() {
   const { data: session } = useSession()
   const allowed = can(session?.role, 'admission:deposit-refund')
+  const canOpenAdmission = can(session?.role, 'patient:read')
   const qc = useQueryClient()
   const [paying, setPaying] = useState<AdmissionPendingRefundDTO | null>(null)
 
@@ -67,7 +68,11 @@ export default function RefundsDuePage() {
                     <td className="px-3 py-2.5 text-gray-500">{dt(r.requestedAt)}</td>
                     <td className="px-3 py-2.5">{r.patient.name} <span className="text-gray-400">({r.patient.patientNumber})</span></td>
                     <td className="px-3 py-2.5">
-                      <Link href={`/admissions/${r.admissionId}`} className="text-primary hover:underline">{r.admissionNumber}</Link>
+                      {canOpenAdmission ? (
+                        <Link href={`/admissions/${r.admissionId}`} className="text-primary hover:underline">{r.admissionNumber}</Link>
+                      ) : (
+                        r.admissionNumber
+                      )}
                     </td>
                     <td className="px-3 py-2.5 font-medium">{naira(r.amount)}</td>
                     <td className="px-3 py-2.5 text-right">

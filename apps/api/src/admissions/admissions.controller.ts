@@ -45,6 +45,15 @@ export class AdmissionsController {
     return this.admissions.listPendingRefunds(user.tenantId);
   }
 
+  // Same reason as 'refunds/due' above - registered before ':id'. Gated on
+  // billing:manage, not patient:read, so a billing-only role can find an
+  // admission to take a deposit against without the full clinical workspace.
+  @Get('billing-overview')
+  listForBilling(@CurrentUser() user: AuthUser) {
+    assertCan(user.role, 'billing:manage');
+    return this.admissions.listForBilling(user.tenantId);
+  }
+
   @Get(':id')
   getOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     assertCan(user.role, 'patient:read');

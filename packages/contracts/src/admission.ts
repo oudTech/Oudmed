@@ -180,6 +180,23 @@ export interface AdmissionClaimSummaryDTO {
   paOverrideReason: string | null
 }
 
+/** One row of the billing-focused admissions list - deposit held and
+ * running balance, without the clinical detail `AdmissionDTO` carries.
+ * Reachable on `billing:manage` alone, unlike the full admission record.
+ * No pendingRefund field - a PENDING AdmissionRefund is only ever created
+ * at discharge, and this list is scoped to admissions still ADMITTED. */
+export interface AdmissionBillingOverviewDTO {
+  id: string
+  admissionNumber: string
+  patient: { id: string; patientNumber: string; firstName: string; lastName: string }
+  ward: { name: string } | null
+  bed: { label: string } | null
+  admittedAt: string
+  totalDeposited: string
+  balance: string
+  deposits: { id: string; amount: string; remaining: string }[]
+}
+
 export interface AdmissionBillDTO {
   admission: AdmissionDTO
   invoices: AdmissionBillInvoiceDTO[]

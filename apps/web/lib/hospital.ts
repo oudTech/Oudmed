@@ -10,6 +10,7 @@ import type {
   AdmissionDTO,
   AdmissionWorkspaceDTO,
   AdmissionBillDTO,
+  AdmissionBillingOverviewDTO,
   AdmissionPendingRefundDTO,
   DischargeSummaryDTO,
   WardDTO,
@@ -53,6 +54,9 @@ export const getAdmissionWorkspace = (id: string) =>
 
 export const getAdmissionBill = (id: string) =>
   api.get<AdmissionBillDTO>(`/admissions/${id}/bill`).then((r) => r.data)
+
+export const getAdmissionsBillingOverview = () =>
+  api.get<AdmissionBillingOverviewDTO[]>('/admissions/billing-overview').then((r) => r.data)
 
 export const addAdmissionDeposit = (id: string, data: { amount: number; method: string; reference?: string }) =>
   api.post<{ id: string; receiptNumber: string }>(`/admissions/${id}/deposits`, data).then((r) => r.data)

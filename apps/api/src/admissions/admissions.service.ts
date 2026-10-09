@@ -79,6 +79,68 @@ export class AdmissionsService {
     );
   }
 
+  /** Billing-focused view of every current admission - deposit held and
+   * running balance per admission, without the clinical detail `list()`/
+   * `getOne()` carry. Gated on `billing:manage` at the controller, not
+   * `patient:read`, so Accountant/Hospital Admin can find an admission to
+   * take a deposit against without the full inpatient workspace. Mirrors
+   * the same totalDeposited/balance formula as `bill()`, batched across
+   * every admitted patient instead of one at a time - minus `bill()`'s
+   * pendingRefund offset, which is always zero here: a PENDING
+   * AdmissionRefund is only ever created inside `discharge()`, and this
+   * list is scoped to admissions still ADMITTED. */
+  async listForBilling(tenantId: string) {
+    return this.prisma.forTenant(tenantId, async (tx) => {
+      const admissions = await tx.admission.findMany({
+        where: { status: AdmissionStatus.ADMITTED },
+        include: ADMISSION_INCLUDE,
+        orderBy: { admittedAt: 'desc' },
+      });
+      const ids = admissions.map((a) => a.id);
+      const [invoices, deposits] = await Promise.all([
+        tx.invoice.findMany({ where: { admissionId: { in: ids } }, include: { payments: true } }),
+        tx.admissionDeposit.findMany({ where: { admissionId: { in: ids } } }),
+      ]);
+
+      return admissions.map((a) => {
+        const inv = invoices.filter((i) => i.admissionId === a.id);
+        const dep = deposits.filter((d) => d.admissionId === a.id);
+
+        const totalCharged = inv.reduce((s, i) => s.add(i.totalAmount), D0());
+        const totalPaid = inv.reduce(
+          (s, i) => s.add(i.payments.filter((p) => !p.reversedAt).reduce((ps, p) => ps.add(p.amount), D0())), D0(),
+        );
+        const totalDeposited = dep.reduce(
+          (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
+        );
+        const balance = totalCharged.sub(totalPaid).sub(totalDeposited);
+
+        return {
+          id: a.id,
+          admissionNumber: a.admissionNumber,
+          patient: {
+            id: a.patient.id,
+            patientNumber: a.patient.patientNumber,
+            firstName: a.patient.firstName,
+            lastName: a.patient.lastName,
+          },
+          ward: a.ward ? { name: a.ward.name } : null,
+          bed: a.bed ? { label: a.bed.label } : null,
+          admittedAt: a.admittedAt,
+          totalDeposited: totalDeposited.toString(),
+          balance: balance.toString(),
+          deposits: dep
+            .map((d) => ({
+              id: d.id,
+              amount: d.amount.toString(),
+              remaining: d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0()).toString(),
+            }))
+            .filter((d) => Number(d.remaining) > 0),
+        };
+      });
+    });
+  }
+
   async getOne(tenantId: string, id: string) {
     const admission = await this.prisma.forTenant(tenantId, (tx) =>
       tx.admission.findFirst({ where: { id }, include: ADMISSION_INCLUDE }),
