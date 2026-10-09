@@ -11,14 +11,18 @@ const TENANT_HOST = `${E2E.tenantSlug}.localhost`;
 async function loginAndSave(baseURL: string, role: keyof typeof E2E.logins) {
   const browser = await chromium.launch({ args: ['--host-resolver-rules=MAP *.localhost 127.0.0.1'] });
   const page = await browser.newPage({ baseURL: `http://${TENANT_HOST}:3001` });
-  await page.goto('/login');
+  // Generous timeouts here on purpose: this is the very first request any
+  // test makes, so it's the one most likely to hit Next dev-mode's
+  // on-demand route compile (worse in CI, where nothing is warm yet).
+  page.setDefaultTimeout(45_000);
+  await page.goto('/login', { timeout: 45_000 });
   await page.getByLabel('Email').fill(E2E.logins[role]);
   // getByLabel('Password') is ambiguous - the show/hide toggle button
   // inside the field also associates with that label text.
   await page.locator('input[type="password"]').fill(E2E.password);
   await page.getByRole('button', { name: 'Login' }).click();
   // Lands on /dashboard once the session is established.
-  await page.waitForURL(/\/dashboard/, { timeout: 15_000 });
+  await page.waitForURL(/\/dashboard/, { timeout: 45_000 });
   await page.context().storageState({ path: path.join(AUTH_DIR, `${role}.json`) });
   await browser.close();
 }
