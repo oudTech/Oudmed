@@ -48,10 +48,10 @@ history). Build order: **F1 -> F2 -> F3**, F1 in four reported sub-steps.
 | 7 | Toast/feedback pass - new top-right toast stack with tone icons and tone-aware dismissal, shared `errorMessage(e)` helper, `toastPromise()` for slow actions; closed all 12 High findings and most Medium findings in `docs/audit/feedback-coverage.md` across 3 batches; explicitly re-audited the F1/F2 screens | **Done** (2026-10-02, as part of the production-release pass). M7/M8 (scroll-to-error, unsaved-changes warning) and the remaining M2 spread were deliberately deferred - tracked in `docs/audit/WHATS_LEFT.md`, not silently dropped. |
 | Final - test plan | Usability test plan rewritten and expanded | **Done.** `docs/audit/USABILITY_TEST_PLAN.md` / `.csv` - 82 cases across 6 connected tester tracks plus a feedback spot-check section, covering outpatient cash/HMO, inpatient cash/HMO, pay-before-dispense, supplementary invoices and line edits, the full claims lifecycle, reports, admin/settings, and the platform console, with a 19-case go-live smoke test marked. Supersedes `usability-test-plan.md`. F3 has no cases yet since it isn't built. |
 | Final - regression pass | A full, explicit regression sign-off | **Done in substance, not as a standalone pass.** The production-release work's Part 1 readiness check plus the full `pnpm test` suite re-run after every change this phase covers the same ground; no dedicated "regression pass" report was separately produced. |
-| Final - launch report | What's in v1, known limitations, `WHATS_LEFT.md` summary | **Not done.** Scheduled as step 4 of the current pre-F3 punch list (2026-10-08), after the HMO-claims investigation, the F2 co-pay change, and automated smoke tests. |
-| F3 | Bulk patient import | **Not started.** Next after the pre-F3 punch list below. |
+| Final - launch report | What's in v1, known limitations, `WHATS_LEFT.md` summary | **Done** (2026-10-10). `docs/RELEASE_v1.0.md` - module-by-module feature list, one-line fixes since `v1.0-baseline` with commit hashes, known limitations, a `WHATS_LEFT.md` severity summary (30 open items, 0 Critical/High, 11 Medium, 1 Low-Medium, 18 Low), and test status (54/366 API, 20 e2e specs across 3 clean fresh-database runs, 82-case usability plan). |
+| F3 | Bulk patient import | **Not started.** Next, now that the pre-F3 punch list below is complete. |
 
-## Pre-F3 punch list (2026-10-08)
+## Pre-F3 punch list (2026-10-08, completed 2026-10-10)
 
 Before F3, in this order, each reported and stopped for go-ahead before the
 next: (1) investigate "HMO claims not reflecting on claims" - Critical until
@@ -63,6 +63,29 @@ if none exists; (4) launch report, then tag `v1.0`. Safety rules for this
 list: tag `v1.0-baseline` before starting, one fix per commit, additive
 migrations only, full suite after every change, state the risk before each
 fix.
+
+**All four steps done:**
+
+1. **HMO claims not reflecting** - root cause found and fixed (`3fe4bfb`):
+   `Visit.insuranceProviderId` was left `null` at visit creation for a real
+   HMO patient. Confirmed Critical, fixed same round; co-pay-resolution and
+   claims-cache-invalidation bugs found alongside it also fixed
+   (`699b92a`, `e8c30dc`, `b1dc56d`, `9e92d63`).
+2. **F2 co-pay release, whole-item-hold** - done (`6c8caeb`), then
+   corrected (`e041955`) so the release gate waits only on the patient's
+   own payable share, never the HMO's.
+3. **19 go-live smoke cases automated as e2e, one run-everything command,
+   CI added** - done. `pnpm test:all` runs the API suite then the full
+   Playwright suite; `.github/workflows/ci.yml` runs the same against a
+   fresh Postgres service container. 17 of 19 automated (T6-01/T6-04,
+   platform console, tracked as `T6-E2E` in `WHATS_LEFT.md`), plus 3 bonus
+   cases proving this round's own fixes. Confirmed stable across 3
+   consecutive fresh-database runs, no flaky failures. Two real bugs found
+   and fixed while building this (`8520922`/`e2292fc` nav gating,
+   `0662d62`/`50d0291` the Accountant inpatient-billing-route gap), plus
+   one UI gap logged but not fixed (`MISS-9`, no PA-code field).
+4. **Launch report, then tag `v1.0`** - done. See the row above and
+   `docs/RELEASE_v1.0.md`.
 
 ## Definition of done (per the user's own bar)
 
