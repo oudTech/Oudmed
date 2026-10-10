@@ -79,6 +79,41 @@ export async function apiPost<T = any>(path: string, token: string, body: unknow
   return res.json() as Promise<T>;
 }
 
+/** GETs from the real API with a bearer token from apiLogin() - for
+ * snapshotting a read (e.g. receivables aging) before/after a UI action,
+ * so an assertion can check the delta rather than an absolute total that
+ * other tests sharing the same tenant could also be contributing to. */
+export async function apiGet<T = any>(path: string, token: string): Promise<T> {
+  const res = await fetch(`http://localhost:3000/api${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
+  return res.json() as Promise<T>;
+}
+
+/** Polls fn() until it stops throwing, or the timeout elapses - for a
+ * direct-Prisma read right after a UI-triggered write. Empirically, this
+ * test file's own long-lived PrismaClient can take up to ~1s to see a
+ * write the API just made through its own PrismaService on the same
+ * Postgres instance (the data is correct and durable - this is a read-
+ * after-write visibility window on this specific client/connection, not
+ * something the app does wrong), so a direct findFirstOrThrow() right
+ * after clicking something can be a false negative without this. */
+export async function eventually<T>(fn: () => Promise<T>, opts: { timeoutMs?: number; intervalMs?: number } = {}): Promise<T> {
+  const { timeoutMs = 5000, intervalMs = 250 } = opts;
+  const deadline = Date.now() + timeoutMs;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+  throw lastErr;
+}
+
 export { E2E };
 export const test = base;
 export { expect };

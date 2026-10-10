@@ -1,11 +1,15 @@
 # E2E smoke suite
 
-Automates the 19 go-live smoke cases from `docs/audit/USABILITY_TEST_PLAN.md`
-(the rows marked `Go-live smoke test`), plus two added during the HMO-claims/
-F2 investigation (2026-10-08/09, `docs/audit/phase1-status.md`): the
-strengthened T3-15 co-pay-split check, and a dedicated F2 HMO co-pay release
-case. Runs against the real app (API + web) and a real Postgres, seeded into
-a dedicated `e2e` tenant (`e2e/seed.ts`) - never the `demo` tenant.
+Automates 17 of the 19 go-live smoke cases from
+`docs/audit/USABILITY_TEST_PLAN.md` (the rows marked `Go-live smoke test`;
+the 2 not automated - the platform console, T6-01/T6-04 - are tracked as
+`T6-E2E` in `docs/audit/WHATS_LEFT.md`), plus three added beyond the 19
+during the HMO-claims/F2 investigation and the pre-v1.0 hardening round
+(2026-10-08 through 2026-10-10, `docs/audit/phase1-status.md`): the
+strengthened T3-15 co-pay-split check, a dedicated F2 HMO co-pay release
+case, and a case proving the `/billing/admissions` route works. Runs
+against the real app (API + web) and a real Postgres, seeded into a
+dedicated `e2e` tenant (`e2e/seed.ts`) - never the `demo` tenant.
 
 ## Running it
 
@@ -49,11 +53,13 @@ all (`fieldInput()` in `fixtures.ts` is the documented workaround, used
 throughout; the gap itself is a real, separate accessibility issue worth
 fixing in the app, not just in these tests).
 
-## Status (2026-10-09)
+## Status (2026-10-10)
 
-**12 of 19 cases verified passing**, against the real app, a real
-Postgres, and a real browser - re-run with `pnpm e2e` any time to
-reconfirm:
+**17 of 19 cases verified passing**, against the real app, a real
+Postgres, and a real browser - confirmed stable across 3 consecutive
+fresh-database runs (`docker compose down -v`, migrate, `db:setup-role`,
+`prisma:rls`, seed, `pnpm test:all`), no flaky failures. Re-run with
+`pnpm e2e` any time to reconfirm.
 
 - Harness: seeding, per-role auth (UI-driven), the sign-up/verification-
   code flow, CI wiring (`.github/workflows/ci.yml`).
@@ -77,21 +83,39 @@ reconfirm:
   split matches the provider's configured percentage exactly (not
   100%/0%), and the new claim appears in the Claims list filtered by that
   same provider
+- T3-17 (`t3-17-remittance.spec.ts`): submit a claim unbatched -> a new
+  batch auto-pulls it -> export the schedule CSV -> mark the batch
+  submitted -> record a remittance with a deliberate shortfall (approved
+  less than claimed, only part of the approved amount paid) -> Receivables
+  aging reflects the exact delta. Checked by before/after delta via a
+  direct API read, not an absolute total, since other specs in the same
+  run generate claims against the same seeded provider.
+- T4-01/T4-05/T4-10/T4-11 (`t4-admissions.spec.ts`), one connected
+  admission lifecycle: admit an HMO patient with a PA code and take a
+  deposit (receipt + shows in the Reports payment ledger) -> a ward/bed
+  transfer mid-stay -> discharge, which posts bed-day charges spanning
+  both wards/beds and leaves a deposit remainder as a PENDING refund
+  (never the HMO's own uncollected share, same patient-payable logic as
+  pharmacy) -> an Accountant pays that refund out from Refunds due (no
+  double refund) -> the admission's own HMO claim generates cleanly off
+  the PA code already on file, with the exact co-pay split, and shows up
+  in Claims filtered by provider.
+- F2 HMO co-pay release (`t3-f2-hmo-copay-release.spec.ts`), the case the
+  2026-10-09 patient-payable fix exists for, proven side by side: an HMO
+  patient with a 10% co-pay pays only that 10% share and the item
+  releases immediately, while a cash patient paying that exact same
+  proportion stays blocked (their payable share is the whole bill).
+- Inpatient billing route (`inpatient-billing-route.spec.ts`): proves the
+  `/billing/admissions` route built this round actually closes the gap it
+  was built for - confirms Accountant cannot open `/admissions/[id]`
+  (`patient:read`), then takes a deposit and pays out the resulting
+  refund entirely through the new route, never touching the clinical
+  workspace.
 
-**Not yet written** - tracked here so this list stays the source of
-truth, not scattered TODOs. Each is a mechanical extension of the
-patterns above (seed precondition data, drive the UI for the action under
-test, assert via DB + UI), not a new architecture:
+**Deliberately deferred to after launch** - tracked in
+`docs/audit/WHATS_LEFT.md` (`T6-E2E`), not scattered TODOs:
 
-- T3-17 (submit -> batch -> export -> remittance -> receivables aging)
-- T4-01, T4-05, T4-10, T4-11 (admission: admit, discharge clean,
-  discharge with HMO co-pay deposit split, generate the admission claim)
 - T6-01, T6-04 (platform console login; suspend a hospital, confirm its
   staff are locked out - `e2e-suspend` tenant exists in the seed
-  specifically for this one, unused so far)
-- The new F2 case: an HMO co-pay patient's drug releases once they pay
-  their own share, without waiting on the HMO's - T3's
-  T3-06/07/10/12 sequence already proves this mechanism for a cash
-  patient; the missing piece is the same sequence for an HMO co-pay
-  patient specifically, which is the scenario the 2026-10-09 fix exists
-  for.
+  specifically for this one, unused so far). Same harness, same patterns
+  as everything above - a mechanical extension, not new architecture.
