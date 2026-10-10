@@ -78,20 +78,37 @@ jobs:
       - name: Start MinIO
         run: |
           # A transient Docker Hub pull failure (rate limit, registry hiccup)
-          # shouldn't fail the whole run by itself - retry the pull a few times
-          # with a short backoff before giving up.
-          for attempt in 1 2 3; do
-            docker pull minio/minio:latest && break
-            echo "minio/minio pull failed (attempt $attempt/3), retrying in 10s..."
-            sleep 10
-          done
+          # shouldn't fail the whole run by itself - retry a few times with a
+          # short backoff before giving up. Applies to both images pulled in
+          # this step (minio/mc used to have no retry at all here - a single
+          # hiccup on just that pull failed the whole step with no mitigation,
+          # even though the minio/minio pull right above it was protected).
+          pull_with_retry() {
+            for attempt in 1 2 3; do
+              docker pull "$1" && return 0
+              echo "$1 pull failed (attempt $attempt/3), retrying in 10s..."
+              sleep 10
+            done
+            echo "$1 pull failed after 3 attempts - giving up."
+            return 1
+          }
+          pull_with_retry minio/minio:latest
+          pull_with_retry minio/mc:latest
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=oudhealth \
             -e MINIO_ROOT_PASSWORD=oudhealth-dev-secret \
             minio/minio:latest server /data
+          ready=false
           for i in $(seq 1 30); do
-            curl -sf http://localhost:9000/minio/health/live && break || sleep 2
+            if curl -sf http://localhost:9000/minio/health/live; then ready=true; break; fi
+            sleep 2
           done
+          if [ "$ready" != "true" ]; then
+            echo "MinIO never became healthy within 60s - container state and logs:"
+            docker ps -a --filter name=minio
+            docker logs minio || true
+            exit 1
+          fi
           docker run --rm --network host --entrypoint sh minio/mc:latest -c "
             mc alias set local http://localhost:9000 oudhealth oudhealth-dev-secret &&
             mc mb --ignore-existing local/oudhealth-dev"
