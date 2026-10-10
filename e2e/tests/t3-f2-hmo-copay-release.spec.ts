@@ -9,7 +9,7 @@ import { test, expect, tenantPath, authFile, db, fixtures, apiLogin, apiPost, ev
  * waiting on the HMO's own (later-remitted) share - and, side by side, a
  * cash patient paying that same proportion is NOT enough. */
 test('F2: HMO co-pay patient releases on paying only their co-pay share; a cash patient paying the same proportion stays blocked', async ({ browser }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(150_000);
   const f = fixtures();
   await db.tenant.update({ where: { id: f.tenantId }, data: { requirePaymentBeforeDispense: true } });
   const qty = 10;

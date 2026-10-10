@@ -5,6 +5,25 @@ hospital on. It supersedes `v1.0-baseline` (tagged 2026-10-08, before this
 round's HMO-claims investigation, F2 correction, inpatient-billing-route
 addition and e2e automation).
 
+## v1.0.1 (2026-10-10, same day)
+
+Found while reviewing this report before deployment: the admission side of
+`MISS-9` (below, in Known limitations as originally written) was a launch
+blocker for HMO billing, not a post-launch item - every inpatient HMO claim
+needed the Hospital-Admin-no-PA-code override, every time, with no way for
+front-desk/admitting staff to ever enter the real PA code at all. Fixed same
+day: `NewAdmissionModal` gained an "Authorisation / PA code" field (shown
+once an HMO patient is picked), and the admission workspace gained an inline
+edit control for it (`admission:edit` - PA codes commonly arrive mid-stay,
+not at the door, so this needed to be editable after admission too, not
+just enterable once). `e2e/tests/t4-admissions.spec.ts` now exercises both
+through the real UI instead of a direct-database workaround. The outpatient
+**visit** side of the same gap (a visit's own PA code has the identical
+problem - type exists, API accepts it, no UI field anywhere) is still open,
+logged separately as `MISS-10` since it's a distinct, smaller fix once
+picked up. Full API suite (54/366) and full e2e suite (20 specs) reconfirmed
+green after this fix; re-tagged `v1.0.1`.
+
 ## What's in v1.0, by module
 
 **Outpatient (scheduling, encounters)** - appointment calendar with a unified
@@ -152,11 +171,11 @@ while confirming it:
 - **Platform console has no automated test coverage yet** (`T6-E2E`) - the
   only 2 of the 19 go-live smoke cases not in the Playwright suite. Manual-
   tested per `USABILITY_TEST_PLAN.md`.
-- **No UI to set an admission's PA/authorization code** (`MISS-9`, found
-  while automating this round's e2e coverage) - the field exists end-to-end,
-  it just has no form field or edit screen. A claim can still be generated
-  without one via the Hospital Admin override (reason required, flagged on
-  the claim and export).
+- **No UI to set an outpatient visit's PA/authorization code** (`MISS-10`) -
+  the admission-side equivalent was a launch blocker and is fixed in
+  `v1.0.1` (see above); this narrower, visit-side gap remains. A claim can
+  still be generated without one via the Hospital Admin override (reason
+  required, flagged on the claim and export).
 - **No session revocation** (`SEC-3`) and **no MFA on the platform console**
   (`SEC-4`) - both Medium severity, both have a documented workaround
   (deactivate the account; keep the operator list small), neither blocks
@@ -172,7 +191,7 @@ that bar.
 
 | Severity | Count | Examples |
 |---|---|---|
-| Medium | 11 | SEC-3 (session revocation), SEC-4 (platform MFA), SEC-7 (security headers), FUNC-5 (remittance advisory lock), MISS-4/6/7 (note history, patient deactivate, chart-read audit), MISS-9 (admission PA code UI), F3 (bulk import), per-HMO tariffs, no provider-independent backup |
+| Medium | 11 | SEC-3 (session revocation), SEC-4 (platform MFA), SEC-7 (security headers), FUNC-5 (remittance advisory lock), MISS-4/6/7 (note history, patient deactivate, chart-read audit), MISS-10 (visit PA code UI), F3 (bulk import), per-HMO tariffs, no provider-independent backup |
 | Low-Medium | 1 | MISS-8 (no self-serve data export) |
 | Low | 18 | SEC-6 (CSV formula injection), BL-1/3/4, F2-DECISION (a logged design trade-off, not a defect), T6-E2E, in-memory rate limiting, JWT rotation, Next.js 15 upgrade, unverified web Docker build, 5 feedback/UX polish items, 2 platform UX reports, 1 RLS-comment cosmetic gap |
 

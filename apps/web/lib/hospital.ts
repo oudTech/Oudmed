@@ -152,6 +152,9 @@ export interface AdmitInput {
 export const admitPatient = (data: AdmitInput) =>
   api.post<AdmissionDTO>('/admissions', data).then((r) => r.data)
 
+export const updateAdmission = (id: string, data: { authCode?: string }) =>
+  api.patch<AdmissionDTO>(`/admissions/${id}`, data).then((r) => r.data)
+
 export interface DischargeInput {
   status?: string
   dischargeNotes?: string

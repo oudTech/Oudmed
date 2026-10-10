@@ -46,6 +46,7 @@ export function NewAdmissionModal({
   const [admissionType, setAdmissionType] = useState('EMERGENCY')
   const [reason, setReason] = useState('')
   const [diagnosis, setDiagnosis] = useState('')
+  const [authCode, setAuthCode] = useState('')
   const [error, setError] = useState('')
 
   const beds = useQuery({
@@ -67,6 +68,7 @@ export function NewAdmissionModal({
     setAdmissionType('EMERGENCY')
     setReason('')
     setDiagnosis('')
+    setAuthCode('')
     setError('')
   }
 
@@ -82,6 +84,7 @@ export function NewAdmissionModal({
         admissionType,
         reason: reason.trim() || undefined,
         provisionalDiagnosis: diagnosis.trim() || undefined,
+        authCode: authCode.trim() || undefined,
       }
       return admitPatient(payload)
     },
@@ -186,6 +189,16 @@ export function NewAdmissionModal({
             </Select>
           </Field>
         </div>
+
+        {patient?.payerType === 'HMO' && (
+          <Field label="Authorisation / PA code">
+            <Input
+              value={authCode}
+              onChange={(e) => setAuthCode(e.target.value)}
+              placeholder="Leave blank if not yet obtained - add it later from the inpatient workspace"
+            />
+          </Field>
+        )}
 
         <Field label="Presenting complaint">
           <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Severe abdominal pain" />

@@ -18,6 +18,7 @@ import {
   addAdmissionNoteAddendum,
   listPendingRefunds,
   payAdmissionRefund,
+  updateAdmission,
 } from '@/lib/hospital'
 import { AddDepositModal, RefundDepositModal, ApplyDepositModal } from '@/components/patients/AdmissionDepositModals'
 import { claimsApi, CLAIM_STATUS_META } from '@/lib/claims'
@@ -66,6 +67,8 @@ export default function AdmissionWorkspacePage() {
   const [reopening, setReopening] = useState(false)
   const [showDischargeSummary, setShowDischargeSummary] = useState(false)
   const [generatingClaim, setGeneratingClaim] = useState(false)
+  const [editingAuthCode, setEditingAuthCode] = useState(false)
+  const [authCodeInput, setAuthCodeInput] = useState('')
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['admission-workspace', id] })
@@ -77,6 +80,12 @@ export default function AdmissionWorkspacePage() {
     mutationFn: () => patientsApi.addComplaint(a!.patient.id, { description: complaintText.trim(), admissionId: id }),
     onSuccess: () => { setComplaintText(''); toast('Complaint added', 'success'); refresh() },
     onError: () => toast('Could not add the complaint.', 'error'),
+  })
+
+  const saveAuthCode = useMutation({
+    mutationFn: () => updateAdmission(id, { authCode: authCodeInput.trim() }),
+    onSuccess: () => { setEditingAuthCode(false); toast('Authorisation code saved', 'success'); refresh() },
+    onError: () => toast('Could not save the authorisation code.', 'error'),
   })
 
   if (!allowed) {
@@ -106,6 +115,39 @@ export default function AdmissionWorkspacePage() {
               {' '}{a.status === 'ADMITTED' ? 'Admitted' : a.status} {dt(a.admittedAt)}
               {a.attendingDoctor ? ` · Dr. ${a.attendingDoctor.fullName}` : ''}
             </p>
+            {a.payerType === 'HMO' && (
+              <div className="mt-1.5 flex items-center gap-2 text-sm">
+                <span className="text-gray-500">{a.hmoName ?? 'HMO'}</span>
+                {editingAuthCode ? (
+                  <>
+                    <Input
+                      value={authCodeInput}
+                      onChange={(e) => setAuthCodeInput(e.target.value)}
+                      placeholder="Authorisation / PA code"
+                      className="w-44"
+                      autoFocus
+                    />
+                    <Button loading={saveAuthCode.isPending} onClick={() => saveAuthCode.mutate()}>Save</Button>
+                    <button className="text-xs text-gray-400 hover:text-gray-700" onClick={() => setEditingAuthCode(false)}>Cancel</button>
+                  </>
+                ) : a.authCode ? (
+                  <>
+                    <span className="text-gray-700">PA code: {a.authCode}</span>
+                    {can(role, 'admission:edit') && (
+                      <button className="text-xs text-primary hover:underline" onClick={() => { setAuthCodeInput(a.authCode ?? ''); setEditingAuthCode(true) }}>
+                        Edit
+                      </button>
+                    )}
+                  </>
+                ) : can(role, 'admission:edit') ? (
+                  <button className="text-xs text-amber-700 underline" onClick={() => { setAuthCodeInput(''); setEditingAuthCode(true) }}>
+                    No PA code - add one
+                  </button>
+                ) : (
+                  <span className="text-xs text-amber-700">No PA code on file</span>
+                )}
+              </div>
+            )}
           </div>
           <div className="text-right">
             <p className="text-xs text-gray-400">Deposit held</p>

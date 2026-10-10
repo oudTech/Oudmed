@@ -19,23 +19,29 @@ test('T4-01/05/10/11: HMO admission - deposit, bed charges + transfer, discharge
     },
   });
 
-  // T4-01a: admit, through the real UI, into the first available bed.
+  // T4-01a: admit, through the real UI, into the first available bed - PA
+  // code entered right here, through the admit form's own field (the gap
+  // this used to have to work around via a direct DB write is now fixed).
+  const authCode = `PA-E2E-${stamp}`;
   const nurse = await pageAs(browser, 'nurse');
   await nurse.page.goto(tenantPath('/wards'));
   await nurse.page.getByRole('button', { name: 'Admit here' }).first().click();
   await nurse.page.getByPlaceholder('Search name, patient number or HMO number').fill(patient.lastName);
   await nurse.page.getByRole('button', { name: new RegExp(patient.lastName) }).click();
+  await nurse.page.getByPlaceholder(/Leave blank if not yet obtained/).fill(authCode);
   await nurse.page.getByRole('button', { name: 'Admit patient' }).click();
   await expect(nurse.page.getByText(/admitted to/)).toBeVisible({ timeout: 10_000 });
 
-  const admission = await db.admission.findFirstOrThrow({ where: { patientId: patient.id } });
-  // The web admission form has no field for a PA/authorization code at
-  // all (a real gap, logged separately) - set directly, same as the manual
-  // workflow would have to today. Backdated 2 days so bed-day charges (F1b)
-  // have something real to post once discharged, without waiting 2 real days.
+  const admission = await eventually(async () => {
+    const row = await db.admission.findFirstOrThrow({ where: { patientId: patient.id } });
+    if (row.authCode !== authCode) throw new Error('authCode not yet reflected');
+    return row;
+  });
+  // Backdated 2 days so bed-day charges (F1b) have something real to post
+  // once discharged, without waiting 2 real days - still no UI for setting
+  // admittedAt directly, which is fine, that's never meant to be editable.
   const admittedAt = new Date(Date.now() - 2 * 86_400_000);
-  const authCode = `PA-E2E-${stamp}`;
-  await db.admission.update({ where: { id: admission.id }, data: { admittedAt, authCode } });
+  await db.admission.update({ where: { id: admission.id }, data: { admittedAt } });
   await db.admissionWardStay.updateMany({ where: { admissionId: admission.id, endedAt: null }, data: { startedAt: admittedAt } });
 
   // T4-01b: take a deposit, through the inpatient workspace, as a role that
@@ -133,9 +139,20 @@ test('T4-01/05/10/11: HMO admission - deposit, bed charges + transfer, discharge
   expect(refundsForAdmission[0].status).toBe('PAID');
   expect(refundsForAdmission[0].receiptNumber).toBeTruthy();
 
-  // T4-11: the admission claim - PA code already on file, so this
-  // generates cleanly with no "no PA code" override needed.
+  // The PA-code edit affordance, used mid-stay - most PA codes arrive after
+  // admission, not at the door, which is exactly why this needs to be
+  // editable later and not just enterable once at admit time.
+  const updatedAuthCode = `PA-E2E-UPDATED-${stamp}`;
   await admin.page.goto(tenantPath(`/admissions/${admission.id}`));
+  await expect(admin.page.getByText(`PA code: ${authCode}`)).toBeVisible({ timeout: 10_000 });
+  await admin.page.getByRole('button', { name: 'Edit' }).click();
+  await admin.page.locator('input[placeholder="Authorisation / PA code"]').fill(updatedAuthCode);
+  await admin.page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(admin.page.getByText('Authorisation code saved')).toBeVisible({ timeout: 10_000 });
+  await expect(admin.page.getByText(`PA code: ${updatedAuthCode}`)).toBeVisible({ timeout: 10_000 });
+
+  // T4-11: the admission claim - PA code already on file (just edited),
+  // so this generates cleanly with no "no PA code" override needed.
   await admin.page.getByRole('button', { name: 'Generate HMO claim' }).click();
   await admin.page.getByRole('button', { name: 'Generate', exact: true }).click();
   // Not a toast-text match - the page's own static placeholder ("No HMO
@@ -150,7 +167,7 @@ test('T4-01/05/10/11: HMO admission - deposit, bed charges + transfer, discharge
   const expectedPatientShare = Math.round((grossTotal - expectedClaimed) * 100) / 100;
 
   const claim = await eventually(() => db.insuranceClaim.findFirstOrThrow({ where: { admissionId: admission.id } }));
-  expect(claim.authCode).toBe(authCode);
+  expect(claim.authCode).toBe(updatedAuthCode);
   expect(Number(claim.claimedAmount)).toBeCloseTo(expectedClaimed, 2);
   expect(Number(claim.patientResponsibility)).toBeCloseTo(expectedPatientShare, 2);
 
