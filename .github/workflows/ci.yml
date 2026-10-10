@@ -51,8 +51,13 @@ jobs:
       # raises the pull quota well past what one CI run needs. No-ops (does
       # nothing, does not fail the job) if the secrets are not set, so this is
       # safe to merge before they exist - just re-run the job once they're added.
+      # continue-on-error: this step is a rate-limit mitigation, never a hard
+      # requirement - DOCKERHUB_USERNAME set without a valid DOCKERHUB_TOKEN
+      # (expired/missing secret) must not abort the whole job either, the same
+      # safety the "if:" guard already gives the fully-unset case.
       - name: Log in to Docker Hub (raises the anonymous-pull rate limit)
         if: ${{ vars.DOCKERHUB_USERNAME != '' }}
+        continue-on-error: true
         uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
