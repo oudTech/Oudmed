@@ -49,9 +49,9 @@ export class AdmissionsController {
   // billing:manage, not patient:read, so a billing-only role can find an
   // admission to take a deposit against without the full clinical workspace.
   @Get('billing-overview')
-  listForBilling(@CurrentUser() user: AuthUser) {
+  listForBilling(@CurrentUser() user: AuthUser, @Query('view') view?: string) {
     assertCan(user.role, 'billing:manage');
-    return this.admissions.listForBilling(user.tenantId);
+    return this.admissions.listForBilling(user.tenantId, view === 'discharged-due' ? 'discharged-due' : 'current');
   }
 
   @Get(':id')

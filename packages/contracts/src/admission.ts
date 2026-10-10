@@ -183,8 +183,8 @@ export interface AdmissionClaimSummaryDTO {
 /** One row of the billing-focused admissions list - deposit held and
  * running balance, without the clinical detail `AdmissionDTO` carries.
  * Reachable on `billing:manage` alone, unlike the full admission record.
- * No pendingRefund field - a PENDING AdmissionRefund is only ever created
- * at discharge, and this list is scoped to admissions still ADMITTED. */
+ * `pendingRefund` is only ever populated in the 'discharged-due' view - a
+ * PENDING AdmissionRefund is only ever created inside discharge(). */
 export interface AdmissionBillingOverviewDTO {
   id: string
   admissionNumber: string
@@ -194,6 +194,10 @@ export interface AdmissionBillingOverviewDTO {
   admittedAt: string
   totalDeposited: string
   balance: string
+  /** The oldest invoice still carrying an unpaid amount, to deep-link a
+   * "Pay balance" action to - null once fully paid or with no invoice. */
+  unpaidInvoiceId: string | null
+  pendingRefund: AdmissionPendingRefundDTO | null
   deposits: { id: string; amount: string; remaining: string }[]
 }
 

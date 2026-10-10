@@ -79,32 +79,44 @@ export class AdmissionsService {
     );
   }
 
-  /** Billing-focused view of every current admission - deposit held and
-   * running balance per admission, without the clinical detail `list()`/
-   * `getOne()` carry. Gated on `billing:manage` at the controller, not
-   * `patient:read`, so Accountant/Hospital Admin can find an admission to
-   * take a deposit against without the full inpatient workspace. Mirrors
-   * the same totalDeposited/balance formula as `bill()`, batched across
-   * every admitted patient instead of one at a time - minus `bill()`'s
-   * pendingRefund offset, which is always zero here: a PENDING
-   * AdmissionRefund is only ever created inside `discharge()`, and this
-   * list is scoped to admissions still ADMITTED. */
-  async listForBilling(tenantId: string) {
+  /** Billing-focused view of admissions - deposit held and running balance
+   * per admission, without the clinical detail `list()`/`getOne()` carry.
+   * Gated on `billing:manage` at the controller, not `patient:read`, so
+   * Accountant/Hospital Admin can find an admission to take a deposit
+   * against (or settle one after discharge) without the full inpatient
+   * workspace. Mirrors the same totalDeposited/balance formula as `bill()`,
+   * batched across many admissions instead of one at a time.
+   *
+   * Two views: 'current' (ADMITTED, the default - take/apply/refund a
+   * deposit, same as before) and 'discharged-due' (every closed admission
+   * that still has money owed either way - an unpaid balance or a PENDING
+   * deposit refund - everything already settled drops off). A PENDING
+   * AdmissionRefund is only ever created inside `discharge()`, so it is
+   * always empty for 'current' and only ever populated for
+   * 'discharged-due'. */
+  async listForBilling(tenantId: string, view: 'current' | 'discharged-due' = 'current') {
+    const pendingByAdmission = new Map(
+      (await this.listPendingRefunds(tenantId)).map((r) => [r.admissionId, r] as const),
+    );
+
     return this.prisma.forTenant(tenantId, async (tx) => {
       const admissions = await tx.admission.findMany({
-        where: { status: AdmissionStatus.ADMITTED },
+        where: view === 'current'
+          ? { status: AdmissionStatus.ADMITTED }
+          : { status: { not: AdmissionStatus.ADMITTED } },
         include: ADMISSION_INCLUDE,
         orderBy: { admittedAt: 'desc' },
       });
       const ids = admissions.map((a) => a.id);
       const [invoices, deposits] = await Promise.all([
-        tx.invoice.findMany({ where: { admissionId: { in: ids } }, include: { payments: true } }),
+        tx.invoice.findMany({ where: { admissionId: { in: ids } }, include: { payments: true }, orderBy: { createdAt: 'asc' } }),
         tx.admissionDeposit.findMany({ where: { admissionId: { in: ids } } }),
       ]);
 
-      return admissions.map((a) => {
+      const rows = admissions.map((a) => {
         const inv = invoices.filter((i) => i.admissionId === a.id);
         const dep = deposits.filter((d) => d.admissionId === a.id);
+        const pendingRefund = pendingByAdmission.get(a.id) ?? null;
 
         const totalCharged = inv.reduce((s, i) => s.add(i.totalAmount), D0());
         const totalPaid = inv.reduce(
@@ -113,7 +125,20 @@ export class AdmissionsService {
         const totalDeposited = dep.reduce(
           (s, d) => s.add(d.amount.sub(d.appliedAmount ?? D0()).sub(d.refundedAmount ?? D0())), D0(),
         );
-        const balance = totalCharged.sub(totalPaid).sub(totalDeposited);
+        // Same as bill(): deposit credit already earmarked as a pending
+        // refund is spoken for, not available to offset the balance.
+        // Always zero for 'current' (no PENDING refund can exist on an
+        // ADMITTED admission), only ever nonzero for 'discharged-due'.
+        const pendingRefundAmount = pendingRefund ? new Prisma.Decimal(pendingRefund.amount) : D0();
+        const balance = totalCharged.sub(totalPaid).sub(max(D0(), totalDeposited.sub(pendingRefundAmount)));
+
+        // The oldest invoice that still has anything unpaid on it - the one
+        // a "Pay balance" link settles. Only meaningful once discharged;
+        // the current-admission view resolves balance via deposits instead.
+        const unpaidInvoice = inv.find((i) => {
+          const paid = i.payments.filter((p) => !p.reversedAt).reduce((s, p) => s.add(p.amount), D0());
+          return i.totalAmount.sub(paid).gt(0);
+        });
 
         return {
           id: a.id,
@@ -129,6 +154,8 @@ export class AdmissionsService {
           admittedAt: a.admittedAt,
           totalDeposited: totalDeposited.toString(),
           balance: balance.toString(),
+          unpaidInvoiceId: unpaidInvoice?.id ?? null,
+          pendingRefund,
           deposits: dep
             .map((d) => ({
               id: d.id,
@@ -138,6 +165,8 @@ export class AdmissionsService {
             .filter((d) => Number(d.remaining) > 0),
         };
       });
+
+      return view === 'current' ? rows : rows.filter((r) => Number(r.balance) > 0 || r.pendingRefund !== null);
     });
   }
 

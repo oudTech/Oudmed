@@ -62,7 +62,7 @@ export class PharmacyService {
         where,
         include: {
           items: { include: { drug: { select: { sellPrice: true, quantityOnHand: true } } } },
-          patient: { select: { id: true, patientNumber: true, firstName: true, lastName: true } },
+          patient: { select: { id: true, patientNumber: true, firstName: true, lastName: true, allergies: true } },
         },
         orderBy: { prescribedAt: 'desc' },
         take: 100,

@@ -1,14 +1,14 @@
 'use client'
 import { useState } from 'react'
 import Link from 'next/link'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { AdmissionPendingRefundDTO } from '@oudhealth/contracts'
-import { Button, Field, Input, Select, Modal } from '@/components/ui/kit'
-import { useToast } from '@/components/ui/feedback'
+import { Button } from '@/components/ui/kit'
 import { can } from '@/lib/permissions'
 import { naira } from '@/lib/billing'
-import { listPendingRefunds, payAdmissionRefund } from '@/lib/hospital'
+import { listPendingRefunds } from '@/lib/hospital'
+import { PayRefundModal } from '@/components/patients/AdmissionDepositModals'
 import { EmptyState } from '@/components/onboarding'
 
 const dt = (iso: string) => new Date(iso).toLocaleString('en-GB')
@@ -88,55 +88,5 @@ export default function RefundsDuePage() {
 
       <PayRefundModal refund={paying} onClose={() => setPaying(null)} onDone={() => qc.invalidateQueries({ queryKey: ['pending-refunds'] })} />
     </div>
-  )
-}
-
-function PayRefundModal({
-  refund,
-  onClose,
-  onDone,
-}: {
-  refund: AdmissionPendingRefundDTO | null
-  onClose: () => void
-  onDone: () => void
-}) {
-  const toast = useToast()
-  const [method, setMethod] = useState('CASH')
-  const [reference, setReference] = useState('')
-
-  const key = refund?.id ?? ''
-  const [seen, setSeen] = useState(key)
-  if (key !== seen) { setSeen(key); setMethod('CASH'); setReference('') }
-
-  const m = useMutation({
-    mutationFn: () => payAdmissionRefund(refund!.admissionId, refund!.id, { method, reference: reference || undefined }),
-    onSuccess: (res) => {
-      toast(`Refund paid - receipt ${res.receiptNumber}`, 'success')
-      onClose(); onDone()
-    },
-    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not pay out the refund.', 'error'),
-  })
-
-  if (!refund) return null
-  return (
-    <Modal open={!!refund} onClose={onClose} title="Pay out refund" width={400} align="center">
-      <div className="space-y-3">
-        <p className="text-sm text-gray-500">{naira(refund.amount)} owed to {refund.patient.name} ({refund.admissionNumber}).</p>
-        <Field label="Method">
-          <Select value={method} onChange={(e) => setMethod(e.target.value)}>
-            <option value="CASH">Cash</option>
-            <option value="CARD">Card</option>
-            <option value="TRANSFER">Transfer</option>
-          </Select>
-        </Field>
-        <Field label="Reference (optional)">
-          <Input value={reference} onChange={(e) => setReference(e.target.value)} />
-        </Field>
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button loading={m.isPending} onClick={() => m.mutate()}>Pay out</Button>
-        </div>
-      </div>
-    </Modal>
   )
 }

@@ -1,9 +1,11 @@
 'use client'
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
+import type { AdmissionPendingRefundDTO } from '@oudhealth/contracts'
 import { Button, Field, Input, Select, Textarea, Modal } from '@/components/ui/kit'
 import { useToast } from '@/components/ui/feedback'
-import { addAdmissionDeposit, refundAdmissionDeposit, applyAdmissionDeposit } from '@/lib/hospital'
+import { naira } from '@/lib/billing'
+import { addAdmissionDeposit, refundAdmissionDeposit, applyAdmissionDeposit, payAdmissionRefund } from '@/lib/hospital'
 
 /** Deposit-taking, refund, and apply-to-bill modals for one admission - shared
  * between the inpatient workspace (`/admissions/[id]`) and the billing-only
@@ -118,6 +120,60 @@ export function ApplyDepositModal({ admissionId, max, open, onClose, onDone }: {
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button loading={m.isPending} disabled={!Number(amount) || Number(amount) > max} onClick={() => m.mutate()}>Apply</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+/** Pays out a refund already requested (at discharge, or from an ad-hoc
+ * refund that left a remainder) - shared between Refunds due
+ * (`/billing/refunds-due`) and the "Discharged - balance or refund due"
+ * view of Inpatient billing, which lists the same pending refunds inline. */
+export function PayRefundModal({
+  refund,
+  onClose,
+  onDone,
+}: {
+  refund: AdmissionPendingRefundDTO | null
+  onClose: () => void
+  onDone: () => void
+}) {
+  const toast = useToast()
+  const [method, setMethod] = useState('CASH')
+  const [reference, setReference] = useState('')
+
+  const key = refund?.id ?? ''
+  const [seen, setSeen] = useState(key)
+  if (key !== seen) { setSeen(key); setMethod('CASH'); setReference('') }
+
+  const m = useMutation({
+    mutationFn: () => payAdmissionRefund(refund!.admissionId, refund!.id, { method, reference: reference || undefined }),
+    onSuccess: (res) => {
+      toast(`Refund paid - receipt ${res.receiptNumber}`, 'success')
+      onClose(); onDone()
+    },
+    onError: (e: any) => toast(e?.response?.data?.message ?? 'Could not pay out the refund.', 'error'),
+  })
+
+  if (!refund) return null
+  return (
+    <Modal open={!!refund} onClose={onClose} title="Pay out refund" width={400} align="center">
+      <div className="space-y-3">
+        <p className="text-sm text-gray-500">{naira(refund.amount)} owed to {refund.patient.name} ({refund.admissionNumber}).</p>
+        <Field label="Method">
+          <Select value={method} onChange={(e) => setMethod(e.target.value)}>
+            <option value="CASH">Cash</option>
+            <option value="CARD">Card</option>
+            <option value="TRANSFER">Transfer</option>
+          </Select>
+        </Field>
+        <Field label="Reference (optional)">
+          <Input value={reference} onChange={(e) => setReference(e.target.value)} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={m.isPending} onClick={() => m.mutate()}>Pay out</Button>
         </div>
       </div>
     </Modal>

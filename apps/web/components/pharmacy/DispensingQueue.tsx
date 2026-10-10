@@ -6,6 +6,7 @@ import type { PharmacyQueueItemDTO } from '@oudhealth/contracts'
 import { Button, Field, Modal, Textarea } from '@/components/ui/kit'
 import { useToast } from '@/components/ui/feedback'
 import { can } from '@/lib/permissions'
+import { AllergyBadge } from '@/components/patients/AllergyBadge'
 import { pharmacyApi, DISPENSE_STATUS_META } from '@/lib/encounters'
 import { settingsApi } from '@/lib/settings'
 import { naira } from '@/lib/billing'
@@ -74,6 +75,7 @@ export function DispensingQueue() {
                     <td className="px-3 py-2.5">
                       {rx.patient.firstName} {rx.patient.lastName}
                       <span className="text-gray-400 text-xs ml-1">{rx.patient.patientNumber}</span>
+                      <AllergyBadge allergies={rx.patient.allergies} />
                     </td>
                     <td className="px-3 py-2.5 text-gray-700">{rx.items.map((it) => it.drugName).join(', ')}</td>
                     <td className="px-3 py-2.5 text-gray-500">{rx.prescribedByName ?? '-'}</td>
@@ -156,6 +158,7 @@ function ReleaseModal({
   return (
     <Modal open={open} onClose={onClose} title={`Review · ${rx.patient.firstName} ${rx.patient.lastName}`} width={560} align="center">
       <div className="space-y-3">
+        <AllergyBadge allergies={rx.patient.allergies} />
         <p className="text-sm text-gray-500">
           Awaiting patient payment - the patient's own payable share (co-pay plus any uncovered charges on the same
           invoice) must be cleared before these items can be released. An HMO's own share, settled later by claim,
@@ -327,6 +330,7 @@ function DispenseModal({
   return (
     <Modal open={open} onClose={onClose} title={`${title} · ${rx.patient.firstName} ${rx.patient.lastName}`} width={680} align="center">
       <div className="space-y-3">
+        <AllergyBadge allergies={rx.patient.allergies} />
         <div className="border border-gray-100 rounded-xl overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500">

@@ -484,4 +484,19 @@ describe('PharmacyService (integration - FEFO stock draw-down)', () => {
     expect(supplements).toHaveLength(1);
     expect(Number(supplements[0].totalAmount)).toBe(200); // both dispenses landed on it
   });
+
+  it('queue() carries the patient\'s recorded allergies through to the pharmacist', async () => {
+    const { drug } = await drugWithBatches(10, 0);
+    const patient = await makePatient(tenantId, { allergies: 'Penicillin' });
+    const rx = await ownerPrisma.prescription.create({
+      data: {
+        tenantId, patientId: patient.id, status: 'ACTIVE', dispenseStatus: 'PENDING',
+        items: { create: [{ tenantId, drugId: drug.id, drugName: 'Test Drug' }] },
+      },
+    });
+
+    const row = (await pharmacy.queue(tenantId)).find((r) => r.id === rx.id);
+    expect(row).toBeDefined();
+    expect(row!.patient.allergies).toBe('Penicillin');
+  });
 });

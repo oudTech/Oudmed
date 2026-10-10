@@ -140,6 +140,7 @@ export interface PharmacyQueueItemDTO {
     patientNumber: string
     firstName: string
     lastName: string
+    allergies: string | null
   }
   items: {
     id: string

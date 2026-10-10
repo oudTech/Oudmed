@@ -110,7 +110,7 @@ describe('AdmissionsService.listForBilling (integration)', () => {
     expect(row.deposits).toEqual([{ id: (deposit as any).id, amount: '20000', remaining: '5000' }]);
   });
 
-  it('a discharged admission does not appear - the overview is current admissions only', async () => {
+  it('a discharged admission does not appear in the default (current) view', async () => {
     const { ward, bed } = await makeWard();
     const patient = await makePatient(tenantId);
     const admission = await admissions.admit(nurseActor, {
@@ -118,8 +118,87 @@ describe('AdmissionsService.listForBilling (integration)', () => {
     } as any);
     await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
 
-    const overview = await admissions.listForBilling(tenantId);
+    const overview = await admissions.listForBilling(tenantId, 'current');
     expect(overview.find((a) => a.id === admission.id)).toBeUndefined();
+  });
+
+  it('discharged-due: a discharged admission with an unpaid balance appears, with unpaidInvoiceId set, and is absent from the current view', async () => {
+    const { ward, bed } = await makeWard();
+    const patient = await makePatient(tenantId);
+    const admission = await admissions.admit(nurseActor, {
+      patientId: patient.id, wardId: ward.id, bedId: bed.id, admissionType: 'ELECTIVE',
+    } as any);
+    await prisma.forTenant(tenantId, (tx) =>
+      billing.postCharge(tx, {
+        tenantId, userId: nurseActor.userId, admissionId: admission.id, patientId: patient.id,
+        description: 'Ward charge', quantity: 1, unitPrice: 30000, category: 'Inpatient',
+      }),
+    );
+    await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
+
+    const current = await admissions.listForBilling(tenantId, 'current');
+    expect(current.find((a) => a.id === admission.id)).toBeUndefined();
+
+    const due = await admissions.listForBilling(tenantId, 'discharged-due');
+    const row = due.find((a) => a.id === admission.id);
+    expect(row).toBeDefined();
+    expect(row!.balance).toBe('30000');
+    expect(row!.unpaidInvoiceId).not.toBeNull();
+    expect(row!.pendingRefund).toBeNull();
+
+    const direct = await admissions.bill(tenantId, admission.id);
+    expect(direct.invoices.map((i) => i.id)).toContain(row!.unpaidInvoiceId);
+  });
+
+  it('discharged-due: a deposit left over at discharge with no refund details creates a PENDING refund that shows here; paying it out drops the admission off the list', async () => {
+    const { ward, bed } = await makeWard();
+    const patient = await makePatient(tenantId);
+    const admission = await admissions.admit(nurseActor, {
+      patientId: patient.id, wardId: ward.id, bedId: bed.id, admissionType: 'ELECTIVE',
+    } as any);
+    await prisma.forTenant(tenantId, (tx) =>
+      billing.postCharge(tx, {
+        tenantId, userId: nurseActor.userId, admissionId: admission.id, patientId: patient.id,
+        description: 'Ward charge', quantity: 1, unitPrice: 10000, category: 'Inpatient',
+      }),
+    );
+    await admissions.addDeposit(receptionActor, admission.id, { amount: 25000, method: 'CASH' } as any);
+    // 25000 deposited, 10000 owed - 10000 auto-applied at discharge, 15000
+    // left over with no refundMethod given, so it is recorded as a PENDING
+    // AdmissionRefund rather than paid out immediately.
+    await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
+
+    const due = await admissions.listForBilling(tenantId, 'discharged-due');
+    const row = due.find((a) => a.id === admission.id);
+    expect(row).toBeDefined();
+    expect(row!.balance).toBe('0');
+    expect(row!.pendingRefund).not.toBeNull();
+    expect(row!.pendingRefund!.amount).toBe('15000');
+
+    await admissions.payRefund(accountantActor, admission.id, row!.pendingRefund!.id, { method: 'CASH' } as any);
+
+    const after = await admissions.listForBilling(tenantId, 'discharged-due');
+    expect(after.find((a) => a.id === admission.id)).toBeUndefined();
+  });
+
+  it('discharged-due: a discharged admission fully settled with nothing owed either way never appears', async () => {
+    const { ward, bed } = await makeWard();
+    const patient = await makePatient(tenantId);
+    const admission = await admissions.admit(nurseActor, {
+      patientId: patient.id, wardId: ward.id, bedId: bed.id, admissionType: 'ELECTIVE',
+    } as any);
+    await prisma.forTenant(tenantId, (tx) =>
+      billing.postCharge(tx, {
+        tenantId, userId: nurseActor.userId, admissionId: admission.id, patientId: patient.id,
+        description: 'Ward charge', quantity: 1, unitPrice: 10000, category: 'Inpatient',
+      }),
+    );
+    // Deposit exactly covers the charge - nothing left over, nothing owed.
+    await admissions.addDeposit(receptionActor, admission.id, { amount: 10000, method: 'CASH' } as any);
+    await admissions.discharge(nurseActor, admission.id, { status: 'DISCHARGED' } as any);
+
+    const due = await admissions.listForBilling(tenantId, 'discharged-due');
+    expect(due.find((a) => a.id === admission.id)).toBeUndefined();
   });
 });
 
@@ -191,5 +270,10 @@ describe('GET /admissions/billing-overview authorization (integration - HTTP)', 
     const res = await req('/admissions/billing-overview', who[role]);
     expect(res.status).toBe(403);
     expect((await res.json()).code).toBe('FORBIDDEN_ACTION');
+  });
+
+  it('the discharged-due view is gated the same way as the default view', async () => {
+    expect((await req('/admissions/billing-overview?view=discharged-due', who.ACCOUNTANT)).status).toBe(200);
+    expect((await req('/admissions/billing-overview?view=discharged-due', who.NURSE)).status).toBe(403);
   });
 });
