@@ -6,6 +6,12 @@ import { waitForVerificationCode } from '../verification-code';
  * stands in for a real inbox, same as docs/DEPLOYMENT.md describes for
  * an unset RESEND_API_KEY), hospital creation, landing on the dashboard. */
 test('T1-02/T1-03: sign up, verify by code, create the hospital, land on the dashboard', async ({ page }) => {
+  // Several cold route compiles in one test (signup, verify-email,
+  // onboarding, dashboard) - the default 60s budget was tight even
+  // locally and genuinely too tight on a slower CI runner (confirmed:
+  // this test's final waitForURL timed out in CI at 40s while the other
+  // 11 specs in the suite passed).
+  test.setTimeout(120_000);
   const stamp = Date.now();
   const email = `e2e-signup-${stamp}@oudmed.test`;
   const hospitalName = `E2E Signup Hospital ${stamp}`;
@@ -34,8 +40,9 @@ test('T1-02/T1-03: sign up, verify by code, create the hospital, land on the das
   await expect(page.getByText('Your workspace is ready.')).toBeVisible({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Continue to dashboard' }).click();
   // First request to a brand-new tenant subdomain - Next dev-mode compiles
-  // the route on demand, which can take a while the very first time.
-  await page.waitForURL(/\/dashboard/, { timeout: 40_000 });
+  // the route on demand, which can take a while the very first time,
+  // longer still on a slower CI runner than on a local dev machine.
+  await page.waitForURL(/\/dashboard/, { timeout: 90_000 });
 
   const created = await db.tenant.findFirst({ where: { name: hospitalName } });
   expect(created).not.toBeNull();
