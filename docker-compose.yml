@@ -27,36 +27,48 @@ services:
       timeout: 5s
       retries: 5
 
+  # minio/minio and minio/mc were pulled from Docker Hub entirely (and from
+  # every other free registry/binary channel checked - confirmed 2026-10-12)
+  # as part of MinIO's 2025 licensing changes - there is no free way to run
+  # the real community MinIO server anymore. adobe/s3mock is a drop-in
+  # replacement for local dev/CI: same S3 REST API, same AWS-SDK presigned-
+  # URL flow apps/api's StorageService actually uses, confirmed by hand
+  # against this exact service. It has no auth model at all (any
+  # S3_ACCESS_KEY/S3_SECRET_KEY value works) and does not persist across
+  # restarts - both fine for a local/CI test double, never for production
+  # (production targets a real managed S3-compatible provider - AWS S3,
+  # Cloudflare R2, Backblaze B2, DigitalOcean Spaces - not anything in this
+  # file; see docs/DEPLOYMENT.md).
   minio:
-    image: minio/minio:latest
+    image: adobe/s3mock:latest
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: oudhealth
-      MINIO_ROOT_PASSWORD: oudhealth-dev-secret
+      initialBuckets: oudhealth-dev
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - oud_miniodata:/data
+      - "9000:9090"
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      # No curl in this image (a minimal buildpacks-based Java image) - wget
+      # is present and does the same job.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 15
+      start_period: 30s
 
+  # initialBuckets alone was not reliable in testing - this explicitly
+  # creates the bucket the same way the old mc-based setup service did.
+  # Bucket creation on S3 is just an empty PUT to /{bucket}; s3mock accepts
+  # it unsigned, so no S3 client/SDK image is needed here at all.
   minio-setup:
-    image: minio/mc:latest
+    image: curlimages/curl:latest
     depends_on:
       minio:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 oudhealth oudhealth-dev-secret &&
-      mc mb --ignore-existing local/oudhealth-dev &&
+      curl -sf -X PUT http://minio:9090/oudhealth-dev &&
       echo 'bucket ready';
       "
 
 volumes:
   oud_pgdata:
-  oud_miniodata:

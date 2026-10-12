@@ -522,12 +522,16 @@ one a workflow is about to trigger before clicking it.
 - No automated frontend test suite.
 - Neon's free-tier backup retention window is under 24 hours (see
   [section 9](#9-operational-guide)).
-- CI's `minio/minio` step has historically hit Docker Hub anonymous-pull rate
-  limiting on GitHub's shared runners; a fix (optional `docker/login-action`
-  + retry-with-backoff) has been written but **has not yet been confirmed
-  green on a real run** - this needs a Docker Hub account/token added to the
-  repo's GitHub secrets and a subsequent run watched directly. Do not infer
-  CI health from local test success.
+- CI's storage step used to run real MinIO (`minio/minio`/`minio/mc`).
+  Confirmed 2026-10-12: both images are gone from Docker Hub entirely (and
+  from every other free registry/binary channel checked) as part of MinIO's
+  2025 licensing changes - there is no free way to run the real community
+  MinIO server anymore, locally or in CI. Both `docker-compose.yml` and
+  `.github/workflows/ci.yml` now use `adobe/s3mock` instead, confirmed
+  against the real AWS-SDK presigned-URL flow `apps/api`'s `StorageService`
+  uses and the full storage integration suite (`files.int-spec.ts`, 15/15
+  passing). This only affects dev/CI - production was never going to run
+  self-hosted MinIO; it targets a real managed S3-compatible provider.
 - `apps/web/Dockerfile` has been built successfully multiple times this pass
   (including the final walkthrough-fix build) but has not been deployed
   through CI as an automated build step.

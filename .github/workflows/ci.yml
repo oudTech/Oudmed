@@ -43,26 +43,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Anonymous Docker Hub pulls from GitHub's shared runner IPs get rate-
-      # limited/denied - postgres:16 above (a "services:" container, pulled by
-      # GitHub before any step runs) tends to survive because it's one of the
-      # handful of images GitHub pre-caches; minio/minio below is not, and a
-      # bare `docker run` has hit "pull access denied" for it. Authenticating
-      # raises the pull quota well past what one CI run needs. No-ops (does
-      # nothing, does not fail the job) if the secrets are not set, so this is
-      # safe to merge before they exist - just re-run the job once they're added.
-      # continue-on-error: this step is a rate-limit mitigation, never a hard
-      # requirement - DOCKERHUB_USERNAME set without a valid DOCKERHUB_TOKEN
-      # (expired/missing secret) must not abort the whole job either, the same
-      # safety the "if:" guard already gives the fully-unset case.
-      - name: Log in to Docker Hub (raises the anonymous-pull rate limit)
-        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
-        continue-on-error: true
-        uses: docker/login-action@v3
-        with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -77,12 +57,16 @@ jobs:
 
       - name: Start MinIO
         run: |
-          # A transient Docker Hub pull failure (rate limit, registry hiccup)
-          # shouldn't fail the whole run by itself - retry a few times with a
-          # short backoff before giving up. Applies to both images pulled in
-          # this step (minio/mc used to have no retry at all here - a single
-          # hiccup on just that pull failed the whole step with no mitigation,
-          # even though the minio/minio pull right above it was protected).
+          # minio/minio and minio/mc were pulled from Docker Hub entirely
+          # (and from every other free registry/binary channel - confirmed
+          # 2026-10-12) as part of MinIO's 2025 licensing changes - there is
+          # no free way to run the real community MinIO server anymore.
+          # adobe/s3mock is a drop-in replacement: same S3 REST API, same
+          # AWS-SDK presigned-URL flow apps/api's StorageService actually
+          # uses (confirmed by hand against this exact service, including
+          # the full storage integration suite). Still retry-protected -
+          # this step's whole point is not letting a transient pull hiccup
+          # fail the run - even though neither image is gated.
           pull_with_retry() {
             for attempt in 1 2 3; do
               docker pull "$1" && return 0
@@ -92,26 +76,25 @@ jobs:
             echo "$1 pull failed after 3 attempts - giving up."
             return 1
           }
-          pull_with_retry minio/minio:latest
-          pull_with_retry minio/mc:latest
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=oudhealth \
-            -e MINIO_ROOT_PASSWORD=oudhealth-dev-secret \
-            minio/minio:latest server /data
+          pull_with_retry adobe/s3mock:latest
+          docker run -d --name minio -p 9000:9090 \
+            -e initialBuckets=oudhealth-dev \
+            adobe/s3mock:latest
           ready=false
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:9000/minio/health/live; then ready=true; break; fi
+            if wget -q -O /dev/null http://localhost:9000/; then ready=true; break; fi
             sleep 2
           done
           if [ "$ready" != "true" ]; then
-            echo "MinIO never became healthy within 60s - container state and logs:"
+            echo "MinIO (s3mock) never became healthy within 60s - container state and logs:"
             docker ps -a --filter name=minio
             docker logs minio || true
             exit 1
           fi
-          docker run --rm --network host --entrypoint sh minio/mc:latest -c "
-            mc alias set local http://localhost:9000 oudhealth oudhealth-dev-secret &&
-            mc mb --ignore-existing local/oudhealth-dev"
+          # initialBuckets alone was not reliable in testing - explicitly
+          # create the bucket too. Bucket creation on S3 is just an empty
+          # PUT to /{bucket}; s3mock accepts it unsigned, no client needed.
+          curl -sf -X PUT http://localhost:9000/oudhealth-dev
 
       - name: Prisma generate
         run: pnpm --filter @oudhealth/api exec prisma generate

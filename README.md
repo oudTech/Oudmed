@@ -8,7 +8,8 @@ and enforced at the database with PostgreSQL Row-Level Security.
 
 - **API:** NestJS 10 (TypeScript) + Prisma 5 + PostgreSQL 16
 - **Web:** Next.js 14 (App Router) + Tailwind + TanStack Query + NextAuth v5
-- **Storage:** S3-compatible object storage (MinIO in dev)
+- **Storage:** S3-compatible object storage (an `adobe/s3mock` test double in
+  dev/CI; prod points at a real managed provider - S3/R2/Spaces/B2)
 - **Monorepo:** Turborepo + pnpm workspaces
 - **Auth:** walled garden. Per-tenant users, subdomain login
   (`<slug>.<root-domain>`), credentials + email verification. No external IdP.
@@ -28,14 +29,14 @@ packages/
   validation/ @oudhealth/validation  shared Zod schemas (web forms)
   config/     @oudhealth/config      shared tsconfig base
 docs/         architecture, stack, ERD, codebase map, deploy runbook
-docker-compose.yml   dev infrastructure (Postgres + MinIO)
+docker-compose.yml   dev infrastructure (Postgres + an S3-compatible test double)
 render.yaml          Render Blueprint (prod: oudmed.com)
 ```
 
 ## Local setup
 
-Everything runs on your machine. Docker provides only Postgres and MinIO; the API
-and web apps run from source.
+Everything runs on your machine. Docker provides only Postgres and the
+storage test double; the API and web apps run from source.
 
 ### Prerequisites
 
@@ -83,7 +84,7 @@ cp apps/api/.env.example  apps/api/.env
 cp apps/web/.env.example  apps/web/.env.local
 #   Windows PowerShell: copy apps\api\.env.example apps\api\.env  (etc.)
 
-# 3. backing services (Postgres :5432, MinIO :9000 / console :9001)
+# 3. backing services (Postgres :5432, an S3-compatible test double :9000)
 docker compose up -d
 docker compose ps            # wait until db + minio are "healthy"
 
