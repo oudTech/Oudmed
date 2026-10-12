@@ -5,10 +5,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import type { VisitDTO, VisitStatus } from '@oudhealth/contracts'
 import { Drawer, Button, Badge, Field, Input, Select } from '@/components/ui/kit'
-import { useConfirm } from '@/components/ui/feedback'
+import { useConfirm, useToast } from '@/components/ui/feedback'
 import {
   setVisitStatus,
   rescheduleVisit,
+  updateVisit,
   nextActions,
   VISIT_STATUS_META,
   VISIT_TYPE_LABEL,
@@ -28,14 +29,39 @@ export function AppointmentDrawer({
   const qc = useQueryClient()
   const router = useRouter()
   const confirm = useConfirm()
+  const toast = useToast()
   const { data: session } = useSession()
   const role = session?.role
   const [rescheduling, setRescheduling] = useState(false)
   const [startLocal, setStartLocal] = useState('')
   const [duration, setDuration] = useState(30)
   const [error, setError] = useState('')
+  const [editingAuthCode, setEditingAuthCode] = useState(false)
+  const [authCodeInput, setAuthCodeInput] = useState('')
+  // The `visit` prop is a snapshot captured when its calendar card was
+  // clicked, not a live query result - invalidating ['schedule'] refetches
+  // the list behind the scenes, but this already-open drawer keeps showing
+  // the stale object. Track the saved value locally so it shows immediately.
+  const [savedAuthCode, setSavedAuthCode] = useState<string | undefined>(undefined)
+  const [seenVisitId, setSeenVisitId] = useState('')
+  if ((visit?.id ?? '') !== seenVisitId) {
+    setSeenVisitId(visit?.id ?? '')
+    setSavedAuthCode(undefined)
+    setEditingAuthCode(false)
+  }
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['schedule'] })
+
+  const saveAuthCode = useMutation({
+    mutationFn: () => updateVisit(visit!.id, { authCode: authCodeInput.trim() }),
+    onSuccess: () => {
+      setSavedAuthCode(authCodeInput.trim())
+      setEditingAuthCode(false)
+      toast('Authorisation code saved', 'success')
+      invalidate()
+    },
+    onError: () => toast('Could not save the authorisation code.', 'error'),
+  })
 
   const status = useMutation({
     mutationFn: (s: VisitStatus) => setVisitStatus(visit!.id, s),
@@ -65,6 +91,7 @@ export function AppointmentDrawer({
   const mins = Math.round(
     (new Date(visit.endsAt).getTime() - new Date(visit.startsAt).getTime()) / 60000,
   )
+  const authCode = savedAuthCode !== undefined ? savedAuthCode || null : visit.authCode
 
   return (
     <Drawer open={!!visit} onClose={onClose} title="Appointment">
@@ -95,6 +122,38 @@ export function AppointmentDrawer({
             {visit.payerType === 'CASH' ? 'Cash' : visit.payerType}
             {visit.hmoName ? ` · ${visit.hmoName}` : ''}
           </Row>
+          {visit.payerType === 'HMO' && (
+            <Row label="PA code">
+              {editingAuthCode ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={authCodeInput}
+                    onChange={(e) => setAuthCodeInput(e.target.value)}
+                    placeholder="Authorisation / PA code"
+                    className="w-40"
+                    autoFocus
+                  />
+                  <Button loading={saveAuthCode.isPending} onClick={() => saveAuthCode.mutate()}>Save</Button>
+                  <button className="text-xs text-gray-400 hover:text-gray-700" onClick={() => setEditingAuthCode(false)}>Cancel</button>
+                </div>
+              ) : authCode ? (
+                <span className="flex items-center gap-2">
+                  {authCode}
+                  {can(role, 'appointment:edit') && (
+                    <button className="text-xs text-primary hover:underline" onClick={() => { setAuthCodeInput(authCode ?? ''); setEditingAuthCode(true) }}>
+                      Edit
+                    </button>
+                  )}
+                </span>
+              ) : can(role, 'appointment:edit') ? (
+                <button className="text-xs text-amber-700 underline" onClick={() => { setAuthCodeInput(''); setEditingAuthCode(true) }}>
+                  No PA code - add one
+                </button>
+              ) : (
+                <span className="text-xs text-amber-700">No PA code on file</span>
+              )}
+            </Row>
+          )}
           {visit.reason && <Row label="Reason">{visit.reason}</Row>}
           {visit.notes && <Row label="Notes">{visit.notes}</Row>}
         </dl>

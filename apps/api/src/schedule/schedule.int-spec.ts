@@ -127,3 +127,70 @@ describe('ScheduleService.reopenVisit (integration - FUNC-2)', () => {
     expect(lines).toHaveLength(1); // still exactly one - not doubled
   });
 });
+
+describe('ScheduleService authCode (integration - MISS-10)', () => {
+  let prisma: PrismaService;
+  let schedule: ScheduleService;
+  let tenantId: string;
+  let patientId: string;
+
+  beforeAll(async () => {
+    const mod = await Test.createTestingModule({
+      imports: [PrismaModule, AuditModule, StorageModule, ScheduleModule],
+    }).compile();
+    prisma = mod.get(PrismaService);
+    schedule = mod.get(ScheduleService);
+
+    const tenant = await makeTenant();
+    tenantId = tenant.id;
+    patientId = (await makePatient(tenantId, { payerType: 'HMO', hmoName: 'Test HMO' })).id;
+  });
+
+  afterAll(async () => {
+    await destroyTenant(tenantId);
+    await prisma.$disconnect();
+    await ownerPrisma.$disconnect();
+  });
+
+  it('booking an HMO visit with a PA code sets it on the visit', async () => {
+    const receptionist = await makeUser(tenantId, 'RECEPTIONIST');
+    const actor = actorFor(tenantId, receptionist.id, 'RECEPTIONIST');
+
+    const visit = await schedule.create(actor, {
+      patientId, startsAt: new Date().toISOString(), authCode: 'PA-BOOK-1',
+    } as any);
+    expect(visit.authCode).toBe('PA-BOOK-1');
+  });
+
+  it('booking without a PA code leaves it unset, and it can be added afterwards', async () => {
+    const receptionist = await makeUser(tenantId, 'RECEPTIONIST');
+    const actor = actorFor(tenantId, receptionist.id, 'RECEPTIONIST');
+
+    const visit = await schedule.create(actor, {
+      patientId, startsAt: new Date().toISOString(),
+    } as any);
+    expect(visit.authCode).toBeNull();
+
+    const updated = await schedule.update(actor, visit.id, { authCode: 'PA-ADDED-LATER' } as any);
+    expect(updated.authCode).toBe('PA-ADDED-LATER');
+
+    const auditRows = await ownerPrisma.auditLog.findMany({
+      where: { tenantId, action: 'UPDATE', entityType: 'Visit', entityId: visit.id },
+    });
+    expect(auditRows.length).toBeGreaterThan(0);
+  });
+
+  it('a role without appointment:edit cannot change the PA code', async () => {
+    const receptionist = await makeUser(tenantId, 'RECEPTIONIST');
+    const pharmacist = await makeUser(tenantId, 'PHARMACIST');
+    const bookActor = actorFor(tenantId, receptionist.id, 'RECEPTIONIST');
+    const visit = await schedule.create(bookActor, {
+      patientId, startsAt: new Date().toISOString(), authCode: 'PA-LOCKED',
+    } as any);
+
+    const otherActor = actorFor(tenantId, pharmacist.id, 'PHARMACIST');
+    await expect(
+      schedule.update(otherActor, visit.id, { authCode: 'PA-HACKED' } as any),
+    ).rejects.toThrow();
+  });
+});

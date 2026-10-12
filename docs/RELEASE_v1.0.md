@@ -5,6 +5,30 @@ hospital on. It supersedes `v1.0-baseline` (tagged 2026-10-08, before this
 round's HMO-claims investigation, F2 correction, inpatient-billing-route
 addition and e2e automation).
 
+## v1.0.2 (2026-10-12)
+
+`MISS-10` (below, the visit-side counterpart of `MISS-9`, left open at
+`v1.0.1`) is closed: `NewAppointmentModal` gained the same "Authorisation /
+PA code" field (shown once an HMO patient is picked) as the admission
+modal, and the schedule drawer (the visit-side equivalent of the admission
+workspace) gained an inline edit control for it (`appointment:edit` - same
+reasoning as the admission side, a PA code usually arrives after booking,
+not at it). Unlike admissions, outpatient claim generation stays
+unblocked on a missing PA code - that was always the deliberate,
+documented difference between the two paths, not an oversight to close
+here. `e2e/tests/t3-claims.spec.ts` (T3-15) now exercises the add-PA-code-
+afterwards flow through the real UI and asserts the code lands on the
+generated claim and shows in the claim drawer; a new API integration suite
+(`schedule.int-spec.ts`, `claims.int-spec.ts`) covers booking with/without
+a code, the permission boundary, and the claim carrying a null code
+without blocking. Found and fixed in the same pass: the schedule drawer's
+`visit` prop is a snapshot captured when its calendar card was clicked, not
+a live query result, so the first implementation saved the PA code
+successfully but kept showing the stale value until the drawer was
+reopened - fixed by tracking the saved value locally in the drawer rather
+than relying on the stale prop. Full API suite (54/370) and the full e2e
+suite reconfirmed green after this fix; re-tagged `v1.0.2`.
+
 ## v1.0.1 (2026-10-10, same day)
 
 Found while reviewing this report before deployment: the admission side of
@@ -171,11 +195,6 @@ while confirming it:
 - **Platform console has no automated test coverage yet** (`T6-E2E`) - the
   only 2 of the 19 go-live smoke cases not in the Playwright suite. Manual-
   tested per `USABILITY_TEST_PLAN.md`.
-- **No UI to set an outpatient visit's PA/authorization code** (`MISS-10`) -
-  the admission-side equivalent was a launch blocker and is fixed in
-  `v1.0.1` (see above); this narrower, visit-side gap remains. A claim can
-  still be generated without one via the Hospital Admin override (reason
-  required, flagged on the claim and export).
 - **No session revocation** (`SEC-3`) and **no MFA on the platform console**
   (`SEC-4`) - both Medium severity, both have a documented workaround
   (deactivate the account; keep the operator list small), neither blocks
@@ -191,18 +210,18 @@ that bar.
 
 | Severity | Count | Examples |
 |---|---|---|
-| Medium | 11 | SEC-3 (session revocation), SEC-4 (platform MFA), SEC-7 (security headers), FUNC-5 (remittance advisory lock), MISS-4/6/7 (note history, patient deactivate, chart-read audit), MISS-10 (visit PA code UI), F3 (bulk import), per-HMO tariffs, no provider-independent backup |
+| Medium | 10 | SEC-3 (session revocation), SEC-4 (platform MFA), SEC-7 (security headers), FUNC-5 (remittance advisory lock), MISS-4/6/7 (note history, patient deactivate, chart-read audit), F3 (bulk import), per-HMO tariffs, no provider-independent backup |
 | Low-Medium | 1 | MISS-8 (no self-serve data export) |
 | Low | 18 | SEC-6 (CSV formula injection), BL-1/3/4, F2-DECISION (a logged design trade-off, not a defect), T6-E2E, in-memory rate limiting, JWT rotation, Next.js 15 upgrade, unverified web Docker build, 5 feedback/UX polish items, 2 platform UX reports, 1 RLS-comment cosmetic gap |
 
-30 open items total, across Security, Correctness, Missing features,
+29 open items total, across Security, Correctness, Missing features,
 Product-scope decisions, Infrastructure/operations, and Feedback/UX
 polish. `WHATS_LEFT.md` also carries a recommended post-launch order.
 
 ## Test status
 
 **Unit/integration** (`apps/api`, real Postgres + MinIO via Docker, no
-mocks): **54 suites, 366 tests**, all passing.
+mocks): **54 suites, 370 tests**, all passing.
 
 **End-to-end** (`e2e/`, Playwright, real browser + real API + real
 Postgres): **20 specs** - 17 of the 19 go-live smoke cases from

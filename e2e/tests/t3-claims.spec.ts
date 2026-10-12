@@ -1,4 +1,4 @@
-import { test, expect, tenantPath, authFile, db, fixtures, fieldInput, apiLogin, apiPost } from '../fixtures';
+import { test, expect, tenantPath, authFile, db, fixtures, fieldInput, apiLogin, apiPost, pageAs, eventually } from '../fixtures';
 
 /** T3-15 (strengthened 2026-10-08, see docs/audit/phase1-status.md): the
  * exact case the HMO-claims investigation found broken - generate an HMO
@@ -24,10 +24,29 @@ test('T3-15: generate an HMO claim filtered by provider, co-pay split exact', as
   // not about exercising role boundaries (unlike T1-06, which is).
   const token = await apiLogin('admin');
   const visit = await apiPost<{ id: string; insuranceProviderId: string | null }>('/schedule', token, {
-    patientId: patient.id, startsAt: new Date().toISOString(), payerType: 'HMO',
+    patientId: patient.id, startsAt: new Date().toISOString(), payerType: 'HMO', doctorId: f.userIds.doctor,
   });
   // Fix 1's precondition - if this isn't true, the rest of the test proves nothing.
   expect(visit.insuranceProviderId).toBe(f.insuranceProviderId);
+
+  // MISS-10: no PA code was given at booking (the common case - it usually
+  // arrives after) - add one now through the outpatient equivalent of the
+  // admission workspace's edit affordance, the schedule drawer.
+  const authCode = `PA-OUT-E2E-${Date.now()}`;
+  const reception = await pageAs(browser, 'reception');
+  await reception.page.goto(tenantPath('/schedule'));
+  await reception.page.getByRole('button', { name: new RegExp(patient.lastName) }).click();
+  await reception.page.getByRole('button', { name: 'No PA code - add one' }).click();
+  await reception.page.locator('input[placeholder="Authorisation / PA code"]').fill(authCode);
+  await reception.page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(reception.page.getByText('Authorisation code saved')).toBeVisible({ timeout: 10_000 });
+  await expect(reception.page.getByText(authCode)).toBeVisible({ timeout: 10_000 });
+  await reception.close();
+
+  await eventually(async () => {
+    const row = await db.visit.findUniqueOrThrow({ where: { id: visit.id } });
+    if (row.authCode !== authCode) throw new Error('authCode not yet reflected');
+  });
 
   await apiPost(`/encounters/${visit.id}/orders`, token, {
     orderType: 'LABORATORY', serviceItemId: f.serviceItemIds.labTest, priority: 'Routine',
@@ -63,6 +82,9 @@ test('T3-15: generate an HMO claim filtered by provider, co-pay split exact', as
   expect(Number(claim.patientResponsibility)).toBeCloseTo(expectedPatientShare, 2);
   // Not 100%/0% - the exact bug this whole case exists to catch.
   expect(Number(claim.patientResponsibility)).toBeGreaterThan(0);
+  // MISS-10: the PA code added through the drawer earlier made it onto the
+  // outpatient claim, and outpatient generation was never blocked on it.
+  expect(claim.authCode).toBe(authCode);
 
   // The new claim appears immediately in the Claims list filtered by the
   // same provider - the other half of the original symptom. ClaimsTab's
@@ -71,6 +93,11 @@ test('T3-15: generate an HMO claim filtered by provider, co-pay split exact', as
   await page.goto(tenantPath('/claims'));
   await page.locator('select').first().selectOption({ label: f.insuranceProviderName });
   await expect(page.getByText(claim.claimNumber)).toBeVisible({ timeout: 10_000 });
+
+  // MISS-10: the claim drawer shows the PA code that was added through the
+  // schedule drawer, same "Authorisation" field the admission claim uses.
+  await page.locator('tr', { hasText: claim.claimNumber }).click();
+  await expect(page.getByText(authCode)).toBeVisible({ timeout: 10_000 });
 
   await context.close();
 });

@@ -138,6 +138,38 @@ describe('ClaimsService (integration - remittance reconciliation)', () => {
     expect(inv.lines.some((l) => l.category === 'HMO Adjustment' && Number(l.lineTotal) === -9000)).toBe(true);
   });
 
+  it('MISS-10: generate carries the visit\'s authCode onto the claim, unblocked when absent', async () => {
+    const patient = await makePatient(tenantId, { hmoNumber: 'M-789', insuranceProviderId: providerId });
+    const visit = await makeVisit(tenantId, patient.id, {
+      payerType: 'HMO', hmoName: 'Test HMO', insuranceProviderId: providerId, authCode: 'PA-OUT-1',
+    });
+    const { invoiceId } = await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToVisit(tx, {
+        tenantId, userId, visitId: visit.id, patientId: patient.id,
+        description: 'Consultation', quantity: 1, unitPrice: 10000, category: 'Consultation',
+      }),
+    );
+    const claimId = (await claims.generate(actor, { invoiceIds: [invoiceId] })).created[0];
+    const c = await claims.getClaim(actor, claimId);
+    expect(c.authCode).toBe('PA-OUT-1');
+
+    // outpatient claims are never blocked on a missing PA code (unlike admissions)
+    const noCodeVisit = await makeVisit(tenantId, patient.id, {
+      payerType: 'HMO', hmoName: 'Test HMO', insuranceProviderId: providerId, authCode: null,
+    });
+    const { invoiceId: noCodeInvoiceId } = await prisma.forTenant(tenantId, (tx) =>
+      billing.postChargeToVisit(tx, {
+        tenantId, userId, visitId: noCodeVisit.id, patientId: patient.id,
+        description: 'Consultation', quantity: 1, unitPrice: 10000, category: 'Consultation',
+      }),
+    );
+    const { created, skipped } = await claims.generate(actor, { invoiceIds: [noCodeInvoiceId] });
+    expect(skipped).toHaveLength(0);
+    expect(created).toHaveLength(1);
+    const noCodeClaim = await claims.getClaim(actor, created[0]);
+    expect(noCodeClaim.authCode).toBeNull();
+  });
+
   it('FUNC-2: receivables aging counts a supplementary invoice\'s claim separately, no double-count and none missed', async () => {
     const before = await claims.receivables(actor);
     const patient = await makePatient(tenantId, { hmoNumber: 'M-456', insuranceProviderId: providerId });

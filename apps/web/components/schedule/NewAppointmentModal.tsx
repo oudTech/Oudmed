@@ -40,6 +40,7 @@ export function NewAppointmentModal({
   const [duration, setDuration] = useState(30)
   const [visitType, setVisitType] = useState('CONSULTATION')
   const [reason, setReason] = useState('')
+  const [authCode, setAuthCode] = useState('')
   const [error, setError] = useState('')
   const [confirmClash, setConfirmClash] = useState(false)
 
@@ -55,6 +56,7 @@ export function NewAppointmentModal({
     setDuration(30)
     setVisitType('CONSULTATION')
     setReason('')
+    setAuthCode('')
     setError('')
     setConfirmClash(false)
   }
@@ -69,6 +71,7 @@ export function NewAppointmentModal({
         durationMinutes: duration,
         visitType,
         reason: reason.trim() || undefined,
+        authCode: authCode.trim() || undefined,
         force,
       }
       return bookVisit(payload)
@@ -160,6 +163,16 @@ export function NewAppointmentModal({
             placeholder="Chief complaint or note for the doctor"
           />
         </Field>
+
+        {patient?.payerType === 'HMO' && (
+          <Field label="Authorisation / PA code">
+            <Input
+              value={authCode}
+              onChange={(e) => setAuthCode(e.target.value)}
+              placeholder="Leave blank if not yet obtained - add it later from the visit"
+            />
+          </Field>
+        )}
 
         {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
 
