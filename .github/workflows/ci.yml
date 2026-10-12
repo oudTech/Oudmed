@@ -32,6 +32,12 @@ jobs:
       APP_DATABASE_URL: postgresql://oudhealth_app:oudhealth-app-ci@localhost:5432/oudhealth?schema=public
       APP_DB_PASSWORD: oudhealth-app-ci
       JWT_SECRET: ci-only-secret-not-used-in-production-0123456789
+      # NextAuth (Auth.js v5) refuses to sign/verify sessions without this -
+      # apps/web/.env.local has it for local dev, but CI has no such file,
+      # and it was missing from this workflow entirely: login in the e2e
+      # suite was silently redirecting to /api/auth/error instead of
+      # /dashboard, timing out global-setup.ts.
+      AUTH_SECRET: ci-only-secret-not-used-in-production-0123456789
       S3_ENDPOINT: http://localhost:9000
       S3_PUBLIC_ENDPOINT: http://localhost:9000
       S3_REGION: us-east-1
