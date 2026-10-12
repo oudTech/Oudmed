@@ -140,7 +140,17 @@ jobs:
           NEXT_PUBLIC_ROOT_DOMAIN: localhost
           NEXT_PUBLIC_APP_PROTOCOL: http
           NEXT_PUBLIC_STORAGE_ORIGIN: http://localhost:9000
-          APP_ROOT_DOMAIN: localhost
+          # The API builds absolute tenant-subdomain redirect URLs server-
+          # side (e.g. the new-hospital sign-up flow's ticket handoff) from
+          # this alone - unlike the web app's own tenantUrl(), which reads
+          # window.location.port at runtime, the API has no browser to read
+          # a port from, so it must be baked in here. Missing the port sent
+          # every such redirect to plain :80, where nothing listens - the
+          # browser navigation never connected, so T1-02/T1-03's wait for
+          # /dashboard after sign-up timed out even at 90s (not slow -
+          # genuinely never arriving). apps/api/.env has the same value
+          # locally, which is why this never showed up outside CI.
+          APP_ROOT_DOMAIN: localhost:3001
           APP_PROTOCOL: http
           PORT: "3000"
 
