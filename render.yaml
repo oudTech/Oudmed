@@ -15,6 +15,17 @@
 # fire while the process is alive - a free instance that has spun down from
 # 15 minutes of idle simply skips that day's run. Use at least the `starter`
 # plan (always-on, no sleep) for production.
+#
+# autoDeploy is deliberately false (2026-10-12): real hospitals are already
+# registered on this service. Every container boot runs `prisma migrate
+# deploy` + re-applies rls.sql against the live production database
+# (docker-entrypoint.sh) - safe/idempotent when nothing changed, but a push-
+# triggered deploy on every commit to main (including routine docs/test/CI
+# commits that never touch apps/api at all) is not a risk worth taking on a
+# system with real patient data, when a deliberate one-click "Manual Deploy"
+# in the Render dashboard costs nothing. If you change this back to true,
+# say so here and in docs/DEPLOYMENT.md explicitly - don't let it drift
+# silently on a future Blueprint re-sync.
 
 services:
   - type: web
@@ -25,6 +36,7 @@ services:
     plan: starter
     region: frankfurt # closest Render region to the initial market; change freely
     branch: main
+    autoDeploy: false
     healthCheckPath: /api/health
     domains:
       - api.oudmed.com
@@ -107,52 +119,4 @@ services:
       - key: TURNSTILE_SECRET_KEY
         sync: false
       - key: CONTACT_INQUIRY_TO
-        sync: false
-
-  - type: web
-    name: oudhealth-web
-    runtime: docker
-    dockerfilePath: apps/web/Dockerfile
-    dockerContext: .
-    plan: free
-    region: frankfurt
-    branch: main
-    # No healthCheckPath: Render falls back to a plain "is the port open" check.
-    # /api/auth/providers was here originally but Render's health probe kept
-    # failing against it (2026-09-11), blocking all traffic at the edge with an
-    # empty 502 even though the container booted cleanly - narrow this back down
-    # to a real app route once that is root-caused.
-    domains:
-      - oudmed.com
-      - "*.oudmed.com"
-    envVars:
-      - key: PORT
-        value: "3001"
-      - key: AUTH_SECRET
-        generateValue: true
-
-      # Server-to-server call to the API. Public URL keeps this correct
-      # regardless of whether the two services share a private network.
-      - key: INTERNAL_API_URL
-        value: https://api.oudmed.com/api
-
-      # NEXT_PUBLIC_* are read at Docker build time (Render passes service env
-      # vars to the build as --build-arg automatically) and baked into the
-      # bundle - changing one here requires a redeploy to take effect.
-      - key: NEXT_PUBLIC_API_URL
-        value: https://api.oudmed.com/api
-      - key: NEXT_PUBLIC_ROOT_DOMAIN
-        value: oudmed.com
-      - key: NEXT_PUBLIC_APP_PROTOCOL
-        value: https
-      - key: NEXT_PUBLIC_STORAGE_ORIGIN
-        sync: false # the R2 public origin - same host as S3_PUBLIC_ENDPOINT
-
-      # Error tracking (Sentry). Optional - leave both blank to disable.
-      # SENTRY_DSN (server, runtime) and NEXT_PUBLIC_SENTRY_DSN (browser, baked
-      # at build time) can be the same DSN value - two vars only because of when
-      # each is read.
-      - key: SENTRY_DSN
-        sync: false
-      - key: NEXT_PUBLIC_SENTRY_DSN
         sync: false

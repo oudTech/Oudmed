@@ -136,6 +136,13 @@ this. What's confirmed vs. still open:
   (the leftover `oudhealth-web` service from an earlier all-Render plan has
   been removed - web is Fly now) and the plan changed from `free` to
   `starter`.
+- **`autoDeploy: false` (set 2026-10-12)**: real hospitals are already
+  registered on this service, and every container boot re-runs `prisma
+  migrate deploy` + `rls.sql` against the live production database. Pushing
+  to `main` no longer deploys the API automatically - use Render's "Manual
+  Deploy" button once a change is actually ready to go live. Toggling this
+  back to `true` needs the matching edit in `render.yaml` (it won't take
+  effect until the next Blueprint sync either way).
 - **Why not `free`**: confirmed in Part 1 - the nightly bed-charge job and
   the three subscription-renewal crons are plain in-process `@nestjs/schedule`
   jobs. They only fire while the Node process is alive. Render's free tier
