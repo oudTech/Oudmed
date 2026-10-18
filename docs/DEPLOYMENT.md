@@ -91,18 +91,13 @@ this. What's confirmed vs. still open:
   `[[http_service.checks]]` block hitting the same path if you want Fly's own
   routing layer to stop sending traffic to an unhealthy machine, not just
   Docker's internal health status.
-- **Build verification**: I ran `next build` directly and it compiles and
-  generates all 41 pages cleanly - the code is sound. A real `docker build -f
-  apps/web/Dockerfile ...` attempt in this session hung for 30 minutes during
-  `pnpm install` with no output and had to be killed - almost certainly a
-  local network/registry-throttling issue (the Dockerfile's own header
-  already warns this can happen pulling Next.js's per-platform SWC binaries
-  on a slow connection), not a defect in the Dockerfile itself. **Treat the
-  first `fly deploy` as the real test** - Fly builds remotely on its own
-  infrastructure, which does not share whatever constrained this machine's
-  attempt. If it fails, the error will be in `fly deploy`'s own output;
-  come back here with that error rather than assuming the Dockerfile is
-  broken.
+- **Build verification**: confirmed 2026-10-12 - `fly deploy` built the image
+  end-to-end on Fly's own remote builder (no local `docker build` needed to
+  prove this; a local attempt earlier in the project's life had hung on
+  `pnpm install` for 30 minutes, almost certainly local network/registry
+  throttling, not a Dockerfile defect) and both machines came up healthy
+  serving `oudmed.com`. The Dockerfile is sound; no further verification
+  needed here.
 - **Wildcard subdomains**: Fly.io's managed TLS certificates do **not**
   support wildcards directly the way Render's dashboard does. The practical
   path:

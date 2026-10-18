@@ -212,9 +212,9 @@ that bar.
 |---|---|---|
 | Medium | 10 | SEC-3 (session revocation), SEC-4 (platform MFA), SEC-7 (security headers), FUNC-5 (remittance advisory lock), MISS-4/6/7 (note history, patient deactivate, chart-read audit), F3 (bulk import), per-HMO tariffs, no provider-independent backup |
 | Low-Medium | 1 | MISS-8 (no self-serve data export) |
-| Low | 18 | SEC-6 (CSV formula injection), BL-1/3/4, F2-DECISION (a logged design trade-off, not a defect), T6-E2E, in-memory rate limiting, JWT rotation, Next.js 15 upgrade, unverified web Docker build, 5 feedback/UX polish items, 2 platform UX reports, 1 RLS-comment cosmetic gap |
+| Low | 17 | SEC-6 (CSV formula injection), BL-1/3/4, F2-DECISION (a logged design trade-off, not a defect), T6-E2E, in-memory rate limiting, JWT rotation, Next.js 15 upgrade, 5 feedback/UX polish items, 2 platform UX reports, 1 RLS-comment cosmetic gap |
 
-29 open items total, across Security, Correctness, Missing features,
+28 open items total, across Security, Correctness, Missing features,
 Product-scope decisions, Infrastructure/operations, and Feedback/UX
 polish. `WHATS_LEFT.md` also carries a recommended post-launch order.
 
