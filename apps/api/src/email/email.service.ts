@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Resend } from 'resend';
+import { apexUrl } from '../common/urls';
 
 interface SendArgs {
   to: string;
@@ -156,11 +157,25 @@ export class EmailService {
 }
 
 function layout(inner: string): string {
-  return `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f6f7f9;padding:32px">
-    <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;border:1px solid #eef0f3">
-      <div style="font-weight:800;font-size:18px;color:#3366E3;margin-bottom:24px">Oudmed</div>
-      ${inner}
-    </div>
+  const year = new Date().getFullYear();
+  const logoUrl = `${apexUrl()}/oudmed-logo-email.png`;
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#F5F6F8;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5F6F8;padding:32px 16px">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:16px;border:1px solid #EEF0F3">
+          <tr><td style="padding:32px 32px 24px">
+            <img src="${logoUrl}" alt="Oudmed" height="26" style="display:block;height:26px;width:auto;border:0" />
+          </td></tr>
+          <tr><td style="padding:0 32px 32px;color:#1F2937;font-size:15px;line-height:1.6">
+            ${inner}
+          </td></tr>
+          <tr><td style="padding:20px 32px;border-top:1px solid #EEF0F3;background:#FAFBFC;border-radius:0 0 16px 16px">
+            <p style="margin:0 0 4px;font-size:13px;color:#6B7280">Questions? Reach us at <a href="mailto:help@oudmed.com" style="color:#3366E3;text-decoration:none">help@oudmed.com</a></p>
+            <p style="margin:0;font-size:12px;color:#9CA3AF">&copy; ${year} Oudmed. All rights reserved.</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
   </body></html>`;
 }
 
