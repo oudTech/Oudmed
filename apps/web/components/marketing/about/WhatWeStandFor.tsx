@@ -15,7 +15,7 @@ export function WhatWeStandFor() {
     <section className="max-w-6xl mx-auto px-6 py-16 sm:py-24 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
       <AnimatedImage trigger="load" className="rounded-2xl">
         <div className="relative aspect-[4/3] w-full">
-          <Image src="/real-impact1.png" alt="Oudmed team members at work" fill className="object-cover" />
+          <Image src="/real-impact1.jpg" alt="Oudmed team members at work" fill className="object-cover" />
         </div>
       </AnimatedImage>
 

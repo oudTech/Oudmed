@@ -18,7 +18,7 @@ export function LeadershipSection() {
 
       <AnimatedImage trigger="load" className="rounded-2xl">
         <div className="relative aspect-[4/3] w-full">
-          <Image src="/real-impact2.png" alt="Oudmed leadership team" fill className="object-cover" />
+          <Image src="/real-impact2.jpg" alt="Oudmed leadership team" fill className="object-cover" />
         </div>
       </AnimatedImage>
     </section>

@@ -25,16 +25,6 @@ body {
   }
 }
 
-/* Marketing pages only (see app/(marketing)/template.tsx) - hides the native
-   cursor in favor of CustomCursor.tsx, but only on pointer-fine devices so
-   touch users never lose their cursor. */
-@media (pointer: fine) {
-  .marketing-root,
-  .marketing-root a,
-  .marketing-root button {
-    cursor: none;
-  }
-}
 
 @media print {
   body:has(#receipt-print) * {

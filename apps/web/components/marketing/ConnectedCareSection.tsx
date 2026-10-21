@@ -128,7 +128,7 @@ export function ConnectedCareSection() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-center mt-12">
           <div className="relative">
             <Image
-              src="/next-level.png"
+              src="/next-level.jpg"
               alt="Doctor reviewing a patient's chart on a tablet"
               width={800}
               height={600}

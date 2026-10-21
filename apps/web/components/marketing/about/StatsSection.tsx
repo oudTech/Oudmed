@@ -52,7 +52,7 @@ export function StatsSection() {
 
           <AnimatedImage trigger="load" className="rounded-2xl mt-8">
             <div className="relative aspect-[4/3] w-full">
-              <Image src="/real-impact2.png" alt="Oudmed team members at work" fill className="object-cover" />
+              <Image src="/real-impact2.jpg" alt="Oudmed team members at work" fill className="object-cover" />
             </div>
           </AnimatedImage>
         </div>

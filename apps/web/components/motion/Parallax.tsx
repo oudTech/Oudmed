@@ -28,7 +28,9 @@ export function Parallax({ children, className, strength = 40, scaleRange }: Par
   )
 
   return (
-    <m.div ref={ref} className={className} style={{ y, scale }}>
+    // will-change keeps this on its own GPU layer, so each scroll frame only
+    // moves an already-painted layer instead of repainting its contents.
+    <m.div ref={ref} className={className} style={{ y, scale, willChange: 'transform' }}>
       {children}
     </m.div>
   )

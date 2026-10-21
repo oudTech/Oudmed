@@ -48,7 +48,9 @@ export function PinnedScrollSection({
           start: 'top top',
           end: `+=${window.innerHeight * stepHeight * (steps - 1)}`,
           pin: true,
-          scrub: 0.4,
+          // Lenis already smooths the scroll itself; a second lag here would
+          // make the pinned tabs feel like they trail behind the wheel.
+          scrub: true,
           onUpdate: (self) => {
             const index = Math.min(steps - 1, Math.floor(self.progress * steps))
             if (index !== lastIndexRef.current) {

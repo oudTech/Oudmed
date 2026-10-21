@@ -47,7 +47,7 @@ export function AboutHero() {
         >
           <div className="relative aspect-[4/3] w-full">
             <Image
-              src="/about-hero.png"
+              src="/about-hero.jpg"
               alt="The Oudmed team collaborating around a whiteboard"
               fill
               className="object-cover"
